@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+scene.xml
+src/templates/
+.DS_Store

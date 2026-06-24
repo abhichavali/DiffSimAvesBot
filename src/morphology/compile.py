@@ -1,0 +1,258 @@
+"""Main morphology compiler pipeline."""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Tuple
+
+import numpy as np
+
+from morphology.compiled import CompiledMorphology, CompiledShoulder
+from morphology.geometry import (
+    ArcPlane,
+    apply_scale_to_strut,
+    build_strut_geometry,
+    compute_body_poses,
+    derive_arc_center,
+    derive_center_of_pressure,
+    derive_disk_pillar_pos,
+    derive_disk_rim_local,
+    derive_fixed_width_axis_offset,
+    motor_anchor_node,
+    scaled_rod,
+    WingSpec,
+    world_node,
+)
+from morphology.model import Face, Morphology, TendonGenerator
+from morphology.symmetry import StructuralEdge, expand_sigma_tendons
+from morphology.tendons import (
+    SHOULDER_GENERATORS,
+    anchor_node_name,
+    derive_tendon_length,
+    edge_topology_key,
+)
+
+
+def compile_morphology(morph: Morphology) -> CompiledMorphology:
+    morph.validate()
+    scale = morph.world.scale
+
+    radius = morph.arc.radius
+    width = morph.arc.width
+    stations = morph.arc.stations_deg
+
+    mobile_center = derive_arc_center(radius, stations, ArcPlane.XZ)
+    fixed_center = derive_arc_center(
+        radius,
+        stations,
+        ArcPlane.YZ,
+        mobile_center_x=mobile_center[0],
+    )
+    fixed_x = derive_fixed_width_axis_offset(mobile_center[0], morph.arrange)
+
+    mobile_geom = build_strut_geometry(
+        radius, width, stations, ArcPlane.XZ, center=mobile_center
+    )
+    fixed_geom = build_strut_geometry(
+        radius,
+        width,
+        stations,
+        ArcPlane.YZ,
+        center=fixed_center,
+        width_axis_offset=fixed_x,
+    )
+
+    mobile_geom = apply_scale_to_strut(mobile_geom, scale)
+    fixed_geom = apply_scale_to_strut(fixed_geom, scale)
+
+    arc_r, arc_m = scaled_rod(morph.arc.arc_rod.radius, morph.arc.arc_rod.mass, scale)
+    rung_r, rung_m = scaled_rod(morph.arc.rung_rod.radius, morph.arc.rung_rod.mass, scale)
+    mobile_geom.arc_rod = (arc_r, arc_m)
+    mobile_geom.rung_rod = (rung_r, rung_m)
+    fixed_geom.arc_rod = (arc_r, arc_m)
+    fixed_geom.rung_rod = (rung_r, rung_m)
+
+    mobile_pos, mobile_quat, fixed_pos, fixed_quat = compute_body_poses(morph)
+
+    motor_nodes: Dict[str, np.ndarray] = {}
+    for foot in morph.motors.feet:
+        name, point, edge_point = motor_anchor_node(
+            foot.station, foot.attach_along_edge_rad, mobile_geom, foot.attach_radius
+        )
+        motor_nodes[name] = point
+        mobile_geom.nodes[name] = point
+        if name in mobile_geom.site_quats:
+            del mobile_geom.site_quats[name]
+        src = mobile_geom.site_quats.get(f"t{foot.station}", np.array([0.707107, 0.707107, 0.0, 0.0]))
+        mobile_geom.site_quats[name] = src
+        if edge_point is not None:
+            edge_name = f"mrod_t{foot.station}"
+            mobile_geom.nodes[edge_name] = edge_point
+            mobile_geom.motor_rod_pairs.append((edge_name, name))
+
+    edges = expand_sigma_tendons(morph.tendons)
+    tendon_lengths: Dict[str, float] = {}
+    for edge in edges:
+        length = derive_tendon_length(
+            edge, mobile_geom, fixed_geom, mobile_pos, mobile_quat, fixed_pos, fixed_quat
+        )
+        key = edge_topology_key(edge)
+        tendon_lengths[key] = length
+
+    disks = _compile_disks(morph, mobile_geom, mobile_pos, mobile_quat)
+
+    left = CompiledShoulder(
+        side="L",
+        mobile_body="L_part_1",
+        fixed_body="L_part_2",
+        mobile_pos=mobile_pos,
+        mobile_quat=mobile_quat,
+        fixed_pos=fixed_pos,
+        fixed_quat=fixed_quat,
+        mobile_geom=mobile_geom,
+        fixed_geom=fixed_geom,
+        motor_nodes=motor_nodes,
+        structural_edges=edges,
+        tendon_lengths=tendon_lengths,
+        disks=disks,
+    )
+    right = _mirror_shoulder(left, morph)
+    wing_cop = derive_center_of_pressure(
+        WingSpec(rod_length=morph.wing.rod_length * scale, mount_arm=morph.wing.mount_arm * scale)
+    )
+
+    return CompiledMorphology(
+        morph=morph,
+        shoulders=(left, right),
+        wing_cop_local=wing_cop,
+    )
+
+
+def _compile_disks(
+    morph: Morphology,
+    mobile_geom,
+    mobile_pos: np.ndarray,
+    mobile_quat: np.ndarray,
+) -> Dict[str, Dict[str, Any]]:
+    disks: Dict[str, Dict[str, Any]] = {}
+    foot_worlds: Dict[int, np.ndarray] = {}
+    for foot in morph.motors.feet:
+        node = mobile_geom.nodes[f"t{foot.station}"]
+        foot_worlds[foot.station] = world_node(node, mobile_pos, mobile_quat)
+
+    for foot in morph.motors.feet:
+        st = foot.station
+        sibling = 4 if st == 1 else 1
+        foot_world = foot_worlds[st]
+        name = f"L_t{st}"
+        disks[name] = {
+            "pillar_pos": derive_disk_pillar_pos(
+                foot_world,
+                foot_worlds[sibling],
+                morph.motors.disk,
+                morph.placement.mount_height,
+            ),
+            "euler": [morph.motors.disk.tilt_rad, morph.motors.disk.pitch_rad, 0.0],
+            "rim_pos": derive_disk_rim_local(morph.motors.disk),
+            "rim_rgba": "0.2 0.8 0.2 1",
+            "foot_station": foot.station,
+        }
+    return disks
+
+
+def _mirror_shoulder(left: CompiledShoulder, morph: Morphology) -> CompiledShoulder:
+    from morphology.symmetry import mirror_quat_wxyz, mirror_vec3
+
+    def mirror_point(p: np.ndarray) -> np.ndarray:
+        return np.array(mirror_vec3(tuple(p)))
+
+    def mirror_nodes(nodes: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+        return {k: mirror_point(v) for k, v in nodes.items()}
+
+    def mirror_quat(q: np.ndarray) -> np.ndarray:
+        return np.array(mirror_quat_wxyz(tuple(q)))
+
+    mobile_pos = mirror_point(left.mobile_pos)
+    fixed_pos = mirror_point(left.fixed_pos)
+    mobile_quat = mirror_quat(left.mobile_quat)
+    fixed_quat = mirror_quat(left.fixed_quat)
+
+    mobile_geom = left.mobile_geom
+    fixed_geom = left.fixed_geom
+
+    import copy
+
+    mobile_geom_r = copy.deepcopy(mobile_geom)
+    fixed_geom_r = copy.deepcopy(fixed_geom)
+    mobile_geom_r.nodes = mirror_nodes(mobile_geom.nodes)
+    fixed_geom_r.nodes = mirror_nodes(fixed_geom.nodes)
+    mobile_geom_r.midpoint = mirror_point(mobile_geom.midpoint)
+    mobile_geom_r.site_quats = {k: mirror_quat(v) for k, v in mobile_geom.site_quats.items()}
+
+    motor_nodes = {k: mirror_point(v) for k, v in left.motor_nodes.items()}
+    for k, v in motor_nodes.items():
+        mobile_geom_r.nodes[k] = v
+
+    edges = left.structural_edges
+    tendon_lengths = dict(left.tendon_lengths)
+
+    disks: Dict[str, Dict[str, Any]] = {}
+    for name, spec in left.disks.items():
+        rname = name.replace("L_", "R_")
+        pillar = mirror_point(np.array(spec["pillar_pos"]))
+        # Disk-local rim mirror across Y-plane: the disk body is tilted by
+        # +tilt on L and -tilt on R about its local X axis. With X preserved
+        # under that mirror, only the local Y component of rim_pos flips —
+        # negating X too puts the motor-tendon anchor on the wrong side of the
+        # rim and forces the right wing into a non-mirrored flap.
+        rim = list(spec["rim_pos"])
+        rim[1] = -float(rim[1])
+        disks[rname] = {
+            **spec,
+            "pillar_pos": pillar,
+            "euler": [-morph.motors.disk.tilt_rad, morph.motors.disk.pitch_rad, 0.0],
+            "rim_pos": rim,
+            "rim_rgba": "0.2 0.2 0.8 1",
+        }
+
+    return CompiledShoulder(
+        side="R",
+        mobile_body="R_part_1",
+        fixed_body="R_part_2",
+        mobile_pos=mobile_pos,
+        mobile_quat=mobile_quat,
+        fixed_pos=fixed_pos,
+        fixed_quat=fixed_quat,
+        mobile_geom=mobile_geom_r,
+        fixed_geom=fixed_geom_r,
+        motor_nodes=motor_nodes,
+        structural_edges=edges,
+        tendon_lengths=tendon_lengths,
+        disks=disks,
+    )
+
+
+def compile_to_mjcf(
+    morph: Morphology,
+    *,
+    settle_steps: int = 2000,
+    tendon_sweep_steps: int = 72,
+) -> str:
+    from morphology.emit_mjcf import emit_mjcf
+    from morphology.motor_tendons import measure_motor_tendon_ranges
+
+    compiled = compile_morphology(morph)
+    probe_xml = emit_mjcf(compiled)
+    motor_ranges = measure_motor_tendon_ranges(
+        probe_xml,
+        morph,
+        settle_steps=settle_steps,
+        sweep_steps=tendon_sweep_steps,
+    )
+    del probe_xml
+    xml = emit_mjcf(compiled, motor_tendon_ranges=motor_ranges)
+    del compiled, motor_ranges
+    return xml
+
+
+def default_generators() -> Tuple[TendonGenerator, ...]:
+    return tuple(TendonGenerator(**g) for g in SHOULDER_GENERATORS)
