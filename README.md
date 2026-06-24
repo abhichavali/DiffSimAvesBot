@@ -10,6 +10,7 @@ uv sync
 uv run python compile_tg.py
 uv run python run_fixed_frequency.py --frequency 10 --periods 5
 uv run python run_mjx_fixed_frequency.py --frequency 10 --periods 5
+mjpython view_fixed_frequency.py --frequency 10
 ```
 
 The default design is `design/shoulder.tg`. The default generated scene is
