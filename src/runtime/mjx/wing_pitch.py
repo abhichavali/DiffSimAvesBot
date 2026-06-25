@@ -3,10 +3,11 @@
 JAX port of :class:`runtime.wing_pitch_limit.WingPitchLimiter`. The pitch hinges
 are emitted passively free (zero stiffness/damping in MJCF); this applies, every
 step, a constant velocity ``damping`` plus a restorative spring that engages only
-once the pitch deviates more than ``free_angle`` from its leveled-neutral rest:
+once the pitch deviates more than the one-sided pitch deadband from its
+leveled-neutral rest:
 
     torque = -damping * qvel
-             - stiffness * max(|dev| - free_angle, 0) * sign(dev)
+             - stiffness_side * max(|dev| - pitch_side, 0) * sign(dev)
 
 where ``dev = qpos - center``. It is branch-free (``clip``/``sign``), so it is
 fully ``jit``/``vmap``-able and differentiable for use inside an ``mjx.step``
@@ -40,23 +41,20 @@ class WingPitchConfig(NamedTuple):
     qpos_adr: jax.Array  # (n_joints,) int
     dof_adr: jax.Array  # (n_joints,) int
     center: jax.Array  # (n_joints,) float — leveled-neutral rest angle
-    free_angle: jax.Array  # scalar float — half-width of the zero-torque zone
-    stiffness: jax.Array  # scalar float — spring gain beyond the free zone
+    upstroke_pitch: jax.Array  # scalar float — positive-dev zero-torque angle
+    downstroke_pitch: jax.Array  # scalar float — negative-dev zero-torque angle
+    upstroke_stiffness: jax.Array  # scalar float — positive-dev spring gain
+    downstroke_stiffness: jax.Array  # scalar float — negative-dev spring gain
     damping: jax.Array  # scalar float — velocity damping applied everywhere
-    # Up/down stroke asymmetry (default neutral → symmetric spring). The spring
-    # is stiffer/softer and the free zone wider/narrower on the negative-dev
-    # (one stroke half) side, identically on both wings — so it breaks the
-    # up↓/down↑ force cancellation that zeroes net lift, WITHOUT breaking L/R
-    # mirror symmetry. ``stiffness_asym``/``free_asym`` scale the neg-dev side.
-    stiffness_asym: jax.Array = jnp.asarray(1.0, dtype=jnp.float32)
-    free_asym: jax.Array = jnp.asarray(1.0, dtype=jnp.float32)
 
 
 def build_wing_pitch_config(
     model: mujoco.MjModel,
     *,
-    free_angle: float,
-    stiffness: float,
+    upstroke_pitch: float,
+    downstroke_pitch: float,
+    upstroke_stiffness: float,
+    downstroke_stiffness: float,
     damping: float,
     centers: Sequence[float] | None = None,
     joint_names: Sequence[str] = _DEFAULT_JOINTS,
@@ -86,8 +84,10 @@ def build_wing_pitch_config(
         qpos_adr=jnp.asarray(qpos_adr, dtype=jnp.int32),
         dof_adr=jnp.asarray(dof_adr, dtype=jnp.int32),
         center=jnp.asarray(resolved_centers, dtype=jnp.float32),
-        free_angle=jnp.asarray(float(free_angle), dtype=jnp.float32),
-        stiffness=jnp.asarray(float(stiffness), dtype=jnp.float32),
+        upstroke_pitch=jnp.asarray(float(upstroke_pitch), dtype=jnp.float32),
+        downstroke_pitch=jnp.asarray(float(downstroke_pitch), dtype=jnp.float32),
+        upstroke_stiffness=jnp.asarray(float(upstroke_stiffness), dtype=jnp.float32),
+        downstroke_stiffness=jnp.asarray(float(downstroke_stiffness), dtype=jnp.float32),
         damping=jnp.asarray(float(damping), dtype=jnp.float32),
     )
 
@@ -100,10 +100,14 @@ def config_from_runtime(
 ) -> WingPitchConfig:
     """Build a config using the design params from ``load_runtime_config``."""
     params = (load_runtime_config() or {}).get("wing_pitch_parameters", {})
+    fallback_free_angle = float(params.get("free_angle", 0.0))
+    fallback_stiffness = float(params.get("limit_stiffness", 0.5))
     return build_wing_pitch_config(
         model,
-        free_angle=float(params.get("free_angle", 0.0)),
-        stiffness=float(params.get("limit_stiffness", 0.5)),
+        upstroke_pitch=float(params.get("upstroke_pitch", fallback_free_angle)),
+        downstroke_pitch=float(params.get("downstroke_pitch", fallback_free_angle)),
+        upstroke_stiffness=float(params.get("upstroke_stiffness", fallback_stiffness)),
+        downstroke_stiffness=float(params.get("downstroke_stiffness", fallback_stiffness)),
         damping=float(params.get("limit_damping", 0.0005)),
         centers=centers,
         joint_names=joint_names,
@@ -117,10 +121,9 @@ def wing_pitch_qfrc(qpos: jax.Array, qvel: jax.Array, cfg: WingPitchConfig) -> j
     pitch DOF — add it to ``qfrc_applied``. Pure and branch-free.
     """
     dev = qpos[cfg.qpos_adr] - cfg.center
-    # Per-stroke-half scaling: neg-dev side scaled by *_asym, pos-dev side by 1.
     neg = dev < 0.0
-    k = cfg.stiffness * jnp.where(neg, cfg.stiffness_asym, 1.0)
-    fa = cfg.free_angle * jnp.where(neg, cfg.free_asym, 1.0)
+    k = jnp.where(neg, cfg.downstroke_stiffness, cfg.upstroke_stiffness)
+    fa = jnp.where(neg, cfg.downstroke_pitch, cfg.upstroke_pitch)
     excess = jnp.clip(jnp.abs(dev) - fa, 0.0)
     torque = -cfg.damping * qvel[cfg.dof_adr] - k * excess * jnp.sign(dev)
     return jnp.zeros_like(qvel).at[cfg.dof_adr].add(torque)

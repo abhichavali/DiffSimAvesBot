@@ -284,8 +284,7 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph, compiled: 
         limited="true",
         range=_vec2(pitch.range_rad),
         springref="0.0",
-        # Passively free: the dead-zone spring/damping is applied at runtime by
-        # WingPitchLimiter only beyond pitch.free_angle_rad.
+        # Passively free: one-sided pitch deadbands are applied at runtime.
         stiffness="0",
         damping="0",
         # Override the shoulder-joint class default (frictionloss=0.1): 0.1 N m

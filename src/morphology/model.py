@@ -175,12 +175,14 @@ class Motors:
 
 @dataclass
 class WingPitch:
-    stiffness: float = 0.5
+    upstroke_stiffness: float = 0.5
+    downstroke_stiffness: float = 0.5
     damping: float = 0.0005
     initial_rad: float = 0.35
     range_rad: Tuple[float, float] = (-1.0, 1.0)
     armature: float = 1e-5
-    free_angle_rad: float = math.radians(30)
+    upstroke_pitch_rad: float = math.radians(15)
+    downstroke_pitch_rad: float = math.radians(15)
 
 
 @dataclass

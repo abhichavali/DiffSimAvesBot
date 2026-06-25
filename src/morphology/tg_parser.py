@@ -465,7 +465,11 @@ class _TgParser:
                     bucket = self.wing_aero
                 parsed = _parse_scalar(val.strip())
                 # _parse_scalar keeps angle literals numeric; convert deg->rad here.
-                if section == "pitch" and key == "free_angle" and re.search(r"\bdeg\b", val, re.I):
+                if (
+                    section == "pitch"
+                    and key in ("free_angle", "upstroke_pitch", "downstroke_pitch")
+                    and re.search(r"\bdeg\b", val, re.I)
+                ):
                     parsed = math.radians(float(parsed))
                 bucket[key] = parsed
                 continue
@@ -533,6 +537,9 @@ class _TgParser:
 
         if len(self.generators) != 6:
             raise ValueError(f"Expected 6 tendon generators, got {len(self.generators)}")
+
+        fallback_free_angle = float(self.wing_pitch.get("free_angle", math.radians(30))) / 2.0
+        fallback_stiffness = float(self.wing_pitch.get("stiffness", 0.5))
 
         return Morphology(
             name=self.name,
@@ -624,12 +631,22 @@ class _TgParser:
                 mount_arm=float(self.wing.get("mount_arm", 0.055)),
                 mesh_file=str(self.wing.get("mesh", "wing.stl")),
                 pitch=WingPitch(
-                    stiffness=float(self.wing_pitch.get("stiffness", 0.5)),
+                    upstroke_stiffness=float(
+                        self.wing_pitch.get("upstroke_stiffness", fallback_stiffness)
+                    ),
+                    downstroke_stiffness=float(
+                        self.wing_pitch.get("downstroke_stiffness", fallback_stiffness)
+                    ),
                     damping=float(self.wing_pitch.get("damping", 0.0005)),
                     initial_rad=float(self.wing_pitch.get("initial", 0.35)),
                     range_rad=tuple(float(x) for x in self.wing_pitch.get("range", (-1.0, 1.0))),
                     armature=float(self.wing_pitch.get("armature", 1e-5)),
-                    free_angle_rad=float(self.wing_pitch.get("free_angle", math.radians(30))),
+                    upstroke_pitch_rad=float(
+                        self.wing_pitch.get("upstroke_pitch", fallback_free_angle)
+                    ),
+                    downstroke_pitch_rad=float(
+                        self.wing_pitch.get("downstroke_pitch", fallback_free_angle)
+                    ),
                 ),
                 aero=WingAero(
                     blades=int(self.wing_aero.get("blades", 4)),

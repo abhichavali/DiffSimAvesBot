@@ -64,8 +64,10 @@ wing on M.midpoint:
     mount_arm  = 55.0 mm
     mesh       = wing.stl
     pitch:
-        free_angle = 10 deg
-        stiffness  = 0.03
+        upstroke_pitch      = 5 deg
+        downstroke_pitch    = 5 deg
+        upstroke_stiffness  = 0.03
+        downstroke_stiffness = 0.03
         damping    = 1e-5
         initial    = 0.0 rad
         range      = [-0.7, 0.7] rad
