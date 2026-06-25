@@ -1,10 +1,11 @@
 [project]
-name = "tensegrity-barebones"
+name = "DiffSimAvesBot"
 version = "0.1.0"
 description = "Barebones .tg to MuJoCo tensegrity runner"
 requires-python = ">=3.11"
 dependencies = [
     "jax>=0.10.2",
+    "matplotlib>=3.11.0",
     "mujoco>=3.4.0",
     "mujoco-mjx>=3.10.0",
     "numpy>=2.4.2",

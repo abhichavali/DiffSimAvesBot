@@ -14,10 +14,28 @@ from morphology.geometry import world_node
 from morphology.symmetry import resolve_material_props
 from morphology.tendons import anchor_node_name, edge_topology_key, legacy_edge_name
 
+MATPLOTLIB_BLUE_RGBA = "0.12156862745098039 0.4666666666666667 0.7058823529411765 1"
+MATPLOTLIB_ORANGE_RGBA = "1.0 0.4980392156862745 0.054901960784313725 1"
+STRUCTURAL_TENDON_COLORS = (
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+    "#aec7e8",
+    "#ffbb78",
+)
+
 
 def emit_mjcf(
     compiled: CompiledMorphology,
     motor_tendon_ranges: Dict[str, MotorTendonRange] | None = None,
+    color_structural_tendons: bool = False,
 ) -> str:
     morph = compiled.morph
     root = ET.Element("mujoco", model=morph.name)
@@ -45,7 +63,7 @@ def emit_mjcf(
     for shoulder in compiled.shoulders:
         _emit_shoulder(worldbody, shoulder, morph, compiled)
 
-    _add_tendons(root, compiled, motor_tendon_ranges)
+    _add_tendons(root, compiled, motor_tendon_ranges, color_structural_tendons)
     _add_equalities(root, morph)
     _add_actuators(root, compiled)
 
@@ -413,6 +431,7 @@ def _site(parent, body_name, node_name, pos, quat=None):
 
 def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], morph) -> None:
     spec = morph.motors.disk
+    disk_rgba = MATPLOTLIB_BLUE_RGBA if disk_name.endswith("_t1") else MATPLOTLIB_ORANGE_RGBA
     pillar = ET.SubElement(
         parent,
         "body",
@@ -468,7 +487,7 @@ def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], m
         name=f"{disk_name}_disk_geom",
         type="cylinder",
         size=f"{spec.radius} {spec.disk_half_height}",
-        rgba="0.85 0.65 0.15 1",
+        rgba=disk_rgba,
         contype="0",
         conaffinity="0",
         group="2",
@@ -485,7 +504,7 @@ def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], m
             type="capsule",
             fromto=f"0 0 0 {rim[0]} {rim[1]} {rim[2]}",
             size="0.0025",
-            rgba="0.85 0.65 0.15 1",
+            rgba=disk_rgba,
             contype="0",
             conaffinity="0",
             group="2",
@@ -505,13 +524,14 @@ def _add_tendons(
     root: ET.Element,
     compiled: CompiledMorphology,
     motor_tendon_ranges: Dict[str, MotorTendonRange] | None = None,
+    color_structural_tendons: bool = False,
 ) -> None:
     morph = compiled.morph
     tendon_el = ET.SubElement(root, "tendon")
 
     for shoulder in compiled.shoulders:
         prefix = shoulder.side
-        for edge in shoulder.structural_edges:
+        for index, edge in enumerate(shoulder.structural_edges):
             ma = edge.anchor_a if edge.anchor_a.side == "M" else edge.anchor_b
             fa = edge.anchor_b if edge.anchor_a.side == "M" else edge.anchor_a
             m_node = anchor_node_name(ma)
@@ -526,6 +546,8 @@ def _add_tendons(
                 "stiffness": str(stiff),
                 "damping": str(damp),
             }
+            if color_structural_tendons:
+                attrs["rgba"] = _hex_to_rgba(STRUCTURAL_TENDON_COLORS[index])
             spatial = ET.SubElement(tendon_el, "spatial", **attrs)
             ET.SubElement(spatial, "site", site=f"{shoulder.mobile_body}_{m_node}")
             ET.SubElement(spatial, "site", site=f"{shoulder.fixed_body}_{f_node}")
@@ -668,3 +690,8 @@ def _vec6(p1, p2) -> str:
 
 def _vec2(v) -> str:
     return f"{v[0]} {v[1]}"
+
+
+def _hex_to_rgba(color: str) -> str:
+    color = color.lstrip("#")
+    return " ".join(str(int(color[i : i + 2], 16) / 255.0) for i in (0, 2, 4)) + " 1"

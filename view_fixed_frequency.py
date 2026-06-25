@@ -4,6 +4,7 @@ import argparse
 import math
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -33,11 +34,13 @@ def main() -> None:
     parser.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     parser.add_argument("--frequency", type=float, default=10.0, help="Crank frequency in Hz")
     parser.add_argument("--speed", type=float, default=0.2, help="Viewer realtime factor")
+    parser.add_argument("--speed-log-interval", type=float, default=1.0, help="Wall seconds between speed logs")
+    parser.add_argument("--color", action="store_true", help="Color structural tendons to match GUI plots")
     args = parser.parse_args()
 
     os.environ["MORPHOLOGY_PATH"] = str(args.tg)
     os.environ["MUJOCO_XML_PATH"] = str(args.scene)
-    compile_tg(args.tg, args.scene)
+    compile_tg(args.tg, args.scene, color_structural_tendons=args.color)
 
     morph = load_morphology(args.tg)
     model = mujoco.MjModel.from_xml_path(str(args.scene))
@@ -61,8 +64,27 @@ def main() -> None:
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         sync = RealtimeSync(data, realtime_factor=args.speed)
+        configured_slowdown = 1.0 / sync.realtime_factor
+        print(
+            f"viewer_speed target={sync.realtime_factor:.3f}x realtime "
+            f"slowdown={configured_slowdown:.3f}x",
+            flush=True,
+        )
+        next_speed_log = time.time() + max(0.1, args.speed_log_interval)
         while viewer.is_running():
             sync.step_and_sync(model, data, viewer, pre_mj_step_hook=step_forces)
+            now = time.time()
+            if now >= next_speed_log:
+                wall_elapsed = now - sync.wall_start
+                sim_elapsed = data.time - sync.sim_start
+                realtime = sim_elapsed / wall_elapsed if wall_elapsed > 0 else 0.0
+                slowdown = wall_elapsed / sim_elapsed if sim_elapsed > 0 else float("inf")
+                print(
+                    f"viewer_speed actual={realtime:.3f}x realtime "
+                    f"slowdown={slowdown:.3f}x sim_t={data.time:.3f}s",
+                    flush=True,
+                )
+                next_speed_log = now + max(0.1, args.speed_log_interval)
 
 
 if __name__ == "__main__":

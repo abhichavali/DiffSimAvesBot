@@ -236,6 +236,7 @@ def compile_to_mjcf(
     *,
     settle_steps: int = 2000,
     tendon_sweep_steps: int = 72,
+    color_structural_tendons: bool = False,
 ) -> str:
     from morphology.emit_mjcf import emit_mjcf
     from morphology.motor_tendons import measure_motor_tendon_ranges
@@ -249,7 +250,11 @@ def compile_to_mjcf(
         sweep_steps=tendon_sweep_steps,
     )
     del probe_xml
-    xml = emit_mjcf(compiled, motor_tendon_ranges=motor_ranges)
+    xml = emit_mjcf(
+        compiled,
+        motor_tendon_ranges=motor_ranges,
+        color_structural_tendons=color_structural_tendons,
+    )
     del compiled, motor_ranges
     return xml
 
