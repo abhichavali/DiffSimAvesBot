@@ -11,8 +11,12 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
-from morphology.instances.shoulder import SHOULDER_TG, shoulder_morphology
 from morphology.model import Morphology
+from morphology.tg_parser import load_morphology
+
+# Repo root: src/runtime/morphology_runtime.py → ../../
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SHOULDER_TG = os.path.join(ROOT, "design", "shoulder.tg")
 
 
 def resolve_morphology_path() -> str:
@@ -22,4 +26,4 @@ def resolve_morphology_path() -> str:
 @lru_cache(maxsize=1)
 def load_design_morphology() -> Morphology:
     """Parse and validate the morphology design (cached for the process lifetime)."""
-    return shoulder_morphology(resolve_morphology_path())
+    return load_morphology(resolve_morphology_path())

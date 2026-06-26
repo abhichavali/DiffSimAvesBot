@@ -15,7 +15,6 @@ import mujoco
 import mujoco.viewer
 
 from compile_tg import compile_tg
-from morphology.motor_drive import motor_actuator_gains
 from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology
@@ -50,17 +49,16 @@ def main() -> None:
     control = load_control_for_morphology(args.tg)
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
-    gains = motor_actuator_gains(morph)
-    actuator_ids = {name: get_actuator_id(model, name) for name in ACTUATORS}
+    actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]
 
     def step_forces(_model, _data) -> None:
         aero.apply(model, data)
         pitch.apply(model, data)
         data.ctrl[:] = 0.0
         base_ctrl = morph.motors.motor_direction * eval_control(control, data.time)
-        for name, aid in actuator_ids.items():
+        for aid in actuator_ids:
             if aid >= 0:
-                data.ctrl[aid] = base_ctrl * float(gains.get(name, 1.0))
+                data.ctrl[aid] = base_ctrl
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         sync = RealtimeSync(data, realtime_factor=args.speed)

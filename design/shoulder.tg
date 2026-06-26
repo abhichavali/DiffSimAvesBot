@@ -77,8 +77,3 @@ wing on M.midpoint:
         force_scale = 1e6
         body_torque = off
         cop         = derived
-
-mirror across y:
-    inphase_left_right_drive = on
-    wing_coordination        = ipsilateral
-    couple_left_right_disks  = off

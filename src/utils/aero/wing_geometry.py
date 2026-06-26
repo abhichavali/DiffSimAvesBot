@@ -39,16 +39,6 @@ def load_default_wing_geometry(
     return load_wing_geometry_from_stl(mesh_path, num_blades=num_blades)
 
 
-def load_wing_geometry_from_config(
-    config: dict,
-    num_blades: int | None = None,
-    config_path: str | os.PathLike[str] | None = None,
-) -> WingGeometry:
-    """Backward-compatible entry point; *config* is ignored in favour of morphology."""
-    del config, config_path
-    return load_default_wing_geometry(num_blades=num_blades)
-
-
 def default_num_blades(config: dict | None = None) -> int:
     del config
     return _validate_num_blades(load_design_morphology().wing.aero.blades)

@@ -21,8 +21,6 @@ from morphology.model import (
     Arrange,
     DiskSpec,
     Face,
-    MirrorCoupling,
-    MirrorSpec,
     Morphology,
     MotorFoot,
     Motors,
@@ -206,8 +204,6 @@ class _TgParser:
         self.motor_direction = 1.0
         self.control_file = "control.tg"
         self.drive_phase_offset_rad = math.pi
-        self.mirror_axis = "y"
-        self.mirror_coupling = MirrorCoupling()
         self.wing: Dict[str, Any] = {}
         self.wing_pitch: Dict[str, Any] = {}
         self.wing_aero: Dict[str, Any] = {}
@@ -254,11 +250,6 @@ class _TgParser:
 
             if line.startswith("wing on "):
                 i = self._parse_wing(i)
-                continue
-
-            if line.startswith("mirror across "):
-                self.mirror_axis = line.split()[-1].rstrip(":")
-                i = self._parse_mirror(i)
                 continue
 
             raise ValueError(f"Unrecognized line: {line}")
@@ -386,10 +377,6 @@ class _TgParser:
             if line.startswith("attach_radius"):
                 self.attach_radius = float(_parse_scalar(line.split("=", 1)[1].strip()))
                 continue
-            if line.startswith("phase = antiphase"):
-                self.drive_phase_offset_rad = math.pi
-                self.mirror_coupling.antiphase_mobile_disks = True
-                continue
             if line.startswith("drive_phase_offset"):
                 raw = line.split("=", 1)[1].strip()
                 val = float(_parse_scalar(raw))
@@ -457,38 +444,6 @@ class _TgParser:
                 continue
             if indent >= 8 and ":" in line:
                 continue
-        return i
-
-    def _parse_mirror(self, start: int) -> int:
-        i = start
-        while i < len(self.lines):
-            raw = self.lines[i]
-            if not raw.strip():
-                i += 1
-                continue
-            if not raw.startswith("    "):
-                break
-            line = raw.strip()
-            i += 1
-            if "in_phase" in line.lower() or "inphase" in line.lower():
-                self.mirror_coupling.inphase_left_right_drive = True
-                continue
-            if " = " in line:
-                key, val = line.split("=", 1)
-                key = key.strip()
-                parsed = _parse_scalar(val.strip())
-                if key == "antiphase_mobile_disks":
-                    self.mirror_coupling.antiphase_mobile_disks = bool(parsed)
-                elif key == "inphase_left_right_drive":
-                    self.mirror_coupling.inphase_left_right_drive = bool(parsed)
-                elif key == "couple_left_right_disks":
-                    self.mirror_coupling.couple_left_right_disks = bool(parsed)
-                elif key == "wing_coordination":
-                    self.mirror_coupling.contralateral_wings = (
-                        str(parsed).strip().lower() == "contralateral"
-                    )
-                elif key == "contralateral_wings":
-                    self.mirror_coupling.contralateral_wings = bool(parsed)
         return i
 
     def _build(self) -> Morphology:
@@ -632,7 +587,6 @@ class _TgParser:
                     include_body_torque=bool(self.wing_aero.get("body_torque", False)),
                 ),
             ),
-            mirror=MirrorSpec(axis=self.mirror_axis, couple=self.mirror_coupling),
         )
 
 

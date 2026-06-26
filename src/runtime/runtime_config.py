@@ -3,7 +3,6 @@
 import os
 from pathlib import Path
 
-from morphology.motor_drive import motor_actuator_gains
 from runtime.control_signal import load_control_for_morphology
 from runtime.morphology_runtime import load_design_morphology
 
@@ -67,5 +66,4 @@ def get_control_parameters():
         "control_b": tuple(morph.motors.motor_direction * value for value in control.b),
         "ramp_duration": 2.0,
         "flap_actuator_names": ["L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4"],
-        "flap_actuator_gains": motor_actuator_gains(morph),
     }

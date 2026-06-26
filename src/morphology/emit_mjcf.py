@@ -64,7 +64,6 @@ def emit_mjcf(
         _emit_shoulder(worldbody, shoulder, morph, compiled)
 
     _add_tendons(root, compiled, motor_tendon_ranges, color_structural_tendons)
-    _add_equalities(root, morph)
     _add_actuators(root, compiled)
 
     ET.indent(root, space="  ")
@@ -300,7 +299,7 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph, compiled: 
     # body: y_site = -z_body (span), x_site/z_site in the chord/normal plane.
     # Without it the model's pitching moment lands perpendicular to the hinge
     # and the pitch DOF receives identically zero. BOTH sides use the same
-    # body-frame quat: the aerodynamics_left/right sign tables (s.cof etc.)
+    # body-frame quat: the aerodynamics() _SIDE_SIGNS tables (cof etc.)
     # carry the full mirror, so giving R a mirrored frame double-mirrors and
     # produces exactly anti-symmetric pitch torque (tau_qR = -tau_qL, wings
     # lock into opposite leans) — verified against hand-computed flat-plate
@@ -609,29 +608,8 @@ def derive_motor_length(
     return float(np.linalg.norm(foot_world - rim_world))
 
 
-def _add_equalities(root: ET.Element, morph) -> None:
-    eq = ET.SubElement(root, "equality")
-    couple = morph.mirror.couple
-    # NOTE: no L/R wing-pitch equality. Locking q_L to q_R cancels the effective
-    # pitch torque for L/R-symmetric loads (gravity, aero, inertia) and pins the
-    # passive pitch — each wing must weathervane independently. L/R flap sync is
-    # already enforced by the disk locks below.
-    if couple.couple_left_right_disks:
-        disk_coef = "-1.0" if couple.contralateral_wings else "1.0"
-        feet = morph.motors.feet
-        for left_foot, right_foot in zip(feet, reversed(feet)):
-            ET.SubElement(
-                eq,
-                "joint",
-                joint1=f"L_t{left_foot.station}_disk_hinge",
-                joint2=f"R_t{right_foot.station}_disk_hinge",
-                polycoef=f"0.0 {disk_coef} 0.0 0.0 0.0",
-            )
-
-
 def _add_actuators(root: ET.Element, compiled: CompiledMorphology) -> None:
     spec = compiled.morph.motors.disk
-    couple = compiled.morph.mirror.couple
     act = ET.SubElement(root, "actuator")
     for shoulder in compiled.shoulders:
         prefix = shoulder.side
@@ -643,11 +621,11 @@ def _add_actuators(root: ET.Element, compiled: CompiledMorphology) -> None:
                 "kv": str(spec.kv),
                 "ctrlrange": _vec2(spec.ctrlrange),
             }
-            # Y-mirrored shoulder: flip R crank actuators so +ctrl matches L world
-            # motion (ipsilateral). Contralateral keeps the mirror (+1) so R drives
-            # the opposite world direction and the wings alternate.
-            if prefix == "R" and couple.inphase_left_right_drive:
-                attrs["gear"] = "1" if couple.contralateral_wings else "-1"
+            # Y-mirrored shoulder: flip the R crank actuators (gear=-1) so +ctrl
+            # produces the same world motion as L — the right wing is the left,
+            # inverted.
+            if prefix == "R":
+                attrs["gear"] = "-1"
             ET.SubElement(act, "velocity", **attrs)
 
 

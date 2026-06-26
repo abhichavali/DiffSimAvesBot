@@ -44,7 +44,6 @@ class DriveConfig(NamedTuple):
     """Velocity-actuator drive from the design Fourier control signal."""
 
     flap_actuator_ids: jax.Array  # (k,) int
-    gains: jax.Array  # (k,)
     omega: jax.Array | float
     a0: jax.Array | float
     a: jax.Array
@@ -57,23 +56,19 @@ def build_drive_config(
     *,
     ramp_duration: float | None = None,
 ) -> DriveConfig:
-    """Resolve flap actuators + per-actuator gains from the control parameters."""
+    """Resolve flap actuators from the control parameters."""
     control = get_control_parameters()
     names: Sequence[str] = control["flap_actuator_names"]
-    gains_map = control.get("flap_actuator_gains", {})
 
     ids: list[int] = []
-    gains: list[float] = []
     for name in names:
         aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
         if aid < 0:
             continue
         ids.append(aid)
-        gains.append(float(gains_map.get(name, 1.0)))
 
     return DriveConfig(
         flap_actuator_ids=jnp.asarray(ids, dtype=jnp.int32),
-        gains=jnp.asarray(gains),
         omega=float(control["control_frequency_rad_s"]),
         a0=float(control["control_a0"]),
         a=jnp.asarray(control["control_a"]),
@@ -92,7 +87,7 @@ def drive_ctrl(ctrl_like: jax.Array, t: jax.Array, cfg: DriveConfig) -> jax.Arra
     harmonics = jnp.arange(1, cfg.a.shape[0] + 1, dtype=ctrl_like.dtype)
     phase = cfg.omega * t
     base = cfg.a0 + jnp.sum(cfg.a * jnp.cos(harmonics * phase) + cfg.b * jnp.sin(harmonics * phase))
-    command = base * ramp * cfg.gains
+    command = base * ramp
     return jnp.zeros_like(ctrl_like).at[cfg.flap_actuator_ids].set(command)
 
 

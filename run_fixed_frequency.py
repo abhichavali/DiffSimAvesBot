@@ -15,7 +15,6 @@ import mujoco
 import numpy as np
 
 from compile_tg import compile_tg
-from morphology.motor_drive import motor_actuator_gains
 from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology
@@ -43,8 +42,7 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
     period = control.period
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
-    gains = motor_actuator_gains(morph)
-    actuator_ids = {name: get_actuator_id(model, name) for name in ACTUATORS}
+    actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]
 
     def step() -> float:
         data.qfrc_applied[:] = 0.0
@@ -52,9 +50,9 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
         aero.apply(model, data)
         pitch.apply(model, data)
         base_ctrl = morph.motors.motor_direction * eval_control(control, data.time)
-        for name, aid in actuator_ids.items():
+        for aid in actuator_ids:
             if aid >= 0:
-                data.ctrl[aid] = base_ctrl * float(gains.get(name, 1.0))
+                data.ctrl[aid] = base_ctrl
         lift = sum(float(np.sum([f[2] for f in (wing.cached_forces or [])])) for wing in aero.wings)
         mujoco.mj_step(model, data)
         return lift

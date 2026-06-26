@@ -4,8 +4,7 @@ import mujoco
 import numpy as np
 
 from runtime.runtime_config import load_runtime_config
-from utils.aero.Aerodynamics_left import aerodynamics_left
-from utils.aero.Aerodynamics_right import aerodynamics_right
+from utils.aero.aerodynamics import aerodynamics
 from utils.aero.wing_geometry import load_default_wing_geometry
 
 
@@ -136,7 +135,6 @@ class AeroBladeRuntime:
         wing.previous_omega_local = omega_local.copy()
         wing.previous_velocity_local = velocity_local.copy()
 
-        aero_fn = aerodynamics_left if wing.side == "L" else aerodynamics_right
         zero_body_omega = np.zeros(3)
 
         forces: list[np.ndarray] = []
@@ -148,7 +146,8 @@ class AeroBladeRuntime:
             chord = float(self.geometry.chords[blade_index])
             # State is expressed in the root-site frame, so pass fd_dt (the
             # recompute window) as the finite-difference timestep.
-            force_local, torque_local = aero_fn(
+            force_local, torque_local = aerodynamics(
+                wing.side,
                 omega_local,
                 zero_body_omega,
                 velocity_local,

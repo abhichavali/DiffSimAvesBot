@@ -18,7 +18,6 @@ from matplotlib.figure import Figure
 
 from compile_tg import compile_tg
 from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
-from morphology.motor_drive import motor_actuator_gains
 from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology
@@ -61,7 +60,6 @@ def data_by_phase(
     period = control.period
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
-    gains = motor_actuator_gains(morph)
     actuator_ids = {name: get_actuator_id(model, name) for name in ACTUATORS}
     plot_ids = {name: actuator_ids[name] for name in PLOT_ACTUATORS}
     tendon_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name) for name in PLOT_ACTUATORS}
@@ -82,9 +80,9 @@ def data_by_phase(
         aero.apply(model, data)
         pitch.apply(model, data)
         base_ctrl = morph.motors.motor_direction * eval_control(control, data.time)
-        for name, aid in actuator_ids.items():
+        for aid in actuator_ids.values():
             if aid >= 0:
-                data.ctrl[aid] = base_ctrl * float(gains.get(name, 1.0))
+                data.ctrl[aid] = base_ctrl
         mujoco.mj_step(model, data)
 
     for _ in range(math.ceil(period / model.opt.timestep)):

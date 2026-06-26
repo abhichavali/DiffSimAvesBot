@@ -148,7 +148,6 @@ class MotorFoot:
     # edge (1). At 1.0 the anchor sits on the edge (legacy). Below 1.0 the
     # anchor moves inward and a rigid rod bridges the edge to the anchor.
     attach_radius: float = 1.0
-    phase: float = 0.0  # reserved for controller seam
 
 
 @dataclass
@@ -198,29 +197,6 @@ class Wing:
 
 
 @dataclass
-class MirrorCoupling:
-    """Cross-side disk phase locks (equalities)."""
-
-    antiphase_mobile_disks: bool = False
-    inphase_left_right_drive: bool = True
-    # Lock the left/right crank disks together (q_R = -q_L) so the two shoulders'
-    # flap drive stays synchronized and the wings flap together even when
-    # asymmetric aerodynamic loads would otherwise desync the free mobile struts.
-    couple_left_right_disks: bool = False
-    # Relative L/R wing phase. False = ipsilateral (both wings flap the same world
-    # direction together); True = contralateral (wings alternate, L up while R
-    # down). Flips the R crank drive sign, the L/R disk lock sign, and the wing
-    # pitch lock sign consistently (see emit_mjcf).
-    contralateral_wings: bool = False
-
-
-@dataclass
-class MirrorSpec:
-    axis: str = "y"
-    couple: MirrorCoupling = field(default_factory=MirrorCoupling)
-
-
-@dataclass
 class World:
     gravity: Tuple[float, float, float] = (0.0, 0.0, -9.81)
     timestep: float = 0.000375
@@ -251,7 +227,6 @@ class Morphology:
     tendons: TendonNet = field(default_factory=TendonNet)
     motors: Motors = field(default_factory=Motors)
     wing: Wing = field(default_factory=Wing)
-    mirror: MirrorSpec = field(default_factory=MirrorSpec)
 
     def validate(self) -> None:
         if len(self.arc.stations_deg) != 4:
