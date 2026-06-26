@@ -52,11 +52,11 @@ motors:
     drive M[1] and M[4]
     attach_along_edge = 0.0 rad
     attach_radius = 1.0
-    drive_phase_offset = 170 deg
+    drive_phase_offset = 180 deg
     tendon_pretension = 0.82
     tendon_stiffness  = 600 N/m
     tendon_damping    = 1.0
-    motor_speed = 10 Hz
+    control = control.tg
     motor_direction = 1
 
 wing on M.midpoint:
@@ -79,7 +79,6 @@ wing on M.midpoint:
         cop         = derived
 
 mirror across y:
-    couple_mobile_disks      = off
     inphase_left_right_drive = on
     wing_coordination        = ipsilateral
-    couple_left_right_disks  = on
+    couple_left_right_disks  = off

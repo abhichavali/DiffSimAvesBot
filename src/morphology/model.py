@@ -162,15 +162,11 @@ class Motors:
     tendon_pretension: float = 0.96
     tendon_stiffness: float = 500.0
     tendon_damping: float = 1.0
-    # Position lock between the two disk hinges on one shoulder (off = independent rotation).
-    couple_mobile_disk_hinges: bool = False
-    # Actuator velocity gain on foot[1] relative to foot[0] uses cos(offset).
+    # Initial angular offset (rad) between the two cranks on a shoulder; both
+    # spin the same direction so the offset is held (see crank_sync).
     drive_phase_offset_rad: float = math.pi
-    # Crank velocity-actuator target speed (rad/s) at full ramp. Authoritative
-    # here (was hardcoded in runtime_config); the disk `ctrlrange` must admit it
-    # or the velocity command is clamped.
-    motor_speed: float = 16.0
     motor_direction: float = 1.0
+    control_file: str = "control.tg"
 
 
 @dataclass

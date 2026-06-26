@@ -124,19 +124,6 @@ def _parse_quantity(text: str) -> float | str:
     return value
 
 
-def _parse_motor_speed(raw: str) -> float:
-    m = re.match(
-        r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(hz|rad\s*/\s*s)?$",
-        raw.strip(),
-        re.I,
-    )
-    if not m:
-        raise ValueError(f"Invalid motor_speed: {raw}")
-    value = float(m.group(1))
-    unit = (m.group(2) or "rad/s").lower().replace(" ", "")
-    return value * math.tau if unit == "hz" else value
-
-
 def _parse_brace_dict(text: str) -> Dict[str, Any]:
     inner = text.strip()[1:-1].strip()
     if not inner:
@@ -216,9 +203,8 @@ class _TgParser:
         self.tendon_pretension = 0.96
         self.tendon_stiffness = 500.0
         self.tendon_damping = 1.0
-        self.motor_speed = 16.0
         self.motor_direction = 1.0
-        self.couple_mobile_disk_hinges = False
+        self.control_file = "control.tg"
         self.drive_phase_offset_rad = math.pi
         self.mirror_axis = "y"
         self.mirror_coupling = MirrorCoupling()
@@ -420,15 +406,11 @@ class _TgParser:
             if line.startswith("tendon_damping"):
                 self.tendon_damping = float(_parse_scalar(line.split("=", 1)[1].strip()))
                 continue
-            if line.startswith("motor_speed"):
-                self.motor_speed = _parse_motor_speed(line.split("=", 1)[1])
-                continue
             if line.startswith("motor_direction"):
                 self.motor_direction = float(_parse_scalar(line.split("=", 1)[1].strip()))
                 continue
-            if line.startswith("couple_mobile_disks"):
-                val = _parse_scalar(line.split("=", 1)[1].strip())
-                self.couple_mobile_disk_hinges = bool(val)
+            if line.startswith("control"):
+                self.control_file = str(_parse_scalar(line.split("=", 1)[1].strip()))
                 continue
             if line.startswith("phase ="):
                 continue
@@ -496,9 +478,6 @@ class _TgParser:
                 key = key.strip()
                 parsed = _parse_scalar(val.strip())
                 if key == "antiphase_mobile_disks":
-                    self.mirror_coupling.antiphase_mobile_disks = bool(parsed)
-                elif key == "couple_mobile_disks":
-                    self.couple_mobile_disk_hinges = bool(parsed)
                     self.mirror_coupling.antiphase_mobile_disks = bool(parsed)
                 elif key == "inphase_left_right_drive":
                     self.mirror_coupling.inphase_left_right_drive = bool(parsed)
@@ -621,10 +600,9 @@ class _TgParser:
                 tendon_pretension=float(self.tendon_pretension),
                 tendon_stiffness=float(self.tendon_stiffness),
                 tendon_damping=float(self.tendon_damping),
-                couple_mobile_disk_hinges=bool(self.couple_mobile_disk_hinges),
                 drive_phase_offset_rad=float(self.drive_phase_offset_rad),
-                motor_speed=float(self.motor_speed),
                 motor_direction=float(self.motor_direction),
+                control_file=self.control_file,
             ),
             wing=Wing(
                 rod_length=float(self.wing.get("rod_length", 0.018)),

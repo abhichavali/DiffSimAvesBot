@@ -553,8 +553,8 @@ def _add_tendons(
 
         for foot in morph.motors.feet:
             st = foot.station
-            # Contralateral actuation: disk t{st} keeps its own rim/hinge but its
-            # tendon attaches to the OPPOSITE foot anchor (t1<->t4 within the wing).
+            # Disk t{st} keeps its own rim/hinge but its tendon attaches to the
+            # opposite foot anchor (t1<->t4 within the wing).
             foot_station = 4 if st == 1 else 1
             m_node = f"motor_t{foot_station}"
             disk = f"{prefix}_t{st}"
@@ -610,33 +610,13 @@ def derive_motor_length(
 
 
 def _add_equalities(root: ET.Element, morph) -> None:
-    from morphology.motor_drive import disk_equality_polycoef
-
     eq = ET.SubElement(root, "equality")
     couple = morph.mirror.couple
-    if morph.motors.couple_mobile_disk_hinges:
-        polycoef = disk_equality_polycoef(morph)
-        feet = morph.motors.feet
-        for prefix in ("L", "R"):
-            ET.SubElement(
-                eq,
-                "joint",
-                joint1=f"{prefix}_t{feet[0].station}_disk_hinge",
-                joint2=f"{prefix}_t{feet[1].station}_disk_hinge",
-                polycoef=polycoef,
-            )
     # NOTE: no L/R wing-pitch equality. Locking q_L to q_R cancels the effective
     # pitch torque for L/R-symmetric loads (gravity, aero, inertia) and pins the
     # passive pitch — each wing must weathervane independently. L/R flap sync is
     # already enforced by the disk locks below.
     if couple.couple_left_right_disks:
-        # Lock the left/right crank disks together so the two shoulders stay
-        # phase-locked under asymmetric aero load. The Y-mirror's σ-symmetry swaps
-        # stations 1<->4, so the physically corresponding cranks are CROSSED
-        # (L_t1 mirrors R_t4, L_t4 mirrors R_t1). Coupling same-station instead
-        # locks the wrong cranks and forces the wings out of phase.
-        # +1 keeps the crossed cranks in phase (ipsilateral); -1 locks them
-        # anti-phase so the wings alternate (contralateral).
         disk_coef = "-1.0" if couple.contralateral_wings else "1.0"
         feet = morph.motors.feet
         for left_foot, right_foot in zip(feet, reversed(feet)):
