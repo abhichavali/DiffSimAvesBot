@@ -21,6 +21,7 @@ from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
 from morphology.motor_drive import motor_actuator_gains
 from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
+from runtime.control_signal import eval_control, load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.viewer_runtime import get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
@@ -43,7 +44,6 @@ PLOT_CHOICES = (
 def data_by_phase(
     tg_path: Path,
     scene_path: Path,
-    frequency_hz: float,
     periods: float,
     plot_kind: str,
 ) -> tuple[list[float], dict[str, list[float]], str, str, str, dict[str, str]]:
@@ -57,8 +57,8 @@ def data_by_phase(
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
 
-    omega = math.tau * frequency_hz
-    period = 1.0 / frequency_hz
+    control = load_control_for_morphology(tg_path)
+    period = control.period
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
     gains = motor_actuator_gains(morph)
@@ -81,9 +81,10 @@ def data_by_phase(
         data.ctrl[:] = 0.0
         aero.apply(model, data)
         pitch.apply(model, data)
+        base_ctrl = morph.motors.motor_direction * eval_control(control, data.time)
         for name, aid in actuator_ids.items():
             if aid >= 0:
-                data.ctrl[aid] = omega * float(gains.get(name, 1.0))
+                data.ctrl[aid] = base_ctrl * float(gains.get(name, 1.0))
         mujoco.mj_step(model, data)
 
     for _ in range(math.ceil(period / model.opt.timestep)):
@@ -112,7 +113,7 @@ def data_by_phase(
     for _ in range(steps):
         step()
         elapsed = data.time - start_time
-        phase = elapsed * frequency_hz
+        phase = elapsed * control.fundamental_frequency_hz
         if plot_kind != "Mean lift per cycle":
             x_values.append(phase)
         if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle"):
@@ -121,9 +122,9 @@ def data_by_phase(
             lift = sum(float(sum(force[2] for force in (wing.cached_forces or []))) for wing in aero.wings)
             cycle = int(phase) + 2
             key = cycle if plot_kind == "Mean lift per cycle" else cycle + (0.0 if phase % 1.0 < 0.5 else 0.5)
-            lift_sums[key] = lift_sums.get(key, 0.0) + lift
+            lift_sums[key] = lift_sums.get(key, 0.0) + 1000.0 * lift
             lift_counts[key] = lift_counts.get(key, 0) + 1
-            ylabel = "Mean lift (N)"
+            ylabel = "Mean lift (mN)"
         elif plot_kind == "Left motor tendon tension vs phase":
             for name, tid in tendon_ids.items():
                 rest_length = float(model.tendon_lengthspring[tid][0])
@@ -173,13 +174,11 @@ def data_by_phase(
 def actuator_torque_by_phase(
     tg_path: Path,
     scene_path: Path,
-    frequency_hz: float,
     periods: float,
 ) -> tuple[list[float], dict[str, list[float]]]:
     phases, series, _title, _xlabel, _ylabel, _colors = data_by_phase(
         tg_path,
         scene_path,
-        frequency_hz,
         periods,
         "Left actuator torque vs phase",
     )
@@ -224,10 +223,6 @@ class PlotGui:
         plot_choice.current(0)
         plot_choice.pack(side=tk.LEFT, padx=(6, 12))
 
-        ttk.Label(controls, text="Frequency Hz").pack(side=tk.LEFT)
-        frequency = tk.DoubleVar(value=10.0)
-        ttk.Entry(controls, textvariable=frequency, width=8).pack(side=tk.LEFT, padx=(6, 12))
-
         ttk.Label(controls, text="Periods").pack(side=tk.LEFT)
         periods = tk.DoubleVar(value=5.0)
         ttk.Entry(controls, textvariable=periods, width=8).pack(side=tk.LEFT, padx=(6, 12))
@@ -235,7 +230,7 @@ class PlotGui:
         button = ttk.Button(
             controls,
             text="Plot",
-            command=lambda: self.plot_in_slot(frame, plot_choice, frequency, periods, button),
+            command=lambda: self.plot_in_slot(frame, plot_choice, periods, button),
         )
         button.pack(side=tk.LEFT)
 
@@ -243,14 +238,12 @@ class PlotGui:
         self,
         frame: ttk.Frame,
         plot_choice: ttk.Combobox,
-        frequency_var: tk.DoubleVar,
         periods_var: tk.DoubleVar,
         button: ttk.Button,
     ) -> None:
-        frequency = float(frequency_var.get())
         periods = float(periods_var.get())
-        if frequency <= 0 or periods <= 0:
-            self.status.set("Frequency and periods must be positive.")
+        if periods <= 0:
+            self.status.set("Periods must be positive.")
             return
 
         button.configure(state=tk.DISABLED)
@@ -260,7 +253,6 @@ class PlotGui:
             x_values, series, title, xlabel, ylabel, colors = data_by_phase(
                 ROOT / "design" / "shoulder.tg",
                 ROOT / "scene.xml",
-                frequency,
                 periods,
                 plot_choice.get(),
             )
@@ -341,7 +333,11 @@ class PlotGui:
         button.configure(text="Update")
         if len(self.slots) < 4 and len(self.plotted_slots) == len(self.slots):
             self.add_prompt()
-        self.status.set(f"Plotted {periods:g} periods at {frequency:g} Hz, starting at cycle 2 after settle.")
+        control = load_control_for_morphology(ROOT / "design" / "shoulder.tg")
+        self.status.set(
+            f"Plotted {periods:g} periods at control f0 {control.fundamental_frequency_hz:g} Hz, "
+            "starting at cycle 2 after settle."
+        )
 
     def run(self) -> None:
         self.root.mainloop()

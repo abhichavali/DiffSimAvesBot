@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 import os
 import sys
 import time
@@ -19,6 +18,7 @@ from compile_tg import compile_tg
 from morphology.motor_drive import motor_actuator_gains
 from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
+from runtime.control_signal import eval_control, load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.viewer_runtime import RealtimeSync, get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
@@ -29,10 +29,9 @@ ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="View the compiled morphology at fixed crank frequency.")
+    parser = argparse.ArgumentParser(description="View the compiled morphology with its design control signal.")
     parser.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
     parser.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
-    parser.add_argument("--frequency", type=float, default=10.0, help="Crank frequency in Hz")
     parser.add_argument("--speed", type=float, default=0.2, help="Viewer realtime factor")
     parser.add_argument("--speed-log-interval", type=float, default=1.0, help="Wall seconds between speed logs")
     parser.add_argument("--color", action="store_true", help="Color structural tendons to match GUI plots")
@@ -48,7 +47,7 @@ def main() -> None:
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
 
-    omega = math.tau * args.frequency
+    control = load_control_for_morphology(args.tg)
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
     gains = motor_actuator_gains(morph)
@@ -58,16 +57,18 @@ def main() -> None:
         aero.apply(model, data)
         pitch.apply(model, data)
         data.ctrl[:] = 0.0
+        base_ctrl = morph.motors.motor_direction * eval_control(control, data.time)
         for name, aid in actuator_ids.items():
             if aid >= 0:
-                data.ctrl[aid] = omega * float(gains.get(name, 1.0))
+                data.ctrl[aid] = base_ctrl * float(gains.get(name, 1.0))
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         sync = RealtimeSync(data, realtime_factor=args.speed)
         configured_slowdown = 1.0 / sync.realtime_factor
         print(
             f"viewer_speed target={sync.realtime_factor:.3f}x realtime "
-            f"slowdown={configured_slowdown:.3f}x",
+            f"slowdown={configured_slowdown:.3f}x "
+            f"control_f0={control.fundamental_frequency_hz:.6g}Hz",
             flush=True,
         )
         next_speed_log = time.time() + max(0.1, args.speed_log_interval)

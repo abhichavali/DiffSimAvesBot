@@ -1,6 +1,10 @@
-"""Runtime parameters derived from the morphology design (shoulder/*.tg)."""
+"""Runtime parameters derived from the morphology design."""
+
+import os
+from pathlib import Path
 
 from morphology.motor_drive import motor_actuator_gains
+from runtime.control_signal import load_control_for_morphology
 from runtime.morphology_runtime import load_design_morphology
 
 
@@ -54,8 +58,13 @@ def load_runtime_config(config_path=None):
 
 def get_control_parameters():
     morph = load_design_morphology()
+    tg_path = Path(os.environ.get("MORPHOLOGY_PATH", "design/shoulder.tg"))
+    control = load_control_for_morphology(tg_path)
     return {
-        "motor_speed": morph.motors.motor_direction * morph.motors.motor_speed,
+        "control_frequency_rad_s": control.omega,
+        "control_a0": morph.motors.motor_direction * control.a0,
+        "control_a": tuple(morph.motors.motor_direction * value for value in control.a),
+        "control_b": tuple(morph.motors.motor_direction * value for value in control.b),
         "ramp_duration": 2.0,
         "flap_actuator_names": ["L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4"],
         "flap_actuator_gains": motor_actuator_gains(morph),

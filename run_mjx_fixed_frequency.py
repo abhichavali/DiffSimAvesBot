@@ -18,12 +18,13 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from compile_tg import compile_tg
+from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime, rollout, wing_pitch
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 
 
-def run(tg_path: Path, scene_path: Path, frequency_hz: float, periods: float, warmup_periods: float) -> None:
+def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) -> None:
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     compile_tg(tg_path, scene_path)
@@ -33,14 +34,14 @@ def run(tg_path: Path, scene_path: Path, frequency_hz: float, periods: float, wa
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
 
-    omega = math.tau * frequency_hz
-    period = 1.0 / frequency_hz
+    control = load_control_for_morphology(tg_path)
+    period = control.period
     warmup_steps = math.ceil(warmup_periods * period / model.opt.timestep)
     sample_steps = math.ceil(periods * period / model.opt.timestep)
 
     mx = mjx.put_model(model)
     dx = mjx.put_data(model, data)
-    drive = rollout.build_drive_config(model, motor_speed=omega, ramp_duration=0.0)
+    drive = rollout.build_drive_config(model, ramp_duration=0.0)
     pitch = wing_pitch.config_from_runtime(model, centers=rollout._pitch_centers(model, data))
     aero = aero_runtime.build_aero_config(model)
 
@@ -61,7 +62,8 @@ def run(tg_path: Path, scene_path: Path, frequency_hz: float, periods: float, wa
     carry0 = (dx, aero_runtime.init_aero_state(aero))
     (_final, _state), lifts_all = jax.jit(scan)(carry0)
     lifts = np.asarray(lifts_all[warmup_steps:])
-    print(f"frequency_hz {frequency_hz:.6g}")
+    print(f"control_fundamental_frequency_hz {control.fundamental_frequency_hz:.6g}")
+    print(f"control_harmonics {control.harmonics}")
     print(f"periods {periods:.6g}")
     print(f"samples {lifts.size}")
     print(f"mean_lift_N {float(lifts.mean()):.9g}")
@@ -71,14 +73,13 @@ def run(tg_path: Path, scene_path: Path, frequency_hz: float, periods: float, wa
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the compiled morphology in MJX at fixed crank frequency.")
+    parser = argparse.ArgumentParser(description="Run the compiled morphology in MJX with its design control signal.")
     parser.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
     parser.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
-    parser.add_argument("--frequency", type=float, default=10.0, help="Crank frequency in Hz")
     parser.add_argument("--periods", type=float, default=5.0)
     parser.add_argument("--warmup-periods", type=float, default=2.0)
     args = parser.parse_args()
-    run(args.tg, args.scene, args.frequency, args.periods, args.warmup_periods)
+    run(args.tg, args.scene, args.periods, args.warmup_periods)
 
 
 if __name__ == "__main__":

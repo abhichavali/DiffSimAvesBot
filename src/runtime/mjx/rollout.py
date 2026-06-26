@@ -41,18 +41,20 @@ _PITCH_JOINTS = ("L_wing_pitch", "R_wing_pitch")
 
 
 class DriveConfig(NamedTuple):
-    """Velocity-actuator drive: ``ctrl = motor_speed * ramp(t) * gain``."""
+    """Velocity-actuator drive from the design Fourier control signal."""
 
     flap_actuator_ids: jax.Array  # (k,) int
     gains: jax.Array  # (k,)
-    motor_speed: jax.Array | float
+    omega: jax.Array | float
+    a0: jax.Array | float
+    a: jax.Array
+    b: jax.Array
     ramp_duration: float
 
 
 def build_drive_config(
     model: mujoco.MjModel,
     *,
-    motor_speed: float | None = None,
     ramp_duration: float | None = None,
 ) -> DriveConfig:
     """Resolve flap actuators + per-actuator gains from the control parameters."""
@@ -72,7 +74,10 @@ def build_drive_config(
     return DriveConfig(
         flap_actuator_ids=jnp.asarray(ids, dtype=jnp.int32),
         gains=jnp.asarray(gains),
-        motor_speed=float(control["motor_speed"] if motor_speed is None else motor_speed),
+        omega=float(control["control_frequency_rad_s"]),
+        a0=float(control["control_a0"]),
+        a=jnp.asarray(control["control_a"]),
+        b=jnp.asarray(control["control_b"]),
         ramp_duration=float(
             control["ramp_duration"] if ramp_duration is None else ramp_duration
         ),
@@ -80,11 +85,14 @@ def build_drive_config(
 
 
 def drive_ctrl(ctrl_like: jax.Array, t: jax.Array, cfg: DriveConfig) -> jax.Array:
-    """Ramped velocity command vector, shaped like ``data.ctrl``."""
+    """Ramped Fourier velocity command vector, shaped like ``data.ctrl``."""
     ramp = jnp.where(
         cfg.ramp_duration > 0.0, jnp.clip(t / cfg.ramp_duration, 0.0, 1.0), 1.0
     )
-    command = cfg.motor_speed * ramp * cfg.gains
+    harmonics = jnp.arange(1, cfg.a.shape[0] + 1, dtype=ctrl_like.dtype)
+    phase = cfg.omega * t
+    base = cfg.a0 + jnp.sum(cfg.a * jnp.cos(harmonics * phase) + cfg.b * jnp.sin(harmonics * phase))
+    command = base * ramp * cfg.gains
     return jnp.zeros_like(ctrl_like).at[cfg.flap_actuator_ids].set(command)
 
 
@@ -196,7 +204,6 @@ def simulate(
     n_steps: int,
     *,
     params: AeroParams = AeroParams(),
-    motor_speed: float | None = None,
     ramp_duration: float | None = None,
     measure_fn: Callable | None = None,
     differentiable: bool = False,
@@ -215,9 +222,7 @@ def simulate(
     mx = mjx.put_model(model)
     dx = mjx.put_data(model, data)
 
-    drive_cfg = build_drive_config(
-        model, motor_speed=motor_speed, ramp_duration=ramp_duration
-    )
+    drive_cfg = build_drive_config(model, ramp_duration=ramp_duration)
     pitch_cfg = wing_pitch.config_from_runtime(model, centers=_pitch_centers(model, data))
     aero_cfg = aero_runtime.build_aero_config(model, params=params)
 
