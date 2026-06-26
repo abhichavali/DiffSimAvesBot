@@ -85,26 +85,29 @@ def expand_sigma_tendons(net: TendonNet) -> List[StructuralEdge]:
 def _resolve_material(net: TendonNet, gen: TendonGenerator, edge_id: str) -> TendonMaterial:
     if edge_id in net.edge_overrides:
         return net.edge_overrides[edge_id]
-    if gen.material.stiffness is not None or gen.material.damping is not None or gen.material.pretension is not None:
-        base = TendonMaterial(
-            stiffness=gen.material.stiffness if gen.material.stiffness is not None else net.defaults.stiffness,
-            damping=gen.material.damping if gen.material.damping is not None else net.defaults.damping,
-            pretension=gen.material.pretension if gen.material.pretension is not None else net.defaults.pretension,
+    m = gen.material
+    if any(v is not None for v in (m.stiffness, m.damping, m.pretension, m.color)):
+        return TendonMaterial(
+            stiffness=m.stiffness if m.stiffness is not None else net.defaults.stiffness,
+            damping=m.damping if m.damping is not None else net.defaults.damping,
+            pretension=m.pretension if m.pretension is not None else net.defaults.pretension,
+            color=m.color if m.color is not None else net.defaults.color,
         )
-        return base
     return TendonMaterial(
         stiffness=net.defaults.stiffness,
         damping=net.defaults.damping,
         pretension=net.defaults.pretension,
+        color=net.defaults.color,
     )
 
 
-def resolve_material_props(net: TendonNet, edge: StructuralEdge) -> Tuple[float, float, float]:
+def resolve_material_props(net: TendonNet, edge: StructuralEdge) -> Tuple[float, float, float, str]:
     mat = edge.material
     return (
         mat.stiffness if mat.stiffness is not None else net.defaults.stiffness,
         mat.damping if mat.damping is not None else net.defaults.damping,
         mat.pretension if mat.pretension is not None else net.defaults.pretension,
+        mat.color if mat.color is not None else net.defaults.color,
     )
 
 

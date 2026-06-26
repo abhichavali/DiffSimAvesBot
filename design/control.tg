@@ -1,10 +1,13 @@
-harmonics = 2
-fundamental_frequency = 10 Hz
-
-# Direct actuator control signal:
-# u(t) = a0 + sum_n a_n cos(n*w*t) + b_n sin(n*w*t)
-a0 = 62.83
-a_1 = 0
-b_1 = 0
-a_2 = 0
-b_2 = 0
+harmonics = 5
+fundamental_frequency = 10.053 Hz
+a0 = 63.9443
+a_1 = -3.29202
+b_1 = -0.558259
+a_2 = 0.365503
+b_2 = -1.82902
+a_3 = 0.0325877
+b_3 = 1.01144
+a_4 = -0.465779
+b_4 = 0.760141
+a_5 = 0.175221
+b_5 = 0.19824

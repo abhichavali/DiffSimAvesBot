@@ -72,6 +72,7 @@ class TendonMaterial:
     stiffness: Optional[float] = None
     damping: Optional[float] = None
     pretension: Optional[float] = None
+    color: Optional[str] = None  # hex "#rrggbb" or MJCF "r g b a"; None -> default
 
 
 @dataclass
@@ -80,6 +81,7 @@ class TendonDefaults:
     damping: float = 0.5
     pretension: float = 0.85
     width: float = 0.00075
+    color: str = "0.8 0.2 0.2 1"  # legacy structural-tendon rgba
 
 
 @dataclass

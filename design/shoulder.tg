@@ -33,7 +33,7 @@ placement:
     lateral_offset = 31 mm
 
 tendons:
-    defaults { stiffness: 200 N/m, damping: 0.5, pretension: 0.827, width: 0.75 mm }
+    defaults { stiffness: 200 N/m, damping: 0.5, pretension: 1.0, width: 0.75 mm }
     length = derived
     generators under sigma:
         M[1A] -- F[4B]
@@ -42,6 +42,20 @@ tendons:
         M[1B] -- F[1B]
         M[2A] -- F[4B]
         M[2B] -- F[1B]
+
+    overrides:
+        M[1A] -- F[4B] { stiffness: 188.5, pretension: 1.069 }
+        M[4B] -- F[1A] { stiffness: 208.3, pretension: 0.9438 }
+        M[1A] -- F[3B] { stiffness: 208.5, pretension: 0.9391 }
+        M[4B] -- F[2A] { stiffness: 210.1, pretension: 0.9844 }
+        M[1B] -- F[2B] { stiffness: 207.1, pretension: 0.9295 }
+        M[4A] -- F[3A] { stiffness: 198.6, pretension: 1.073 }
+        M[1B] -- F[1B] { stiffness: 209.5, pretension: 1.059 }
+        M[4A] -- F[4A] { stiffness: 213.2, pretension: 0.9843 }
+        M[2A] -- F[4B] { stiffness: 214.3, pretension: 1.005 }
+        M[3B] -- F[1A] { stiffness: 191.8, pretension: 0.9484 }
+        M[2B] -- F[1B] { stiffness: 206.8, pretension: 1.032 }
+        M[3A] -- F[4A] { stiffness: 191.1, pretension: 0.9652 }
 
 motors:
     disk { radius: 18.0 mm, crank_throw: 23 mm, tilt: 0.0 rad, pitch: 50 deg, kv: 0.25, ctrl: [-120, 120],

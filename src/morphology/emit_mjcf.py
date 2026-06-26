@@ -536,16 +536,20 @@ def _add_tendons(
             f_node = anchor_node_name(fa)
             name = legacy_edge_name(prefix, m_node, f_node)
             length = shoulder.tendon_lengths[edge_topology_key(edge)]
-            stiff, damp, pret = resolve_material_props(morph.tendons, edge)
+            stiff, damp, pret, color = resolve_material_props(morph.tendons, edge)
             attrs = {
                 "name": name,
                 "class": "string",
                 "range": f"0.0 {length}",
                 "stiffness": str(stiff),
                 "damping": str(damp),
+                # Pretension: spring rest length = posed anchor distance * pretension
+                # (pretension < 1 pre-tensions the tendon). Per-tendon via overrides.
+                "springlength": str(length * pret),
             }
-            if color_structural_tendons:
-                attrs["rgba"] = _hex_to_rgba(STRUCTURAL_TENDON_COLORS[index])
+            # Debug palette overrides the per-tendon color when requested.
+            attrs["rgba"] = (_hex_to_rgba(STRUCTURAL_TENDON_COLORS[index])
+                             if color_structural_tendons else _color_to_rgba(color))
             spatial = ET.SubElement(tendon_el, "spatial", **attrs)
             ET.SubElement(spatial, "site", site=f"{shoulder.mobile_body}_{m_node}")
             ET.SubElement(spatial, "site", site=f"{shoulder.fixed_body}_{f_node}")
@@ -652,3 +656,15 @@ def _vec2(v) -> str:
 def _hex_to_rgba(color: str) -> str:
     color = color.lstrip("#")
     return " ".join(str(int(color[i : i + 2], 16) / 255.0) for i in (0, 2, 4)) + " 1"
+
+
+def _color_to_rgba(color: str) -> str:
+    """Normalize a tendon color to MJCF rgba. Accepts 'r g b [a]' or 'rrggbb' hex.
+
+    ('#' can't be used in .tg -- it's a comment marker -- so hex has no leading #.)
+    """
+    text = str(color).strip()
+    if " " in text:  # already space-separated rgba (pad alpha if omitted)
+        parts = text.split()
+        return " ".join(parts) if len(parts) >= 4 else " ".join(parts + ["1"])
+    return _hex_to_rgba(text)  # 6-digit hex

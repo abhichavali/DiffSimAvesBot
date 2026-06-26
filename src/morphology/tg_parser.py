@@ -151,15 +151,25 @@ def _parse_brace_dict(text: str) -> Dict[str, Any]:
         if ":" not in part:
             continue
         key, val = part.split(":", 1)
-        out[key.strip()] = _parse_scalar(val.strip())
+        out[key.strip()] = _scalar_or_str(val.strip())
     return out
 
 
+def _scalar_or_str(text: str) -> Any:
+    """Parse as a scalar, else keep the raw string (e.g. an rgba/hex color)."""
+    try:
+        return _parse_scalar(text)
+    except ValueError:
+        return text
+
+
 def _parse_material_dict(raw: Dict[str, Any]) -> TendonMaterial:
+    color = raw.get("color")
     return TendonMaterial(
         stiffness=_optional_float(raw.get("stiffness")),
         damping=_optional_float(raw.get("damping")),
         pretension=_optional_float(raw.get("pretension")),
+        color=str(color) if color is not None else None,
     )
 
 
@@ -521,6 +531,7 @@ class _TgParser:
                     damping=float(self.tendon_defaults.get("damping", 0.5)),
                     pretension=float(self.tendon_defaults.get("pretension", 0.85)),
                     width=float(self.tendon_defaults.get("width", 0.00075)),
+                    color=str(self.tendon_defaults.get("color", "0.8 0.2 0.2 1")),
                 ),
                 generators=tuple(self.generators),
                 edge_overrides=dict(self.edge_overrides),
