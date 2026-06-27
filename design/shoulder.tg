@@ -8,7 +8,7 @@ world:
     timestep   = 0.13 ms
     integrator = implicitfast
     scale      = 0.4
-    meshdir    = /Users/abhinavchavali/Code/DiffSimAvesBot/assets
+    meshdir    = assets
 
 archetype strut C:
     shape    = arc
@@ -33,7 +33,7 @@ placement:
     lateral_offset = 31 mm
 
 tendons:
-    defaults { stiffness: 200 N/m, damping: 0.5, pretension: 1.0, width: 0.75 mm }
+    defaults { stiffness: 200 N/m, damping: 0.5, pretension: 0.827, width: 0.75 mm }
     length = derived
     generators under sigma:
         M[1A] -- F[4B]
@@ -42,20 +42,6 @@ tendons:
         M[1B] -- F[1B]
         M[2A] -- F[4B]
         M[2B] -- F[1B]
-
-    overrides:
-        M[1A] -- F[4B] { stiffness: 224.5, pretension: 1.087 }
-        M[4B] -- F[1A] { stiffness: 167.9, pretension: 0.8735 }
-        M[1A] -- F[3B] { stiffness: 159.4, pretension: 0.8609 }
-        M[4B] -- F[2A] { stiffness: 171.3, pretension: 1.269 }
-        M[1B] -- F[2B] { stiffness: 194.3, pretension: 0.9846 }
-        M[4A] -- F[3A] { stiffness: 157.1, pretension: 1.291 }
-        M[1B] -- F[1B] { stiffness: 163.9, pretension: 1.276 }
-        M[4A] -- F[4A] { stiffness: 198.6, pretension: 1.33 }
-        M[2A] -- F[4B] { stiffness: 175.7, pretension: 0.8651 }
-        M[3B] -- F[1A] { stiffness: 234.9, pretension: 1.028 }
-        M[2B] -- F[1B] { stiffness: 176.8, pretension: 1.189 }
-        M[3A] -- F[4A] { stiffness: 231.2, pretension: 1.013 }
 
 motors:
     disk { radius: 18.0 mm, crank_throw: 23 mm, tilt: 0.0 rad, pitch: 50 deg, kv: 0.25, ctrl: [-120, 120],
@@ -66,7 +52,7 @@ motors:
     drive M[1] and M[4]
     attach_along_edge = 0.0 rad
     attach_radius = 1.0
-    drive_phase_offset = 180 deg
+    drive_phase_offset = 170 deg
     tendon_pretension = 0.82
     tendon_stiffness  = 600 N/m
     tendon_damping    = 1.0
@@ -78,10 +64,8 @@ wing on M.midpoint:
     mount_arm  = 55.0 mm
     mesh       = wing.stl
     pitch:
-        upstroke_pitch      = 5 deg
-        downstroke_pitch    = 5 deg
-        upstroke_stiffness  = 0.03
-        downstroke_stiffness = 0.03
+        free_angle = 10 deg
+        stiffness  = 0.03
         damping    = 1e-5
         initial    = 0.0 rad
         range      = [-0.7, 0.7] rad
