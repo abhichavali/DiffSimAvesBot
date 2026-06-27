@@ -44,18 +44,18 @@ tendons:
         M[2B] -- F[1B]
 
     overrides:
-        M[1A] -- F[4B] { stiffness: 235.6, pretension: 1.104 }
-        M[4B] -- F[1A] { stiffness: 146, pretension: 0.8565 }
-        M[1A] -- F[3B] { stiffness: 157.9, pretension: 0.8214 }
-        M[4B] -- F[2A] { stiffness: 180.2, pretension: 1.267 }
-        M[1B] -- F[2B] { stiffness: 170.5, pretension: 0.8895 }
-        M[4A] -- F[3A] { stiffness: 159.3, pretension: 1.264 }
-        M[1B] -- F[1B] { stiffness: 161, pretension: 1.277 }
-        M[4A] -- F[4A] { stiffness: 223, pretension: 1.209 }
-        M[2A] -- F[4B] { stiffness: 174.1, pretension: 0.8631 }
-        M[3B] -- F[1A] { stiffness: 223, pretension: 1.003 }
-        M[2B] -- F[1B] { stiffness: 173.7, pretension: 1.187 }
-        M[3A] -- F[4A] { stiffness: 235.6, pretension: 0.998 }
+        M[1A] -- F[4B] { stiffness: 235.1, pretension: 1.059 }
+        M[4B] -- F[1A] { stiffness: 139.3, pretension: 0.8768 }
+        M[1A] -- F[3B] { stiffness: 155.5, pretension: 0.8146 }
+        M[4B] -- F[2A] { stiffness: 165.2, pretension: 1.356 }
+        M[1B] -- F[2B] { stiffness: 173, pretension: 0.906 }
+        M[4A] -- F[3A] { stiffness: 152.5, pretension: 1.337 }
+        M[1B] -- F[1B] { stiffness: 158.2, pretension: 1.326 }
+        M[4A] -- F[4A] { stiffness: 201.8, pretension: 1.262 }
+        M[2A] -- F[4B] { stiffness: 172.1, pretension: 0.8746 }
+        M[3B] -- F[1A] { stiffness: 226.7, pretension: 0.9644 }
+        M[2B] -- F[1B] { stiffness: 176.2, pretension: 1.133 }
+        M[3A] -- F[4A] { stiffness: 232.7, pretension: 1.107 }
 
 motors:
     disk { radius: 18.0 mm, crank_throw: 23 mm, tilt: 0.0 rad, pitch: 50 deg, kv: 0.25, ctrl: [-120, 120],
