@@ -1,0 +1,24 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+[setup] tune_control=True tune_tendons=False tune_motor_tendons=True tune_pitch=True params=15 steps=4582 steps/cycle=764 lc_max=0.4 power_reward=True
+[baseline] Lbar=238.6 mN  tau_hat=214.8 mNm  A=(45.65,36.78,159.53)mm  S=0.00634  C_lc=0.317  ripple=12.2  Lmin=-4979.1mN  Cneg=154  cmd=33.5rad/s  P=7.67W  Pinactive=1.03W
+[target]   L_target=150 mN  A*=(45.65,36.78,159.53) mm
+
+=== stage tau_max = 200 mNm ===
+  it000 loss=4.0138  L= 234.2mN  tau= 214.5mNm  A=(45.9,37.3,161.1)mm  S=0.00634  Clc=0.33  ripple=12  Lmin=-5224.8mN  Cneg=1.5e+02  cmd= 33.5  P= 7.67W  Pinact= 1.03W
+  it001 loss=3.7982  L= 241.1mN  tau= 213.5mNm  A=(44.5,37.2,160.2)mm  S=0.00484  Clc=0.309  ripple=12  Lmin=-5060.5mN  Cneg=1.5e+02  cmd= 33.6  P= 7.62W  Pinact= 0.96W
+  it002 loss=3.6207  L= 248.1mN  tau= 211.4mNm  A=(43.4,37.5,159.7)mm  S=0.00427  Clc=0.302  ripple=12  Lmin=-4992.8mN  Cneg=1.5e+02  cmd= 33.7  P= 7.56W  Pinact= 0.90W
+  it003 loss=3.4264  L= 240.1mN  tau= 211.4mNm  A=(43.6,37.5,158.2)mm  S=0.00454  Clc=0.284  ripple=12  Lmin=-4871.4mN  Cneg=1.5e+02  cmd= 33.8  P= 7.52W  Pinact= 0.84W
+  it004 loss=3.2603  L= 247.6mN  tau= 212.2mNm  A=(44.0,38.1,159.2)mm  S=0.0055  Clc=0.272  ripple=12  Lmin=-5102.4mN  Cneg=1.5e+02  cmd= 33.9  P= 7.50W  Pinact= 0.78W
+  it005 loss=3.1477  L= 233.4mN  tau= 210.4mNm  A=(47.7,39.7,160.3)mm  S=0.00689  Clc=0.261  ripple=13  Lmin=-5145.9mN  Cneg=1.5e+02  cmd= 34.0  P= 7.50W  Pinact= 0.74W
+  it006 loss=3.0593  L= 242.9mN  tau= 208.9mNm  A=(52.2,38.3,159.0)mm  S=0.00852  Clc=0.253  ripple=12  Lmin=-5078.5mN  Cneg=1.6e+02  cmd= 34.2  P= 7.50W  Pinact= 0.71W
+  it007 loss=2.9750  L= 237.5mN  tau= 208.5mNm  A=(42.3,38.9,159.3)mm  S=0.0104  Clc=0.246  ripple=12  Lmin=-5026.7mN  Cneg=1.6e+02  cmd= 34.3  P= 7.55W  Pinact= 0.68W
+  it008 loss=2.9130  L= 239.5mN  tau= 207.2mNm  A=(43.9,39.5,160.6)mm  S=0.0124  Clc=0.233  ripple=12  Lmin=-5287.4mN  Cneg=1.6e+02  cmd= 34.4  P= 7.57W  Pinact= 0.66W
+  it009 loss=2.8830  L= 240.2mN  tau= 205.3mNm  A=(43.0,38.9,160.7)mm  S=0.0144  Clc=0.212  ripple=12  Lmin=-5071.2mN  Cneg=1.5e+02  cmd= 34.5  P= 7.61W  Pinact= 0.65W
+  it010 loss=2.8875  L= 237.2mN  tau= 204.3mNm  A=(41.8,39.8,161.7)mm  S=0.0161  Clc=0.224  ripple=12  Lmin=-5116.1mN  Cneg=1.5e+02  cmd= 34.5  P= 7.63W  Pinact= 0.64W
+  it011 loss=2.8328  L= 239.8mN  tau= 206.3mNm  A=(39.8,38.4,158.9)mm  S=0.0176  Clc=0.216  ripple=12  Lmin=-5190.4mN  Cneg=1.6e+02  cmd= 34.5  P= 7.60W  Pinact= 0.63W
+  it012 loss=2.7798  L= 237.1mN  tau= 206.4mNm  A=(39.6,39.3,158.7)mm  S=0.0185  Clc=0.219  ripple=12  Lmin=-5003.5mN  Cneg=1.6e+02  cmd= 34.6  P= 7.56W  Pinact= 0.61W
+  it013 loss=2.7182  L= 238.7mN  tau= 207.2mNm  A=(41.4,39.4,165.2)mm  S=0.0191  Clc=0.249  ripple=12  Lmin=-5405.4mN  Cneg=1.6e+02  cmd= 34.6  P= 7.51W  Pinact= 0.59W
+  it014 loss=2.6008  L= 236.7mN  tau= 207.4mNm  A=(44.3,38.4,159.9)mm  S=0.0195  Clc=0.242  ripple=13  Lmin=-5020.2mN  Cneg=1.6e+02  cmd= 34.6  P= 7.43W  Pinact= 0.56W
+  it015 loss=2.5462  L= 238.9mN  tau= 209.7mNm  A=(38.3,38.3,159.6)mm  S=0.0201  Clc=0.224  ripple=12  Lmin=-5037.7mN  Cneg=1.6e+02  cmd= 34.5  P= 7.31W  Pinact= 0.54W
+  it016 loss=2.5010  L= 236.0mN  tau= 208.5mNm  A=(43.7,39.3,161.1)mm  S=0.0209  Clc=0.245  ripple=12  Lmin=-5072.4mN  Cneg=1.6e+02  cmd= 34.5  P= 7.27W  Pinact= 0.53W

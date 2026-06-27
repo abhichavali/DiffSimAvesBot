@@ -1,0 +1,301 @@
+Using CPython 3.11.15
+Creating virtual environment at: .venv
+Resolved 29 packages in 1ms
+Downloading kiwisolver (1.4MiB)
+Downloading pillow (6.8MiB)
+Downloading matplotlib (9.6MiB)
+Downloading mujoco (19.8MiB)
+Downloading fonttools (4.8MiB)
+Downloading mujoco-mjx (6.8MiB)
+Downloading numpy (16.1MiB)
+Downloading pyopengl (3.0MiB)
+Downloading scipy (33.7MiB)
+Downloading ml-dtypes (4.8MiB)
+Downloading jaxlib (81.5MiB)
+Downloading jax (3.1MiB)
+ Downloaded kiwisolver
+ Downloaded pyopengl
+ Downloaded jax
+ Downloaded ml-dtypes
+ Downloaded fonttools
+ Downloaded mujoco-mjx
+ Downloaded pillow
+ Downloaded matplotlib
+ Downloaded numpy
+ Downloaded mujoco
+ Downloaded scipy
+ Downloaded jaxlib
+Prepared 26 packages in 6.56s
+Installed 26 packages in 931ms
+ + absl-py==2.4.0
+ + contourpy==1.3.3
+ + cycler==0.12.1
+ + etils==1.14.0
+ + fonttools==4.63.0
+ + fsspec==2026.6.0
+ + glfw==2.10.0
+ + jax==0.10.2
+ + jaxlib==0.10.2
+ + kiwisolver==1.5.0
+ + matplotlib==3.11.0
+ + ml-dtypes==0.5.4
+ + mujoco==3.10.0
+ + mujoco-mjx==3.10.0
+ + numpy==2.4.6
+ + opt-einsum==3.4.0
+ + packaging==26.2
+ + pillow==12.2.0
+ + pyopengl==3.1.10
+ + pyparsing==3.3.2
+ + python-dateutil==2.9.0.post0
+ + scipy==1.17.1
+ + six==1.17.0
+ + trimesh==4.12.2
+ + typing-extensions==4.15.0
+ + zipp==4.1.0
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+[baseline] Lbar=103.5 mN  tau_hat=255.7 mNm  A_stroke=54.80 mm  S=0
+[target]   L_target=191.0 mN  A*=54.80 mm
+
+=== stage tau_max = 400 mNm ===
+  it000 loss=2.1118  L= 103.2mN  tau= 256.1mNm  A=54.54mm  S=0
+  it001 loss=2.0490  L= 104.5mN  tau= 256.9mNm  A=54.63mm  S=0.00044
+  it002 loss=2.0993  L= 103.5mN  tau= 257.9mNm  A=54.17mm  S=0.00117
+  it003 loss=2.2450  L= 100.5mN  tau= 257.5mNm  A=53.94mm  S=0.0025
+  it004 loss=2.0813  L= 103.9mN  tau= 258.4mNm  A=55.30mm  S=0.00447
+  it005 loss=2.0600  L= 104.3mN  tau= 258.8mNm  A=53.53mm  S=0.0067
+  it006 loss=2.1906  L= 101.6mN  tau= 256.6mNm  A=53.30mm  S=0.00936
+  it007 loss=2.0170  L= 105.2mN  tau= 257.3mNm  A=54.30mm  S=0.0123
+  it008 loss=2.1030  L= 103.4mN  tau= 257.2mNm  A=54.73mm  S=0.0151
+  it009 loss=2.0404  L= 104.7mN  tau= 258.8mNm  A=53.90mm  S=0.0179
+  it010 loss=2.1293  L= 102.9mN  tau= 257.7mNm  A=56.06mm  S=0.0207
+  it011 loss=2.0244  L= 105.1mN  tau= 257.3mNm  A=56.11mm  S=0.0238
+  it012 loss=2.1281  L= 102.9mN  tau= 259.1mNm  A=54.11mm  S=0.027
+  it013 loss=2.1647  L= 102.1mN  tau= 257.2mNm  A=55.93mm  S=0.0303
+  it014 loss=2.1165  L= 103.1mN  tau= 258.5mNm  A=54.78mm  S=0.034
+  it015 loss=2.0811  L= 103.9mN  tau= 258.0mNm  A=55.28mm  S=0.0378
+  it016 loss=2.1559  L= 102.4mN  tau= 260.6mNm  A=57.93mm  S=0.0419
+  it017 loss=2.1445  L= 102.6mN  tau= 258.7mNm  A=54.91mm  S=0.046
+  it018 loss=1.9274  L= 107.2mN  tau= 260.0mNm  A=57.02mm  S=0.0503
+  it019 loss=1.9898  L= 105.8mN  tau= 259.8mNm  A=54.82mm  S=0.0547
+  it020 loss=2.2294  L= 100.8mN  tau= 259.7mNm  A=54.18mm  S=0.0593
+  it021 loss=2.1714  L= 102.0mN  tau= 260.5mNm  A=54.06mm  S=0.0642
+  it022 loss=2.0598  L= 104.3mN  tau= 259.9mNm  A=53.42mm  S=0.0692
+  it023 loss=2.0926  L= 103.6mN  tau= 260.8mNm  A=54.50mm  S=0.0742
+  it024 loss=2.2355  L= 100.7mN  tau= 259.4mNm  A=53.66mm  S=0.0793
+  it025 loss=2.1958  L= 101.5mN  tau= 261.6mNm  A=52.91mm  S=0.0846
+  it026 loss=2.0765  L= 104.0mN  tau= 260.9mNm  A=53.46mm  S=0.09
+  it027 loss=2.1165  L= 103.2mN  tau= 260.2mNm  A=54.06mm  S=0.0954
+  it028 loss=1.9990  L= 105.6mN  tau= 261.6mNm  A=54.24mm  S=0.101
+  it029 loss=2.0445  L= 104.7mN  tau= 260.8mNm  A=54.51mm  S=0.106
+  it030 loss=2.1036  L= 103.4mN  tau= 259.4mNm  A=54.42mm  S=0.111
+  it031 loss=2.1005  L= 103.5mN  tau= 260.7mNm  A=53.90mm  S=0.116
+  it032 loss=2.1396  L= 102.7mN  tau= 261.7mNm  A=55.34mm  S=0.121
+  it033 loss=2.1880  L= 101.7mN  tau= 259.6mNm  A=54.65mm  S=0.126
+  it034 loss=2.0784  L= 104.0mN  tau= 262.7mNm  A=56.32mm  S=0.132
+  it035 loss=1.8648  L= 108.6mN  tau= 260.6mNm  A=55.25mm  S=0.137
+  it036 loss=2.0480  L= 104.6mN  tau= 261.2mNm  A=55.15mm  S=0.141
+  it037 loss=2.0463  L= 104.6mN  tau= 261.5mNm  A=53.82mm  S=0.146
+  it038 loss=2.1013  L= 103.5mN  tau= 262.8mNm  A=55.41mm  S=0.15
+  it039 loss=2.0515  L= 104.5mN  tau= 261.2mNm  A=52.94mm  S=0.155
+  it040 loss=2.0139  L= 105.3mN  tau= 262.8mNm  A=54.27mm  S=0.159
+  it041 loss=2.0044  L= 105.5mN  tau= 262.1mNm  A=54.84mm  S=0.163
+  it042 loss=2.0970  L= 103.6mN  tau= 262.4mNm  A=53.26mm  S=0.167
+  it043 loss=2.2275  L= 101.0mN  tau= 261.9mNm  A=57.94mm  S=0.17
+  it044 loss=2.1118  L= 103.3mN  tau= 261.7mNm  A=52.79mm  S=0.174
+  it045 loss=2.1446  L= 102.6mN  tau= 260.8mNm  A=52.59mm  S=0.177
+  it046 loss=2.1578  L= 102.3mN  tau= 261.7mNm  A=54.48mm  S=0.18
+  it047 loss=2.1899  L= 101.7mN  tau= 260.7mNm  A=53.51mm  S=0.184
+  it048 loss=2.1263  L= 103.0mN  tau= 262.4mNm  A=56.61mm  S=0.187
+  it049 loss=2.0744  L= 104.0mN  tau= 262.4mNm  A=55.24mm  S=0.19
+  it050 loss=2.0164  L= 105.3mN  tau= 261.1mNm  A=53.59mm  S=0.193
+  it051 loss=2.1794  L= 101.9mN  tau= 262.6mNm  A=51.63mm  S=0.195
+  it052 loss=2.1066  L= 103.4mN  tau= 264.1mNm  A=54.80mm  S=0.198
+  it053 loss=2.0502  L= 104.6mN  tau= 262.2mNm  A=56.19mm  S=0.2
+  it054 loss=2.0249  L= 105.1mN  tau= 261.2mNm  A=53.85mm  S=0.202
+  it055 loss=2.1760  L= 101.9mN  tau= 263.5mNm  A=55.28mm  S=0.204
+  it056 loss=2.0550  L= 104.5mN  tau= 261.2mNm  A=53.75mm  S=0.206
+  it057 loss=2.0738  L= 104.1mN  tau= 262.7mNm  A=54.75mm  S=0.208
+  it058 loss=1.9669  L= 106.3mN  tau= 263.2mNm  A=55.30mm  S=0.21
+  it059 loss=1.9091  L= 107.6mN  tau= 262.1mNm  A=54.43mm  S=0.211
+
+=== stage tau_max = 200 mNm ===
+  it000 loss=3.0478  L= 104.8mN  tau= 263.5mNm  A=55.10mm  S=0.213
+  it001 loss=2.9563  L= 106.9mN  tau= 263.7mNm  A=54.67mm  S=0.206
+  it002 loss=3.0129  L= 105.9mN  tau= 264.0mNm  A=55.85mm  S=0.197
+  it003 loss=2.8215  L= 108.4mN  tau= 261.6mNm  A=53.04mm  S=0.187
+  it004 loss=3.1663  L= 100.9mN  tau= 261.3mNm  A=52.80mm  S=0.177
+  it005 loss=3.1140  L= 102.6mN  tau= 262.2mNm  A=53.77mm  S=0.168
+  it006 loss=3.1381  L= 100.7mN  tau= 260.0mNm  A=53.92mm  S=0.161
+  it007 loss=3.0242  L= 102.9mN  tau= 259.8mNm  A=54.57mm  S=0.155
+  it008 loss=3.0168  L= 103.4mN  tau= 260.3mNm  A=54.44mm  S=0.152
+  it009 loss=2.8890  L= 105.8mN  tau= 259.9mNm  A=56.05mm  S=0.151
+  it010 loss=2.8959  L= 104.6mN  tau= 258.3mNm  A=54.85mm  S=0.152
+  it011 loss=2.9843  L= 102.2mN  tau= 257.3mNm  A=54.54mm  S=0.155
+  it012 loss=2.7488  L= 107.3mN  tau= 257.5mNm  A=55.24mm  S=0.162
+  it013 loss=2.9000  L= 104.2mN  tau= 257.7mNm  A=53.80mm  S=0.17
+  it014 loss=2.9489  L= 103.1mN  tau= 257.5mNm  A=58.17mm  S=0.181
+  it015 loss=2.9530  L= 101.7mN  tau= 255.4mNm  A=54.22mm  S=0.195
+  it016 loss=2.8250  L= 105.6mN  tau= 257.4mNm  A=55.47mm  S=0.211
+  it017 loss=2.9164  L= 101.9mN  tau= 254.3mNm  A=54.41mm  S=0.229
+  it018 loss=2.6480  L= 108.3mN  tau= 255.6mNm  A=54.56mm  S=0.25
+  it019 loss=2.8154  L= 103.7mN  tau= 253.7mNm  A=53.32mm  S=0.272
+  it020 loss=2.7933  L= 104.7mN  tau= 254.8mNm  A=54.17mm  S=0.297
+  it021 loss=2.8721  L= 102.5mN  tau= 253.7mNm  A=54.64mm  S=0.324
+  it022 loss=2.7883  L= 103.7mN  tau= 252.8mNm  A=53.89mm  S=0.353
+  it023 loss=2.6474  L= 106.1mN  tau= 251.7mNm  A=54.85mm  S=0.384
+  it024 loss=2.8018  L= 103.2mN  tau= 252.3mNm  A=55.23mm  S=0.417
+  it025 loss=2.7142  L= 104.7mN  tau= 251.7mNm  A=55.46mm  S=0.451
+  it026 loss=2.6386  L= 105.3mN  tau= 249.8mNm  A=54.07mm  S=0.487
+  it027 loss=2.7124  L= 104.4mN  tau= 251.0mNm  A=55.15mm  S=0.525
+  it028 loss=2.6465  L= 106.6mN  tau= 252.5mNm  A=54.57mm  S=0.564
+  it029 loss=2.7538  L= 103.2mN  tau= 250.3mNm  A=55.29mm  S=0.604
+  it030 loss=2.7664  L= 101.9mN  tau= 248.4mNm  A=54.55mm  S=0.646
+  it031 loss=2.6909  L= 104.8mN  tau= 250.8mNm  A=53.93mm  S=0.689
+  it032 loss=2.6069  L= 105.4mN  tau= 248.7mNm  A=56.55mm  S=0.734
+  it033 loss=2.7157  L= 102.5mN  tau= 247.3mNm  A=54.40mm  S=0.779
+  it034 loss=2.5378  L= 105.7mN  tau= 246.2mNm  A=55.70mm  S=0.825
+  it035 loss=2.6852  L= 103.6mN  tau= 248.2mNm  A=54.32mm  S=0.872
+  it036 loss=2.6316  L= 105.1mN  tau= 249.0mNm  A=55.39mm  S=0.92
+  it037 loss=2.6413  L= 104.0mN  tau= 247.2mNm  A=55.06mm  S=0.968
+  it038 loss=2.6857  L= 102.7mN  tau= 246.4mNm  A=55.29mm  S=1.02
+  it039 loss=2.7393  L= 101.7mN  tau= 246.5mNm  A=55.07mm  S=1.07
+  it040 loss=2.7440  L= 100.4mN  tau= 243.8mNm  A=53.73mm  S=1.12
+  it041 loss=2.6328  L= 102.2mN  tau= 242.9mNm  A=54.23mm  S=1.17
+  it042 loss=2.7202  L= 101.6mN  tau= 245.5mNm  A=53.82mm  S=1.22
+  it043 loss=2.4882  L= 105.2mN  tau= 242.9mNm  A=54.14mm  S=1.28
+  it044 loss=2.6385  L= 103.0mN  tau= 244.8mNm  A=56.19mm  S=1.33
+  it045 loss=2.5738  L= 104.2mN  tau= 244.4mNm  A=55.42mm  S=1.38
+  it046 loss=2.6077  L= 103.3mN  tau= 244.0mNm  A=54.22mm  S=1.44
+  it047 loss=2.6549  L= 102.4mN  tau= 244.3mNm  A=55.71mm  S=1.49
+  it048 loss=2.5750  L= 103.5mN  tau= 243.0mNm  A=54.56mm  S=1.54
+  it049 loss=2.6160  L= 102.2mN  tau= 242.0mNm  A=55.00mm  S=1.6
+  it050 loss=2.4047  L= 107.2mN  tau= 242.9mNm  A=56.29mm  S=1.65
+  it051 loss=2.5676  L= 103.4mN  tau= 242.3mNm  A=54.17mm  S=1.71
+  it052 loss=2.4528  L= 105.0mN  tau= 240.5mNm  A=54.54mm  S=1.76
+  it053 loss=2.5477  L= 104.4mN  tau= 243.4mNm  A=54.93mm  S=1.82
+  it054 loss=2.4770  L= 104.4mN  tau= 240.1mNm  A=54.99mm  S=1.88
+  it055 loss=2.5954  L= 102.5mN  tau= 241.3mNm  A=53.90mm  S=1.93
+  it056 loss=2.4395  L= 105.5mN  tau= 240.9mNm  A=54.35mm  S=1.99
+  it057 loss=2.5546  L= 103.5mN  tau= 241.6mNm  A=54.29mm  S=2.04
+  it058 loss=2.3668  L= 106.8mN  tau= 240.2mNm  A=54.84mm  S=2.1
+  it059 loss=2.5194  L= 103.0mN  tau= 238.8mNm  A=54.50mm  S=2.15
+
+=== stage tau_max = 100 mNm ===
+  it000 loss=21.8460  L= 104.1mN  tau= 240.5mNm  A=55.43mm  S=2.21
+  it001 loss=21.1680  L= 103.7mN  tau= 238.0mNm  A=54.28mm  S=2.28
+  it002 loss=20.6491  L= 106.6mN  tau= 236.6mNm  A=54.88mm  S=2.38
+  it003 loss=20.9343  L= 103.2mN  tau= 237.1mNm  A=55.18mm  S=2.49
+  it004 loss=20.6162  L= 103.2mN  tau= 235.9mNm  A=56.29mm  S=2.6
+  it005 loss=20.9066  L= 102.3mN  tau= 236.8mNm  A=53.53mm  S=2.73
+  it006 loss=20.7929  L= 103.8mN  tau= 236.7mNm  A=53.50mm  S=2.87
+  it007 loss=20.6076  L= 104.1mN  tau= 236.0mNm  A=55.48mm  S=3.01
+  it008 loss=20.2386  L= 105.1mN  tau= 234.9mNm  A=56.04mm  S=3.15
+  it009 loss=20.4119  L= 102.6mN  tau= 235.0mNm  A=55.19mm  S=3.3
+  it010 loss=19.5348  L= 102.6mN  tau= 231.8mNm  A=54.50mm  S=3.45
+  it011 loss=19.5274  L= 104.0mN  tau= 232.0mNm  A=55.08mm  S=3.61
+  it012 loss=19.5608  L= 104.7mN  tau= 232.2mNm  A=54.87mm  S=3.76
+  it013 loss=18.8808  L= 104.0mN  tau= 229.5mNm  A=55.18mm  S=3.92
+  it014 loss=19.3925  L= 104.1mN  tau= 231.5mNm  A=55.14mm  S=4.08
+  it015 loss=19.0102  L= 106.6mN  tau= 230.4mNm  A=55.13mm  S=4.23
+  it016 loss=19.2237  L= 105.8mN  tau= 231.1mNm  A=56.73mm  S=4.39
+  it017 loss=18.9380  L= 103.9mN  tau= 229.7mNm  A=55.35mm  S=4.55
+  it018 loss=18.5084  L= 104.7mN  tau= 228.1mNm  A=55.61mm  S=4.71
+  it019 loss=18.4993  L= 106.7mN  tau= 228.5mNm  A=53.93mm  S=4.87
+  it020 loss=18.5710  L= 101.7mN  tau= 227.8mNm  A=54.07mm  S=5.03
+  it021 loss=18.8037  L= 102.2mN  tau= 228.8mNm  A=55.52mm  S=5.2
+  it022 loss=17.9897  L= 105.2mN  tau= 226.2mNm  A=54.33mm  S=5.36
+  it023 loss=18.0050  L= 101.9mN  tau= 225.6mNm  A=54.83mm  S=5.53
+  it024 loss=17.6504  L= 103.4mN  tau= 224.5mNm  A=56.47mm  S=5.69
+  it025 loss=17.6615  L= 104.6mN  tau= 224.7mNm  A=54.74mm  S=5.85
+  it026 loss=18.0172  L= 102.1mN  tau= 225.7mNm  A=54.79mm  S=6.01
+  it027 loss=17.3632  L= 101.8mN  tau= 223.0mNm  A=54.41mm  S=6.17
+  it028 loss=17.1103  L= 105.1mN  tau= 222.6mNm  A=54.88mm  S=6.33
+  it029 loss=17.0516  L= 102.9mN  tau= 221.9mNm  A=56.75mm  S=6.49
+  it030 loss=16.8755  L= 101.0mN  tau= 220.8mNm  A=53.98mm  S=6.65
+  it031 loss=16.8914  L= 106.0mN  tau= 221.8mNm  A=53.90mm  S=6.81
+  it032 loss=16.9661  L= 103.1mN  tau= 221.6mNm  A=55.56mm  S=6.97
+  it033 loss=16.7836  L= 105.0mN  tau= 221.2mNm  A=53.88mm  S=7.13
+  it034 loss=16.3933  L= 105.0mN  tau= 219.5mNm  A=53.66mm  S=7.29
+  it035 loss=16.6254  L= 105.5mN  tau= 220.6mNm  A=53.96mm  S=7.44
+  it036 loss=16.5456  L= 103.9mN  tau= 220.0mNm  A=53.94mm  S=7.6
+  it037 loss=16.2177  L= 103.7mN  tau= 218.5mNm  A=54.56mm  S=7.76
+  it038 loss=16.1304  L= 105.2mN  tau= 218.5mNm  A=55.98mm  S=7.92
+  it039 loss=15.9540  L= 106.2mN  tau= 217.9mNm  A=53.21mm  S=8.08
+  it040 loss=16.0917  L= 105.1mN  tau= 218.3mNm  A=55.89mm  S=8.23
+  it041 loss=16.1615  L= 104.9mN  tau= 218.5mNm  A=54.76mm  S=8.39
+  it042 loss=15.7813  L= 102.7mN  tau= 216.4mNm  A=55.84mm  S=8.55
+  it043 loss=15.3810  L= 105.1mN  tau= 215.2mNm  A=55.58mm  S=8.71
+  it044 loss=15.6696  L= 102.3mN  tau= 215.9mNm  A=55.72mm  S=8.87
+  it045 loss=15.3711  L= 102.8mN  tau= 214.7mNm  A=54.35mm  S=9.03
+  it046 loss=15.4125  L= 103.9mN  tau= 215.1mNm  A=54.77mm  S=9.2
+  it047 loss=15.3601  L= 101.5mN  tau= 214.3mNm  A=54.23mm  S=9.36
+  it048 loss=15.3209  L= 102.6mN  tau= 214.4mNm  A=54.71mm  S=9.52
+  it049 loss=15.4736  L= 104.4mN  tau= 215.4mNm  A=54.24mm  S=9.68
+  it050 loss=15.2280  L= 103.2mN  tau= 214.1mNm  A=54.20mm  S=9.85
+  it051 loss=15.0882  L= 104.2mN  tau= 213.7mNm  A=55.38mm  S=10
+  it052 loss=14.9758  L= 103.7mN  tau= 213.1mNm  A=55.39mm  S=10.2
+  it053 loss=15.3041  L= 103.1mN  tau= 214.4mNm  A=54.95mm  S=10.3
+  it054 loss=14.8491  L= 108.5mN  tau= 213.5mNm  A=54.62mm  S=10.5
+  it055 loss=15.2066  L= 103.2mN  tau= 213.9mNm  A=57.22mm  S=10.7
+  it056 loss=14.7877  L= 102.4mN  tau= 211.9mNm  A=54.78mm  S=10.8
+  it057 loss=14.5925  L= 103.4mN  tau= 211.3mNm  A=54.91mm  S=11
+  it058 loss=14.6251  L= 106.2mN  tau= 212.0mNm  A=55.44mm  S=11.2
+  it059 loss=14.3638  L= 102.1mN  tau= 209.9mNm  A=57.45mm  S=11.3
+
+=== stage tau_max = 80 mNm ===
+  it000 loss=29.2167  L= 102.7mN  tau= 211.4mNm  A=55.11mm  S=11.5
+  it001 loss=28.8686  L= 102.0mN  tau= 210.4mNm  A=54.24mm  S=11.7
+  it002 loss=28.5697  L= 100.8mN  tau= 209.5mNm  A=54.66mm  S=11.8
+  it003 loss=29.2372  L= 103.1mN  tau= 211.5mNm  A=55.63mm  S=12
+  it004 loss=28.1694  L= 105.1mN  tau= 209.1mNm  A=54.20mm  S=12.2
+  it005 loss=27.8134  L= 101.8mN  tau= 207.8mNm  A=54.92mm  S=12.4
+  it006 loss=27.9453  L= 102.5mN  tau= 208.2mNm  A=55.36mm  S=12.7
+  it007 loss=28.3028  L= 106.3mN  tau= 209.5mNm  A=55.47mm  S=12.9
+  it008 loss=28.1784  L= 103.4mN  tau= 208.8mNm  A=57.91mm  S=13.1
+  it009 loss=27.4808  L= 102.6mN  tau= 207.0mNm  A=53.64mm  S=13.3
+  it010 loss=27.0885  L= 108.5mN  tau= 206.7mNm  A=55.07mm  S=13.5
+  it011 loss=27.6500  L= 101.9mN  tau= 207.3mNm  A=52.97mm  S=13.8
+  it012 loss=27.4687  L= 107.8mN  tau= 207.6mNm  A=53.47mm  S=14
+  it013 loss=27.0888  L= 103.2mN  tau= 206.1mNm  A=54.44mm  S=14.2
+  it014 loss=26.5419  L= 104.0mN  tau= 204.8mNm  A=53.44mm  S=14.5
+  it015 loss=27.0434  L= 104.3mN  tau= 206.1mNm  A=54.05mm  S=14.7
+  it016 loss=27.0307  L= 107.1mN  tau= 206.4mNm  A=53.68mm  S=15
+  it017 loss=26.4711  L= 103.9mN  tau= 204.6mNm  A=55.17mm  S=15.2
+  it018 loss=26.3439  L= 105.0mN  tau= 204.4mNm  A=53.52mm  S=15.5
+  it019 loss=26.2205  L= 103.5mN  tau= 203.9mNm  A=54.35mm  S=15.7
+  it020 loss=26.2856  L= 104.0mN  tau= 204.1mNm  A=55.10mm  S=15.9
+  it021 loss=25.9072  L= 107.2mN  tau= 203.5mNm  A=54.05mm  S=16.2
+  it022 loss=25.4717  L= 102.8mN  tau= 201.8mNm  A=55.54mm  S=16.4
+  it023 loss=25.5624  L= 105.4mN  tau= 202.3mNm  A=55.97mm  S=16.7
+  it024 loss=25.4332  L= 104.3mN  tau= 201.9mNm  A=56.05mm  S=16.9
+  it025 loss=26.0576  L= 104.5mN  tau= 203.5mNm  A=55.41mm  S=17.2
+  it026 loss=25.1615  L= 108.2mN  tau= 201.6mNm  A=54.12mm  S=17.4
+  it027 loss=24.7194  L= 106.4mN  tau= 200.2mNm  A=53.86mm  S=17.6
+  it028 loss=25.0586  L= 103.3mN  tau= 200.7mNm  A=54.68mm  S=17.9
+  it029 loss=25.2605  L= 105.0mN  tau= 201.5mNm  A=56.61mm  S=18.1
+  it030 loss=24.9124  L= 106.6mN  tau= 200.7mNm  A=55.58mm  S=18.3
+  it031 loss=24.8095  L= 103.2mN  tau= 200.0mNm  A=53.68mm  S=18.6
+  it032 loss=24.7227  L= 102.3mN  tau= 199.7mNm  A=54.78mm  S=18.8
+  it033 loss=24.7949  L= 104.3mN  tau= 200.1mNm  A=56.00mm  S=19
+  it034 loss=24.4478  L= 104.1mN  tau= 199.2mNm  A=55.55mm  S=19.2
+  it035 loss=24.0151  L= 104.4mN  tau= 198.0mNm  A=53.74mm  S=19.5
+  it036 loss=23.8292  L= 104.7mN  tau= 197.6mNm  A=54.88mm  S=19.7
+  it037 loss=24.1216  L= 105.5mN  tau= 198.4mNm  A=55.04mm  S=19.9
+  it038 loss=24.6930  L= 106.0mN  tau= 200.0mNm  A=54.24mm  S=20.1
+  it039 loss=23.8820  L= 107.1mN  tau= 198.0mNm  A=54.90mm  S=20.3
+  it040 loss=24.5584  L= 103.1mN  tau= 199.3mNm  A=53.13mm  S=20.5
+  it041 loss=24.2770  L= 106.8mN  tau= 199.0mNm  A=54.99mm  S=20.8
+  it042 loss=23.6012  L= 103.5mN  tau= 196.7mNm  A=53.32mm  S=21
+  it043 loss=23.9604  L= 103.0mN  tau= 197.6mNm  A=53.97mm  S=21.2
+  it044 loss=23.7655  L= 102.3mN  tau= 197.0mNm  A=54.82mm  S=21.4
+  it045 loss=24.2830  L= 103.0mN  tau= 198.5mNm  A=53.93mm  S=21.6
+  it046 loss=23.2948  L= 104.0mN  tau= 195.9mNm  A=54.73mm  S=21.8
+  it047 loss=23.1200  L= 101.9mN  tau= 195.2mNm  A=54.93mm  S=22
+  it048 loss=23.3598  L= 104.2mN  tau= 196.1mNm  A=53.98mm  S=22.2
+  it049 loss=23.2425  L= 103.9mN  tau= 195.8mNm  A=53.42mm  S=22.3
+  it050 loss=23.5017  L= 102.7mN  tau= 196.3mNm  A=54.46mm  S=22.5
+  it051 loss=23.1919  L= 104.0mN  tau= 195.6mNm  A=54.92mm  S=22.7
+  it052 loss=23.1206  L= 103.0mN  tau= 195.3mNm  A=53.92mm  S=22.9
+  it053 loss=23.1525  L= 107.8mN  tau= 196.0mNm  A=55.11mm  S=23.1
