@@ -8,7 +8,7 @@ world:
     timestep   = 0.13 ms
     integrator = implicitfast
     scale      = 0.4
-    meshdir    = assets
+    meshdir    = /Users/abhinavchavali/Code/DiffSimAvesBot/assets
 
 archetype strut C:
     shape    = arc
@@ -44,18 +44,18 @@ tendons:
         M[2B] -- F[1B]
 
     overrides:
-        M[1A] -- F[4B] { stiffness: 197.7, pretension: 1.024 }
-        M[4B] -- F[1A] { stiffness: 200.2, pretension: 0.9755 }
-        M[1A] -- F[3B] { stiffness: 221.1, pretension: 0.8944 }
-        M[4B] -- F[2A] { stiffness: 200.7, pretension: 1.033 }
-        M[1B] -- F[2B] { stiffness: 196.4, pretension: 0.8787 }
-        M[4A] -- F[3A] { stiffness: 205.8, pretension: 1.123 }
-        M[1B] -- F[1B] { stiffness: 201.5, pretension: 1.015 }
-        M[4A] -- F[4A] { stiffness: 221.1, pretension: 0.9305 }
-        M[2A] -- F[4B] { stiffness: 215.4, pretension: 0.9849 }
-        M[3B] -- F[1A] { stiffness: 183.6, pretension: 0.9796 }
-        M[2B] -- F[1B] { stiffness: 198.2, pretension: 0.9926 }
-        M[3A] -- F[4A] { stiffness: 187, pretension: 0.9348 }
+        M[1A] -- F[4B] { stiffness: 235.6, pretension: 1.104 }
+        M[4B] -- F[1A] { stiffness: 146, pretension: 0.8565 }
+        M[1A] -- F[3B] { stiffness: 157.9, pretension: 0.8214 }
+        M[4B] -- F[2A] { stiffness: 180.2, pretension: 1.267 }
+        M[1B] -- F[2B] { stiffness: 170.5, pretension: 0.8895 }
+        M[4A] -- F[3A] { stiffness: 159.3, pretension: 1.264 }
+        M[1B] -- F[1B] { stiffness: 161, pretension: 1.277 }
+        M[4A] -- F[4A] { stiffness: 223, pretension: 1.209 }
+        M[2A] -- F[4B] { stiffness: 174.1, pretension: 0.8631 }
+        M[3B] -- F[1A] { stiffness: 223, pretension: 1.003 }
+        M[2B] -- F[1B] { stiffness: 173.7, pretension: 1.187 }
+        M[3A] -- F[4A] { stiffness: 235.6, pretension: 0.998 }
 
 motors:
     disk { radius: 18.0 mm, crank_throw: 23 mm, tilt: 0.0 rad, pitch: 50 deg, kv: 0.25, ctrl: [-120, 120],

@@ -1,0 +1,128 @@
+* Usage
+
+Run these from the repo root.
+
+* Setup
+
+#+begin_src sh
+uv sync
+#+end_src
+
+* Compile
+
+Compile the default design:
+
+#+begin_src sh
+uv run python compile_tg.py
+#+end_src
+
+Compile a specific =.tg= file or output scene:
+
+#+begin_src sh
+uv run python compile_tg.py --tg design/shoulder.tg --out scene.xml
+#+end_src
+
+* CPU Runner
+
+Run a fixed-frequency headless simulation:
+
+#+begin_src sh
+uv run python run_fixed_frequency.py --frequency 10 --periods 5
+#+end_src
+
+Useful flags:
+
+#+begin_src sh
+uv run python run_fixed_frequency.py \
+  --tg design/shoulder.tg \
+  --scene scene.xml \
+  --frequency 10 \
+  --periods 5 \
+  --warmup-periods 2
+#+end_src
+
+The runner prints lift statistics:
+
+#+begin_src text
+frequency_hz
+periods
+samples
+mean_lift_N
+rms_lift_N
+min_lift_N
+max_lift_N
+#+end_src
+
+* CPU Viewer
+
+Open the MuJoCo viewer at a fixed crank frequency:
+
+#+begin_src sh
+mjpython view_fixed_frequency.py --frequency 10
+#+end_src
+
+Useful flags:
+
+#+begin_src sh
+mjpython view_fixed_frequency.py \
+  --tg design/shoulder.tg \
+  --scene scene.xml \
+  --frequency 10 \
+  --speed 0.2
+#+end_src
+
+=--speed= is the viewer realtime factor. Smaller values are slower.
+
+* MJX Runner
+
+Run the same fixed-frequency simulation through MJX:
+
+#+begin_src sh
+uv run python run_mjx_fixed_frequency.py --frequency 10 --periods 5
+#+end_src
+
+Useful flags:
+
+#+begin_src sh
+uv run python run_mjx_fixed_frequency.py \
+  --tg design/shoulder.tg \
+  --scene scene.xml \
+  --frequency 10 \
+  --periods 5 \
+  --warmup-periods 2
+#+end_src
+
+* MJX Live Viewer
+
+Start the WebSocket pixel-stream viewer:
+
+#+begin_src sh
+MUJOCO_GL=egl PYTHONPATH=src uv run python -m runtime.mjx.live_viewer --port 17070
+#+end_src
+
+Then open:
+
+#+begin_src text
+http://127.0.0.1:17070/
+#+end_src
+
+Useful flags:
+
+#+begin_src sh
+MUJOCO_GL=egl PYTHONPATH=src uv run python -m runtime.mjx.live_viewer \
+  --host 127.0.0.1 \
+  --port 17070 \
+  --steps-per-frame 20 \
+  --width 1280 \
+  --height 720
+#+end_src
+
+* Common Flow
+
+#+begin_src sh
+uv sync
+uv run python compile_tg.py
+uv run python run_fixed_frequency.py --frequency 10 --periods 5
+uv run python run_mjx_fixed_frequency.py --frequency 10 --periods 5
+mjpython view_fixed_frequency.py --frequency 10
+#+end_src
