@@ -149,7 +149,7 @@ def motor_tendon_ids(model):
 def build_rollout(mx, dx0, drive, pitch, aero, tip_id, omega, K, warmup_steps, sample_steps,
                   *, steps_per_cycle, aero_substep, base_a0, tune_control, control_fixed,
                   tune_frequency, tune_tendons, tendons, tune_pitch=False, tune_motor=False,
-                  motor_ids=None):
+                  motor_ids=None, flap_t1_mask=None):
     """Return metrics(theta) -> (Lbar, tau_hat, A_stroke, S, C_lc) as a jittable fn.
 
     ``theta`` packs only the *active* groups, concatenated in this order:
@@ -247,13 +247,19 @@ def build_rollout(mx, dx0, drive, pitch, aero, tip_id, omega, K, warmup_steps, s
             # P>0 motor drives (supplies), P<0 motor brakes (absorbs = inactive).
             power = jnp.sum(dx.actuator_force[flap_ids] * dx.actuator_velocity[flap_ids])
             tip_z = dx.site_xpos[tip_id, 2]
+            # Per-motor |torque|: group A = t1 ("blue"/upstroke), B = t4 ("orange"/
+            # downstroke). Used for the anti-overlap penalty below.
+            absf = jnp.abs(dx.actuator_force[flap_ids])
+            tauA = jnp.sum(absf * flap_t1_mask)
+            tauB = jnp.sum(absf * (1.0 - flap_t1_mask))
             keep = rec.astype(net_force_world.dtype)
-            return carry, jnp.stack([net_force_world[2] * keep, tau, tip_z, power])
+            return carry, jnp.stack([net_force_world[2] * keep, tau, tip_z, power, tauA, tauB])
 
         state0 = aero_runtime.init_aero_state(aero)
         carry0 = (dx0, state0, jnp.zeros_like(dx0.qvel), jnp.zeros(3), jnp.int32(0))
         _, rec = jax.lax.scan(step, carry0, record)
         lift_z, tau, tip_z, power = rec[:, 0], rec[:, 1], rec[:, 2], rec[:, 3]
+        tauA, tauB = rec[:, 4], rec[:, 5]
 
         Lbar = jnp.sum(lift_z) / sample_steps
         # soft-max (LSE) over the sample window approximates max_t |tau|, beta large.
@@ -286,7 +292,16 @@ def build_rollout(mx, dx0, drive, pitch, aero, tip_id, omega, K, warmup_steps, s
         P_brake = jnp.sum(jnp.maximum(0.0, -p_s)) / sample_steps   # mean absorbed power [W]
         P_scale = jnp.sum(jnp.abs(p_s)) / sample_steps + 1e-9      # mean |power|
         P_inactive = P_brake / P_scale                            # fraction of power that's braking
-        return Lbar, tau_hat, A_stroke, S, C_lc, P_inactive
+
+        # Anti-overlap of the two motors (t1 "blue"/upstroke vs t4 "orange"/
+        # downstroke): uncentered cosine similarity of their |torque| traces over
+        # the sample window. 1 => both peak together (wasted simultaneous effort,
+        # high inactive power); 0 => each peaks in the other's trough. Minimizing
+        # it staggers the two motors. Signals are >=0 so it's in [0,1] and smooth.
+        a_s = jnp.where(record, tauA, 0.0)
+        b_s = jnp.where(record, tauB, 0.0)
+        C_overlap = jnp.sum(a_s * b_s) / (jnp.sqrt(jnp.sum(a_s**2) * jnp.sum(b_s**2)) + 1e-9)
+        return Lbar, tau_hat, A_stroke, S, C_lc, P_inactive, C_overlap
 
     return metrics
 
@@ -350,33 +365,48 @@ def _soft_hinge(x, s):
 
 
 def make_loss(metrics, *, lift_floor, lift_cap, lift_smooth, lift_above_weight,
-              A_target, tau_max, weights, w_lc, w_power):
+              A_target, tau_max, weights, w_lc, w_power, w_overlap):
     """Scalar loss = -R, normalized per the design spec, with metrics as aux.
 
-    Asymmetries (per the demo objective):
-      * Lift band [lift_floor, lift_cap] (190-200 mN): below is penalized at full
-        weight (strict floor), above only at ``lift_above_weight`` (moderate) so
-        the optimizer is free to overshoot lift but never starve it.
+    The demo objective is now a constrained minimization: hold lift above a hard
+    floor (200 mN) and keep the flap amplitude up, then *primarily* minimize peak
+    torque and reactive power.
+      * Lift: one-sided floor only (penalize below ``lift_floor``). No upper cap by
+        default -- overshooting lift is free (we make >2x what we need). A
+        ``lift_cap`` can still be set to re-enable a moderate above penalty.
+      * Peak torque: continuously minimized, normalized by the stage ceiling
+        ``tau_max`` -- ``(tau/tau_max)^2`` always pushes torque down, plus a 4x
+        extra penalty once it exceeds the stage ceiling. Tighter stages => harder.
       * Stroke amplitude: penalized ONLY when it drops below the baseline A_target
-        (one-sided soft hinge). Flapping bigger than baseline is free; shrinking
-        the flap is heavily penalized (that is the whole point of the demo gait).
+        (one-sided soft hinge). Flapping bigger than baseline is free.
+      * Power: ``w_power`` penalizes the inactive (braking/reactive) motor-power
+        fraction -- the resonance lever (elastic tendon storage vs motor braking).
+      * Motor overlap: ``w_overlap`` penalizes simultaneous |torque| peaks of the
+        two 180-deg motors (t1 vs t4) so each peaks in the other's trough.
+    All terms are smooth soft-hinges / ratios (no hard max(0,.) walls) so gradients
+    flow everywhere.
     """
     wL, wtau, wK, ws = weights
     A_smooth = max(1e-9, 0.02 * A_target)  # ~2% band tolerance before the amp floor bites
 
     def loss(theta, tau_max):
-        Lbar, tau_hat, A_stroke, S, C_lc, P_inactive = metrics(theta)
-        # Lift band: strict below the floor, moderate above the cap.
+        Lbar, tau_hat, A_stroke, S, C_lc, P_inactive, C_overlap = metrics(theta)
+        # Lift: strict floor only (optional moderate above-cap if lift_cap is set).
         below = _soft_hinge(lift_floor - Lbar, lift_smooth)
         above = _soft_hinge(Lbar - lift_cap, lift_smooth) if lift_cap is not None else 0.0
         PhiL = -(below**2 + lift_above_weight * above**2) / lift_floor**2
-        Ptau = (jnp.maximum(0.0, tau_hat - tau_max) ** 2) / tau_max**2
+        # Continuously minimize peak torque (normalized by stage ceiling), with a
+        # 4x extra penalty above the ceiling so the curriculum still bites. The
+        # ceiling uses a soft hinge (not max(0,.)) so gradients flow on both sides.
+        over = _soft_hinge(tau_hat - tau_max, 0.02 * tau_max)
+        Ptau = (tau_hat**2 + 4.0 * over**2) / tau_max**2
         # One-sided: penalize only A_stroke < A_target (shrinking the flap).
         amp_short = _soft_hinge(A_target - A_stroke, A_smooth)
         Ckin = amp_short**2 / A_target**2
         Clc = C_lc  # already dimensionless (relative cross-cycle lift variance)
-        R = wL * PhiL - wtau * Ptau - wK * Ckin - ws * S - w_lc * Clc - w_power * P_inactive
-        aux = (Lbar, tau_hat, A_stroke, S, Clc, P_inactive, -R)
+        R = (wL * PhiL - wtau * Ptau - wK * Ckin - ws * S - w_lc * Clc
+             - w_power * P_inactive - w_overlap * C_overlap)
+        aux = (Lbar, tau_hat, A_stroke, S, Clc, P_inactive, C_overlap, -R)
         return -R, aux
 
     return jax.jit(jax.jacfwd(loss, has_aux=True))  # (grad, aux) in one fwd sweep
@@ -402,14 +432,15 @@ def main() -> None:
     p.add_argument("--tg", type=Path, default=ROOT / "design" / "baseline_shoulder.tg")
     p.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     p.add_argument("--harmonics", type=int, default=5, help="K Fourier harmonics")
-    p.add_argument("--lift-floor", type=float, default=0.190,
-                   help="STRICT floor: penalize mean lift below this [N] (smooth softplus hinge)")
-    p.add_argument("--lift-cap", type=float, default=0.200,
-                   help="upper cap [N]; lift above it is penalized only at --lift-above-weight")
+    p.add_argument("--lift-floor", type=float, default=0.300,
+                   help="soft floor: penalize mean lift below this [N] (smooth softplus hinge)")
+    p.add_argument("--lift-cap", type=float, default=None,
+                   help="optional upper cap [N]; OFF by default (overshooting lift is free). "
+                        "Set it to re-enable a moderate above penalty at --lift-above-weight")
     p.add_argument("--lift-above-weight", type=float, default=0.25,
-                   help="relative weight on the above-cap lift penalty (moderate vs the strict floor)")
-    p.add_argument("--lift-smooth", type=float, default=0.005,
-                   help="softplus smoothing scale [N] for the lift hinge")
+                   help="relative weight on the above-cap lift penalty (only used if --lift-cap set)")
+    p.add_argument("--lift-smooth", type=float, default=0.015,
+                   help="softplus smoothing scale [N] for the lift floor (larger = softer, more gradient)")
     p.add_argument("--warmup-periods", type=float, default=2.0)
     p.add_argument("--sample-periods", type=float, default=2.0)
     p.add_argument("--aero-substep", type=int, default=4,
@@ -420,15 +451,20 @@ def main() -> None:
                    help="tightest torque-budget stage [Nm]; curriculum 0.30->0.25->0.20->0.15->0.10 "
                         "clamped to this. Stage 5 (100 mNm) is the demo target")
     p.add_argument("--added-mass", action="store_true",
-                   help="enable the unsteady added-mass aero term. OFF by default: its MJX/CPU "
-                        "implementations diverge ~4x and break transfer (see set_unsteady_aero)")
+                   help="enable the unsteady added-mass aero term. Now transfers MJX<->CPU "
+                        "(ratio ~1.01) after the mj_jacSite velocity fix; off by default")
     p.add_argument("--iters-per-stage", type=int, default=40)
     p.add_argument("--lr", type=float, default=2e-3)
     p.add_argument("--weights", type=float, nargs=4, default=(10.0, 10.0, 8.0, 0.01),
                    metavar=("wL", "wtau", "wK", "ws"))
-    p.add_argument("--w-power", type=float, default=0.0,
+    p.add_argument("--w-power", type=float, default=5.0,
                    help="weight on inactive (reactive/braking) motor power -- pushes elastic "
-                        "tendon storage to handle decel instead of the motor (resonance)")
+                        "tendon storage to handle decel instead of the motor (resonance). A "
+                        "primary objective now; dial after seeing Pin in the log")
+    p.add_argument("--w-overlap", type=float, default=5.0,
+                   help="weight on the two-motor torque-overlap penalty (t1 'blue' vs t4 "
+                        "'orange'): cosine similarity of their |torque| traces. Drives each "
+                        "motor to peak in the other's trough (anti-phase) to cut wasted work")
     p.add_argument("--w-lc", type=float, default=0.0,
                    help="weight on limit-cycle stability (cross-cycle lift variance); logged either "
                         "way. Default 0: gradient descent doesn't reduce it (chaos-corrupted variance "
@@ -471,13 +507,19 @@ def main() -> None:
     base_a0 = float(drive.a0)
     control_seed = jnp.asarray(load_control_seed(args.init_control, K, drive, base_a0),
                                dtype=jnp.float32)
+    # Split the flap actuators into the two 180-deg-offset motors for the
+    # anti-overlap penalty: t1 = "blue"/upstroke (mask 1), t4 = "orange"/downstroke.
+    flap_names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, int(i))
+                  for i in np.asarray(drive.flap_actuator_ids)]
+    flap_t1_mask = jnp.asarray([1.0 if (n and "t1" in n) else 0.0 for n in flap_names],
+                               dtype=jnp.float32)
     metrics = build_rollout(mx, dx0, drive, pitch, aero, tip_id, omega, K,
                             warmup_steps, sample_steps, steps_per_cycle=steps_per_cycle,
                             aero_substep=args.aero_substep, base_a0=base_a0,
                             tune_control=tune_control, control_fixed=control_seed,
                             tune_frequency=args.tune_frequency, tune_tendons=tune_tendons,
                             tendons=tendons, tune_pitch=tune_pitch, tune_motor=tune_motor,
-                            motor_ids=motor_ids)
+                            motor_ids=motor_ids, flap_t1_mask=flap_t1_mask)
 
     # theta packs active groups in order:
     # [control(2K+1)] [f_log(1)] [tendon(24)] [pitch(4)] [motor(2)]
@@ -495,20 +537,22 @@ def main() -> None:
     theta = jnp.concatenate(parts)
 
     # Baseline A* = stroke amplitude of the seed (prevents collapse).
-    Lbar0, tau0, A_target, S0, Clc0, Pin0 = (float(x) for x in metrics(theta))
+    Lbar0, tau0, A_target, S0, Clc0, Pin0, Ovl0 = (float(x) for x in metrics(theta))
     print(f"[setup] tune_control={tune_control} tune_tendons={tune_tendons} "
           f"params={theta.shape[0]} steps={warmup_steps + sample_steps} "
           f"steps/cycle={steps_per_cycle} w_lc={args.w_lc}")
     print(f"[baseline] Lbar={Lbar0*1e3:.1f} mN  tau_hat={tau0*1e3:.1f} mNm  "
-          f"A_stroke={A_target*1e3:.2f} mm  S={S0:.3g}  C_lc={Clc0:.3g}")
+          f"A_stroke={A_target*1e3:.2f} mm  S={S0:.3g}  C_lc={Clc0:.3g}  "
+          f"Pin={Pin0:.3g}  overlap={Ovl0:.3g}")
     cap_str = f"{args.lift_cap*1e3:.0f}" if args.lift_cap is not None else "none"
     print(f"[target]   lift_floor={args.lift_floor*1e3:.0f} mN  cap={cap_str}  "
-          f"A*={A_target*1e3:.2f} mm  w_lc={args.w_lc}")
+          f"A*={A_target*1e3:.2f} mm  w_power={args.w_power}  w_overlap={args.w_overlap}")
 
     grad_fn = make_loss(metrics, lift_floor=args.lift_floor, lift_cap=args.lift_cap,
                         lift_smooth=args.lift_smooth, lift_above_weight=args.lift_above_weight,
                         A_target=A_target, tau_max=None,
-                        weights=tuple(args.weights), w_lc=args.w_lc, w_power=args.w_power)
+                        weights=tuple(args.weights), w_lc=args.w_lc, w_power=args.w_power,
+                        w_overlap=args.w_overlap)
 
     # Hand-rolled Adam (no optax dependency).
     m = jnp.zeros_like(theta)
@@ -597,7 +641,7 @@ def main() -> None:
         for it in range(args.iters_per_stage):
             theta_eval = theta  # metrics below describe THIS theta (pre-update)
             grad, aux = grad_fn(theta, tau_max)
-            Lbar, tau_hat, A_stroke, S, Clc, Pin, loss = (float(x) for x in aux)
+            Lbar, tau_hat, A_stroke, S, Clc, Pin, Ovl, loss = (float(x) for x in aux)
             t += 1
             m = b1 * m + (1 - b1) * grad
             v = b2 * v + (1 - b2) * grad**2
@@ -606,14 +650,15 @@ def main() -> None:
             theta = theta - args.lr * mhat / (jnp.sqrt(vhat) + eps)
 
             log.append({"stage_tau_max": tau_max, "iter": it, "loss": loss, "Lbar": Lbar,
-                        "tau_hat": tau_hat, "A_stroke": A_stroke, "S": S, "C_lc": Clc, "P_inactive": Pin})
+                        "tau_hat": tau_hat, "A_stroke": A_stroke, "S": S, "C_lc": Clc,
+                        "P_inactive": Pin, "overlap": Ovl})
             if Lbar >= args.lift_floor and tau_hat < best["tau"]:
                 best = {"tau": tau_hat, "theta": theta_eval, "Lbar": Lbar, "Pin": Pin}
             if Lbar >= args.lift_floor and tau_hat < stage_best["tau"]:
                 stage_best = {"tau": tau_hat, "theta": theta_eval, "Lbar": Lbar, "Pin": Pin}
             print(f"  it{it:03d} loss={loss:.4f}  L={Lbar*1e3:6.1f}mN  "
                   f"tau={tau_hat*1e3:6.1f}mNm  A={A_stroke*1e3:5.2f}mm  S={S:.3g}  "
-                  f"Clc={Clc:.3g}  Pin={Pin:.3g}", flush=True)
+                  f"Pin={Pin:.3g}  ovl={Ovl:.3g}", flush=True)
         stage_dir = args.out / f"stage_{round(tau_max*1e3)}mNm"
         dump(stage_best, log, out_dir=stage_dir)  # per-stage design for the demo
         dump(best, log)                            # running global best (interrupt-safe)

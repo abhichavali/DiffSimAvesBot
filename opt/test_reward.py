@@ -1,10 +1,11 @@
-"""Self-check for the asymmetric demo reward (run: uv run python opt/test_reward.py).
+"""Self-check for the demo reward (run: uv run python opt/test_reward.py).
 
-Verifies the two asymmetries the demo objective requires:
+Verifies the reward shape:
   1. Stroke amplitude is penalized ONLY below the baseline (shrinking the flap),
-     not above (flapping bigger than baseline is free).
-  2. The lift band [floor, cap] penalizes BELOW the floor much harder than ABOVE
-     the cap (strict floor, moderate ceiling).
+     never above (bigger flap is free).
+  2. Lift is a one-sided SOFT floor: below it is penalized, overshooting it is
+     free (no cap), and right at the floor a soft-hinge penalty remains (so the
+     constraint is soft and gradients flow, not a hard wall).
 make_loss returns jacfwd(loss, has_aux); aux[-1] = -R = the scalar loss, which is
 all we need (a constant stub metrics ignores theta, so the gradient is irrelevant).
 """
@@ -17,38 +18,41 @@ import jax.numpy as jnp
 from opt.optimize_control import make_loss
 
 A_TARGET = 0.020        # 20 mm baseline stroke
-FLOOR, CAP = 0.190, 0.200
-ABOVE_W = 0.25
+FLOOR = 0.300           # 300 mN lift floor (no cap by default)
 
 
-def loss_for(*, Lbar, A_stroke):
+def loss_for(*, Lbar, A_stroke, lift_cap=None):
     """Scalar loss for a design with the given lift / amplitude (other metrics neutral)."""
     def metrics(theta):
         return (jnp.asarray(Lbar), jnp.asarray(0.0), jnp.asarray(A_stroke),
-                jnp.asarray(0.0), jnp.asarray(0.0), jnp.asarray(0.0))
-    grad_fn = make_loss(metrics, lift_floor=FLOOR, lift_cap=CAP, lift_smooth=0.005,
-                        lift_above_weight=ABOVE_W, A_target=A_TARGET, tau_max=None,
-                        weights=(1.0, 1.0, 1.0, 0.0), w_lc=0.0, w_power=0.0)
+                jnp.asarray(0.0), jnp.asarray(0.0), jnp.asarray(0.0), jnp.asarray(0.0))
+    grad_fn = make_loss(metrics, lift_floor=FLOOR, lift_cap=lift_cap, lift_smooth=0.015,
+                        lift_above_weight=0.25, A_target=A_TARGET, tau_max=None,
+                        weights=(1.0, 1.0, 1.0, 0.0), w_lc=0.0, w_power=0.0, w_overlap=0.0)
     _, aux = grad_fn(jnp.zeros(1), 0.300)
     return float(aux[-1])
 
 
 def main():
-    in_band = loss_for(Lbar=0.195, A_stroke=A_TARGET)        # everything nominal
-    shrunk = loss_for(Lbar=0.195, A_stroke=0.8 * A_TARGET)   # 20% smaller flap
-    grown = loss_for(Lbar=0.195, A_stroke=1.2 * A_TARGET)    # 20% bigger flap
-    assert shrunk > in_band + 1e-4, f"shrinking flap must hurt: {shrunk} !> {in_band}"
-    assert grown <= in_band + 1e-9, f"bigger flap must not be penalized: {grown} !<= {in_band}"
+    nominal = loss_for(Lbar=0.450, A_stroke=A_TARGET)        # well above floor, amp at baseline
+    shrunk = loss_for(Lbar=0.450, A_stroke=0.8 * A_TARGET)   # 20% smaller flap
+    grown = loss_for(Lbar=0.450, A_stroke=1.2 * A_TARGET)    # 20% bigger flap
+    assert shrunk > nominal + 1e-4, f"shrinking flap must hurt: {shrunk} !> {nominal}"
+    assert grown <= nominal + 1e-9, f"bigger flap must not be penalized: {grown} !<= {nominal}"
 
-    below = loss_for(Lbar=FLOOR - 0.010, A_stroke=A_TARGET)  # 10 mN under floor
-    above = loss_for(Lbar=CAP + 0.010, A_stroke=A_TARGET)    # 10 mN over cap
-    assert below > above + 1e-4, f"below-floor must hurt more than above-cap: {below} !> {above}"
-    # moderate-above factor should be ~ABOVE_W of the strict-below penalty
-    ratio = (above - in_band) / (below - in_band)
-    assert 0.1 < ratio < 0.4, f"above/below penalty ratio {ratio:.3f} not ~{ABOVE_W}"
+    below = loss_for(Lbar=FLOOR - 0.030, A_stroke=A_TARGET)  # 30 mN under floor
+    at = loss_for(Lbar=FLOOR, A_stroke=A_TARGET)             # exactly at floor
+    way_above = loss_for(Lbar=0.600, A_stroke=A_TARGET)      # 2x the floor
+    assert below > at + 1e-3, f"below floor must be penalized: {below} !> {at}"
+    assert way_above <= nominal + 1e-9, f"overshooting lift must never hurt: {way_above} !<= {nominal}"
+    assert at > nominal + 1e-6, f"soft floor must carry a penalty at the floor: {at} !> {nominal}"
 
-    print(f"ok: shrink={shrunk:.4f} > inband={in_band:.4f}; grown=={in_band:.4f}; "
-          f"below={below:.4f} > above={above:.4f} (ratio {ratio:.2f})")
+    # A set cap re-enables a moderate above penalty (kept as an option).
+    capped_above = loss_for(Lbar=0.450, A_stroke=A_TARGET, lift_cap=0.350)
+    assert capped_above > nominal + 1e-4, "with a cap, overshoot is penalized again"
+
+    print(f"ok: shrink={shrunk:.4f}>nom={nominal:.4f}; grown<=nom; "
+          f"below={below:.4f}>at={at:.4f}>nom; wayabove==nom; cap re-penalizes")
 
 
 if __name__ == "__main__":
