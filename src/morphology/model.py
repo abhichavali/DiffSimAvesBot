@@ -150,6 +150,9 @@ class MotorFoot:
     # edge (1). At 1.0 the anchor sits on the edge (legacy). Below 1.0 the
     # anchor moves inward and a rigid rod bridges the edge to the anchor.
     attach_radius: float = 1.0
+    # Per-disk crank throw (m) override. None ⇒ use the shared DiskSpec.crank_throw.
+    # Lets the two cranks on a shoulder run different throws (asymmetric stroke).
+    crank_throw: float | None = None
 
 
 @dataclass

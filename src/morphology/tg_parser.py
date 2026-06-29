@@ -208,6 +208,7 @@ class _TgParser:
         self.motor_feet: Tuple[int, int] = (1, 4)
         self.attach_along_edge = 1.2
         self.attach_radius = 1.0
+        self.foot_crank_throw: Dict[int, float] = {}
         self.tendon_pretension = 0.96
         self.tendon_stiffness = 500.0
         self.tendon_damping = 1.0
@@ -387,6 +388,11 @@ class _TgParser:
             if line.startswith("attach_radius"):
                 self.attach_radius = float(_parse_scalar(line.split("=", 1)[1].strip()))
                 continue
+            if line.startswith("crank_throw_t"):
+                key, value = line.split("=", 1)
+                station = int(key.strip()[len("crank_throw_t"):])
+                self.foot_crank_throw[station] = float(_parse_quantity(value.strip()))
+                continue
             if line.startswith("drive_phase_offset"):
                 raw = line.split("=", 1)[1].strip()
                 val = float(_parse_scalar(raw))
@@ -556,11 +562,13 @@ class _TgParser:
                         station=self.motor_feet[0],
                         attach_along_edge_rad=self.attach_along_edge,
                         attach_radius=self.attach_radius,
+                        crank_throw=self.foot_crank_throw.get(self.motor_feet[0]),
                     ),
                     MotorFoot(
                         station=self.motor_feet[1],
                         attach_along_edge_rad=self.attach_along_edge,
                         attach_radius=self.attach_radius,
+                        crank_throw=self.foot_crank_throw.get(self.motor_feet[1]),
                     ),
                 ),
                 tendon_pretension=float(self.tendon_pretension),

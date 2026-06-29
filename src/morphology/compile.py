@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Dict, Tuple
 
 import numpy as np
@@ -144,6 +145,9 @@ def _compile_disks(
         sibling = 4 if st == 1 else 1
         foot_world = foot_worlds[st]
         name = f"L_t{st}"
+        disk_spec = morph.motors.disk
+        if foot.crank_throw is not None:
+            disk_spec = dataclasses.replace(disk_spec, crank_throw=foot.crank_throw)
         disks[name] = {
             "pillar_pos": derive_disk_pillar_pos(
                 foot_world,
@@ -152,7 +156,7 @@ def _compile_disks(
                 morph.placement.mount_height,
             ),
             "euler": [morph.motors.disk.tilt_rad, morph.motors.disk.pitch_rad, 0.0],
-            "rim_pos": derive_disk_rim_local(morph.motors.disk),
+            "rim_pos": derive_disk_rim_local(disk_spec),
             "rim_rgba": "0.2 0.8 0.2 1",
             "foot_station": foot.station,
         }

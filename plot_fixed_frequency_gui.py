@@ -37,6 +37,7 @@ PLOT_CHOICES = (
     "Structural tendon tension vs phase",
     "Structural tendon displacement vs phase",
     "Structural elastic energy vs phase",
+    "Wingtip stroke vs phase (3D)",
     "Mean lift per cycle",
     "Mean lift per half-cycle",
 )
@@ -95,6 +96,7 @@ def data_by_phase(
     structural_tendon_names = [
         mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, tid) for tid in structural_tendon_ids
     ]
+    tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
 
     def step() -> None:
         data.qfrc_applied[:] = 0.0
@@ -115,7 +117,9 @@ def data_by_phase(
         "Structural tendon tension vs phase",
         "Structural tendon displacement vs phase",
     )
-    names = ["U_tens"] if plot_kind == "Structural elastic energy vs phase" else (
+    is_wingtip = plot_kind == "Wingtip stroke vs phase (3D)"
+    names = ["x", "y", "z"] if is_wingtip else (
+        ["U_tens"] if plot_kind == "Structural elastic energy vs phase" else
         ["mean_lift"] if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle") else
         structural_tendon_names if is_structural_plot else list(PLOT_ACTUATORS)
     )
@@ -176,6 +180,12 @@ def data_by_phase(
                 energy += 0.5 * float(model.tendon_stiffness[tid]) * displacement * displacement
             series["U_tens"].append(energy)
             ylabel = "Elastic energy (J)"
+        elif is_wingtip:
+            pos = data.site_xpos[tip_id]
+            series["x"].append(1000.0 * float(pos[0]))
+            series["y"].append(1000.0 * float(pos[1]))
+            series["z"].append(1000.0 * float(pos[2]))
+            ylabel = "Wingtip excursion from mean (mm)"
         else:
             for name, aid in plot_ids.items():
                 series[name].append(1000.0 * float(data.actuator_force[aid]))
@@ -184,6 +194,17 @@ def data_by_phase(
     if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle"):
         x_values = sorted(lift_sums)
         series["mean_lift"] = [lift_sums[key] / lift_counts[key] for key in x_values]
+
+    if is_wingtip:
+        # Center each axis on its cycle mean; flapping amplitude = peak-to-peak
+        # excursion per axis, plus the resultant 3D radial excursion magnitude.
+        centered = {k: np.array(series[k]) - np.mean(series[k]) for k in ("x", "y", "z")}
+        mag = np.sqrt(sum(centered[k] ** 2 for k in ("x", "y", "z")))
+        series = {
+            f"{k} (pp {centered[k].max() - centered[k].min():.1f} mm)": centered[k].tolist()
+            for k in ("x", "y", "z")
+        }
+        series[f"|3D| (max {mag.max():.1f} mm)"] = mag.tolist()
 
     xlabel = "Crank phase (cycles)"
     if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle"):
