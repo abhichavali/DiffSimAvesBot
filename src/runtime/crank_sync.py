@@ -15,8 +15,9 @@ from morphology.tg_parser import load_morphology
 from runtime.morphology_runtime import resolve_morphology_path
 
 
-def sync_crank_disks_at_rest(model, data) -> None:
-    feet = load_morphology(resolve_morphology_path()).motors.feet
+def sync_crank_disks_at_rest(model, data, lag_rad: float | None = None) -> None:
+    morph = load_morphology(resolve_morphology_path())
+    feet = morph.motors.feet
 
     def joint_id(name: str) -> int:
         return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
@@ -38,6 +39,11 @@ def sync_crank_disks_at_rest(model, data) -> None:
 
     if changed:
         mujoco.mj_forward(model, data)
+    apply_crank_phase_lag(
+        model,
+        data,
+        morph.motors.drive_phase_offset_rad if lag_rad is None else lag_rad,
+    )
 
 
 def apply_crank_phase_lag(model, data, lag_rad: float) -> None:

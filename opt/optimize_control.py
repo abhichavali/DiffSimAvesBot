@@ -47,7 +47,7 @@ from jax.scipy.special import logsumexp
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
-from runtime.crank_sync import sync_crank_disks_at_rest, apply_crank_phase_lag
+from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime, rollout, wing_pitch
 from runtime.mjx.rollout import _match_dtypes
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
@@ -98,10 +98,9 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     model.opt.integrator = _INTEGRATORS[integrator]
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
     lag = (load_morphology(tg_path).motors.drive_phase_offset_rad
            if phase_lag is None else phase_lag)
-    apply_crank_phase_lag(model, data, lag)
+    sync_crank_disks_at_rest(model, data, lag)
 
     control = load_control_for_morphology(tg_path)
     drive = rollout.build_drive_config(model, ramp_duration=0.0)
@@ -333,8 +332,7 @@ def cpu_validate_design(scene_path, ctrl_params, tendon_arrays, integrator,
         model.tendon_lengthspring[:] = np.asarray(lenspring)
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
-    apply_crank_phase_lag(model, data, phase_lag)
+    sync_crank_disks_at_rest(model, data, phase_lag)
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
     if pitch_params is not None:  # apply the optimized feathering params (up/down deadband, stiffness)
