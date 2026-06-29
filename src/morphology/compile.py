@@ -148,11 +148,13 @@ def _compile_disks(
         disk_spec = morph.motors.disk
         if foot.crank_throw is not None:
             disk_spec = dataclasses.replace(disk_spec, crank_throw=foot.crank_throw)
+        if foot.foot_outset is not None:
+            disk_spec = dataclasses.replace(disk_spec, foot_outset=foot.foot_outset)
         disks[name] = {
             "pillar_pos": derive_disk_pillar_pos(
                 foot_world,
                 foot_worlds[sibling],
-                morph.motors.disk,
+                disk_spec,
                 morph.placement.mount_height,
             ),
             "euler": [morph.motors.disk.tilt_rad, morph.motors.disk.pitch_rad, 0.0],

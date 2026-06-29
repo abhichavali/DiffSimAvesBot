@@ -633,7 +633,7 @@ def _add_actuators(root: ET.Element, compiled: CompiledMorphology) -> None:
             #   - R shoulder is the Y-mirror of L -> gear -1 (+ctrl = L world motion).
             #   - the non-reference foot ALWAYS counter-rotates (gear -1) so the two
             #     cranks oppose and give the full reciprocating stroke.
-            # drive_phase_offset is no longer a gear; it is now a crank-angle phase
+            # crank_phase_lag is a crank-angle phase
             # lag applied to the t4 cranks at init (see runtime.crank_sync).
             gear = -1.0 if prefix == "R" else 1.0
             if st != ref_station:

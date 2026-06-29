@@ -70,7 +70,7 @@ def measure_motor_tendon_ranges(
     settle_steps: int = 2000,
     sweep_steps: int = 72,
 ) -> Dict[str, MotorTendonRange]:
-    """Full rotation envelope per motor tendon, with pretensioned spring rest length."""
+    """Full rotation envelope per motor tendon, with shared spring rest length."""
     from morphology.mujoco_memory import release_mujoco
 
     scene_dir = scene_dir or _DEFAULT_SCENE_DIR
@@ -86,7 +86,6 @@ def measure_motor_tendon_ranges(
         for shoulder in ("L", "R"):
             for foot in morph.motors.feet:
                 st = foot.station
-                pretension = morph.motors.foot_tendon_pretension.get(st, morph.motors.tendon_pretension)
                 tendon_name = f"{shoulder}_motor_t{st}"
                 disk_joint = f"{shoulder}_t{st}_disk_hinge"
                 l_min, l_max, l_rest = _sweep_tendon_length(
@@ -97,7 +96,13 @@ def measure_motor_tendon_ranges(
                     l_min=max(0.0, l_min - margin),
                     l_max=l_max + margin,
                     l_rest=l_rest,
-                    springlength=l_rest * pretension,
+                    springlength=(
+                        foot.tendon_rest_length
+                        if foot.tendon_rest_length is not None
+                        else morph.motors.tendon_rest_length
+                        if morph.motors.tendon_rest_length is not None
+                        else l_rest
+                    ),
                 )
         return ranges
     finally:

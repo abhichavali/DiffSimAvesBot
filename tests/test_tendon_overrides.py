@@ -5,11 +5,16 @@ Covers the new logic units without a full mesh-dependent compile.
 """
 
 import sys
+import math
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from morphology.emit_mjcf import _color_to_rgba
+from morphology.compile import compile_morphology
+from morphology.emit_mjcf import emit_mjcf
 from morphology.model import TendonDefaults, TendonMaterial, TendonNet
 from morphology.symmetry import resolve_material_props
 from morphology.tg_parser import _parse_brace_dict, _parse_material_dict, load_morphology
@@ -39,10 +44,47 @@ def test_resolve_falls_back_to_defaults():
     assert (stiff, damp, pret, color) == (333, 0.5, 0.8, "1 0 0 1")
 
 
-def test_motor_foot_pretension_override():
+def test_motor_tendon_rest_length():
     morph = load_morphology(Path(__file__).resolve().parents[1] / "design" / "baseline_shoulder.tg")
-    assert morph.motors.tendon_pretension == 0.82
-    assert morph.motors.foot_tendon_pretension == {1: 0.67}
+    assert morph.motors.tendon_rest_length == 0.053
+    assert morph.motors.crank_phase_lag_rad == math.radians(180)
+    assert [foot.station for foot in morph.motors.feet] == [1, 4]
+
+
+def test_motor_tendon_rest_length_foot_override(tmp_path=None):
+    baseline = Path(__file__).resolve().parents[1] / "design" / "baseline_shoulder.tg"
+    text = baseline.read_text()
+    if "tendon_rest_length_t1" in text:
+        text = "\n".join(
+            "    tendon_rest_length_t1 = 47.7 mm" if "tendon_rest_length_t1" in line else line
+            for line in text.splitlines()
+        ) + "\n"
+    else:
+        text = text.replace(
+            "    tendon_rest_length = 53 mm\n",
+            "    tendon_rest_length = 53 mm\n    tendon_rest_length_t1 = 47.7 mm\n",
+        )
+    if tmp_path is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shoulder.tg"
+            path.write_text(text)
+            morph = load_morphology(path)
+    else:
+        path = tmp_path / "shoulder.tg"
+        path.write_text(text)
+        morph = load_morphology(path)
+
+    assert morph.motors.tendon_rest_length == 0.053
+    assert math.isclose(morph.motors.feet[0].tendon_rest_length, 0.0477)
+    assert morph.motors.feet[1].tendon_rest_length is None
+
+
+def test_motor_tendons_are_crossed():
+    morph = load_morphology(Path(__file__).resolve().parents[1] / "design" / "baseline_shoulder.tg")
+    root = ET.fromstring(emit_mjcf(compile_morphology(morph)))
+    tendons = {el.attrib["name"]: [site.attrib["site"] for site in el] for el in root.find("tendon")}
+    assert tendons["L_motor_t1"] == ["L_part_1_motor_t4", "crank_disks_L_t1"]
+    assert tendons["L_motor_t4"] == ["L_part_1_motor_t1", "crank_disks_L_t4"]
 
 
 if __name__ == "__main__":
@@ -50,7 +92,9 @@ if __name__ == "__main__":
         test_color_to_rgba,
         test_parse_material_dict,
         test_resolve_falls_back_to_defaults,
-        test_motor_foot_pretension_override,
+        test_motor_tendon_rest_length,
+        test_motor_tendon_rest_length_foot_override,
+        test_motor_tendons_are_crossed,
     ):
         fn()
         print(f"ok  {fn.__name__}")

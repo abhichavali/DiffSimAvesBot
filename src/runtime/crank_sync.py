@@ -42,7 +42,7 @@ def sync_crank_disks_at_rest(model, data, lag_rad: float | None = None) -> None:
     apply_crank_phase_lag(
         model,
         data,
-        morph.motors.drive_phase_offset_rad if lag_rad is None else lag_rad,
+        morph.motors.crank_phase_lag_rad if lag_rad is None else lag_rad,
     )
 
 
@@ -52,7 +52,7 @@ def apply_crank_phase_lag(model, data, lag_rad: float) -> None:
     The two cranks ALWAYS counter-rotate (actuator gear -1); this adds an initial
     crank-angle offset on top, a genuine phase lag that persists under the shared
     velocity command (both integrate the same speed, so the offset is constant).
-    Call AFTER sync_crank_disks_at_rest. ``drive_phase_offset`` in the .tg sets it;
+    Call AFTER sync_crank_disks_at_rest. ``crank_phase_lag`` in the .tg sets it;
     sweep it to stagger the two motors' torque peaks (cuts overlap / inactive power).
     """
     if not lag_rad:
@@ -67,7 +67,13 @@ def apply_crank_phase_lag(model, data, lag_rad: float) -> None:
             jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_t{foot.station}_disk_hinge")
             if jid < 0:
                 continue
-            data.qpos[model.jnt_qposadr[jid]] += float(lag_rad)
+            # R shoulder is the Y-mirror of L: its t4 crank runs the opposite gear
+            # (see emit_mjcf._add_actuators). Adding the same qpos offset to both
+            # sides would advance them in opposite world directions, mirror-breaking
+            # the orange disks. Flip the sign on R so the offset is a true mirror and
+            # both wings see the same t4-vs-t1 lag.
+            sign = 1.0 if side == "L" else -1.0
+            data.qpos[model.jnt_qposadr[jid]] += sign * float(lag_rad)
             changed = True
     if changed:
         mujoco.mj_forward(model, data)

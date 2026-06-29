@@ -1,4 +1,4 @@
-"""Sweep the crank phase lag (drive_phase_offset) and report the value that best
+"""Sweep the crank phase lag (crank_phase_lag) and report the value that best
 staggers the two motors -- minimum torque overlap / inactive power -- while
 holding lift. The lag is an initial crank-angle offset on the t4 ("orange") crank
 (the two cranks always counter-rotate); see crank_sync.apply_crank_phase_lag.

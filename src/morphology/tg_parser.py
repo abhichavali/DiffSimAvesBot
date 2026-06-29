@@ -209,13 +209,14 @@ class _TgParser:
         self.attach_along_edge = 1.2
         self.attach_radius = 1.0
         self.foot_crank_throw: Dict[int, float] = {}
-        self.tendon_pretension = 0.96
-        self.foot_tendon_pretension: Dict[int, float] = {}
+        self.foot_outset: Dict[int, float] = {}
+        self.foot_tendon_rest_length: Dict[int, float] = {}
+        self.tendon_rest_length: Optional[float] = None
         self.tendon_stiffness = 500.0
         self.tendon_damping = 1.0
         self.motor_direction = 1.0
         self.control_file = "control.tg"
-        self.drive_phase_offset_rad = 0.0
+        self.crank_phase_lag_rad = 0.0
         self.wing: Dict[str, Any] = {}
         self.wing_pitch: Dict[str, Any] = {}
         self.wing_aero: Dict[str, Any] = {}
@@ -394,20 +395,25 @@ class _TgParser:
                 station = int(key.strip()[len("crank_throw_t"):])
                 self.foot_crank_throw[station] = float(_parse_quantity(value.strip()))
                 continue
-            if line.startswith("drive_phase_offset"):
+            if line.startswith("foot_outset_t"):
+                key, value = line.split("=", 1)
+                station = int(key.strip()[len("foot_outset_t"):])
+                self.foot_outset[station] = float(_parse_quantity(value.strip()))
+                continue
+            if line.startswith("tendon_rest_length_t"):
+                key, value = line.split("=", 1)
+                station = int(key.strip()[len("tendon_rest_length_t"):])
+                self.foot_tendon_rest_length[station] = float(_parse_quantity(value.strip()))
+                continue
+            if line.startswith(("crank_phase_lag", "drive_phase_offset")):
                 raw = line.split("=", 1)[1].strip()
                 val = float(_parse_scalar(raw))
                 if re.search(r"\bdeg\b", line, re.I):
                     val = math.radians(val)
-                self.drive_phase_offset_rad = val
+                self.crank_phase_lag_rad = val
                 continue
-            if line.startswith("tendon_pretension_t"):
-                key, value = line.split("=", 1)
-                station = int(key.strip()[len("tendon_pretension_t"):])
-                self.foot_tendon_pretension[station] = float(_parse_scalar(value.strip()))
-                continue
-            if line.startswith("tendon_pretension"):
-                self.tendon_pretension = float(_parse_scalar(line.split("=", 1)[1].strip()))
+            if line.startswith("tendon_rest_length"):
+                self.tendon_rest_length = float(_parse_scalar(line.split("=", 1)[1].strip()))
                 continue
             if line.startswith("tendon_stiffness"):
                 self.tendon_stiffness = float(_parse_scalar(line.split("=", 1)[1].strip()))
@@ -569,19 +575,22 @@ class _TgParser:
                         attach_along_edge_rad=self.attach_along_edge,
                         attach_radius=self.attach_radius,
                         crank_throw=self.foot_crank_throw.get(self.motor_feet[0]),
+                        foot_outset=self.foot_outset.get(self.motor_feet[0]),
+                        tendon_rest_length=self.foot_tendon_rest_length.get(self.motor_feet[0]),
                     ),
                     MotorFoot(
                         station=self.motor_feet[1],
                         attach_along_edge_rad=self.attach_along_edge,
                         attach_radius=self.attach_radius,
                         crank_throw=self.foot_crank_throw.get(self.motor_feet[1]),
+                        foot_outset=self.foot_outset.get(self.motor_feet[1]),
+                        tendon_rest_length=self.foot_tendon_rest_length.get(self.motor_feet[1]),
                     ),
                 ),
-                tendon_pretension=float(self.tendon_pretension),
-                foot_tendon_pretension=dict(self.foot_tendon_pretension),
+                tendon_rest_length=self.tendon_rest_length,
                 tendon_stiffness=float(self.tendon_stiffness),
                 tendon_damping=float(self.tendon_damping),
-                drive_phase_offset_rad=float(self.drive_phase_offset_rad),
+                crank_phase_lag_rad=float(self.crank_phase_lag_rad),
                 motor_direction=float(self.motor_direction),
                 control_file=self.control_file,
             ),

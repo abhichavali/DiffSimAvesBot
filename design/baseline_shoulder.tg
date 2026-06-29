@@ -44,7 +44,7 @@ tendons:
         M[2B] -- F[1B]
 
 motors:
-    disk { radius: 18.0 mm, crank_throw: 23 mm, tilt: 0.0 rad, pitch: 50 deg, kv: 1.0, ctrl: [-120, 120],
+    disk { radius: 18.0 mm, crank_throw: 25 mm, tilt: 0.0 rad, pitch: 50 deg, kv: 1.0, ctrl: [-120, 120],
            solref: [0.02857142857142857, 1.0],
            outboard: 30.625 mm,
            foot_outset: 0.25 mm,
@@ -52,10 +52,10 @@ motors:
     drive M[1] and M[4]
     attach_along_edge = 0.0 rad
     attach_radius = 1.0
-    drive_phase_offset = 0 deg
-    crank_throw_t4 = 28 mm
-    tendon_pretension = 0.82
-    tendon_pretension_t1 = 0.67
+    crank_phase_lag = 180 deg
+    crank_throw_t4 = 27 mm
+    tendon_rest_length = 53 mm
+    tendon_rest_length_t1 = 47.7 mm
     tendon_stiffness  = 1000 N/m
     tendon_damping    = 1.0
     control = baseline_control.tg

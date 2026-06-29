@@ -98,7 +98,7 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     model.opt.integrator = _INTEGRATORS[integrator]
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
-    lag = (load_morphology(tg_path).motors.drive_phase_offset_rad
+    lag = (load_morphology(tg_path).motors.crank_phase_lag_rad
            if phase_lag is None else phase_lag)
     sync_crank_disks_at_rest(model, data, lag)
 
@@ -143,7 +143,7 @@ def structural_tendon_pairs(model):
 
 def motor_tendon_ids(model):
     """The 4 motor-tendon indices (L/R x t1/t4). Tuned with one shared stiffness +
-    one shared pretension factor (2 params), like the structural pairs."""
+    one shared spring-rest-length factor (2 params), like the structural pairs."""
     ids = [i for i in range(model.ntendon)
            if (n := mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, i)) and "motor" in n]
     return jnp.asarray(ids, dtype=jnp.int32)
@@ -710,7 +710,7 @@ def main() -> None:
         try:
             L, T = cpu_validate_design(args.scene, (a0, a_dep, b_dep, omega * math.exp(f_log)),
                                        tendon_arrays, integ, pitch_params=pitch_params,
-                                       phase_lag=load_morphology(args.tg).motors.drive_phase_offset_rad)
+                                       phase_lag=load_morphology(args.tg).motors.crank_phase_lag_rad)
             cpu[integ] = {"mean_lift_N": L, "peak_torque_Nm": T}
             print(f"[cpu/{integ}] lift={L*1e3:.1f} mN  peak_torque={T*1e3:.1f} mNm")
         except Exception as e:

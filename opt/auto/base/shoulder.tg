@@ -52,8 +52,8 @@ motors:
     drive M[1] and M[4]
     attach_along_edge = 0.0 rad
     attach_radius = 1.0
-    drive_phase_offset = 180 deg
-    tendon_pretension = 0.82
+    crank_phase_lag = 180 deg
+    tendon_rest_length = 53 mm
     tendon_stiffness  = 600 N/m
     tendon_damping    = 1.0
     control = control.tg

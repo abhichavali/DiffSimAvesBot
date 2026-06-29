@@ -153,6 +153,10 @@ class MotorFoot:
     # Per-disk crank throw (m) override. None ⇒ use the shared DiskSpec.crank_throw.
     # Lets the two cranks on a shoulder run different throws (asymmetric stroke).
     crank_throw: float | None = None
+    # Per-disk pillar outset override. None ⇒ use the shared DiskSpec.foot_outset.
+    foot_outset: float | None = None
+    # Per-motor tendon spring rest length override. None ⇒ use Motors.tendon_rest_length.
+    tendon_rest_length: float | None = None
 
 
 @dataclass
@@ -162,15 +166,15 @@ class Motors:
         MotorFoot(station=1),
         MotorFoot(station=4),
     )
-    # Range/spring rest: see motor_tendons.py (full disk-revolution envelope).
-    tendon_pretension: float = 0.96
-    foot_tendon_pretension: Dict[int, float] = field(default_factory=dict)
+    # Shared motor-tendon spring rest length. None uses each tendon's measured
+    # rest-pose length; explicit values make crank geometry/phase set preload.
+    tendon_rest_length: Optional[float] = None
     tendon_stiffness: float = 500.0
     tendon_damping: float = 1.0
     # Phase lag (rad): initial crank-angle offset of the t4 crank vs t1. The two
     # cranks always counter-rotate (gear -1); this is an added timing offset, held
     # under the shared velocity command (see crank_sync.apply_crank_phase_lag).
-    drive_phase_offset_rad: float = 0.0
+    crank_phase_lag_rad: float = 0.0
     motor_direction: float = 1.0
     control_file: str = "control.tg"
 

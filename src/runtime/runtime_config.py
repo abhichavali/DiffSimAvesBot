@@ -49,8 +49,8 @@ def load_runtime_config(config_path=None):
             "meshdir": morph.world.meshdir,
         },
         "motors": {
-            "drive_phase_offset_rad": morph.motors.drive_phase_offset_rad,
-            "tendon_pretension": morph.motors.tendon_pretension,
+            "crank_phase_lag_rad": morph.motors.crank_phase_lag_rad,
+            "tendon_rest_length": morph.motors.tendon_rest_length,
         },
     }
 

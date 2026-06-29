@@ -17,6 +17,7 @@ import mujoco
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from matplotlib.ticker import MultipleLocator
 
 from compile_tg import compile_tg
 from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
@@ -34,6 +35,7 @@ PLOT_ACTUATORS = ("L_motor_t1", "L_motor_t4")
 PLOT_CHOICES = (
     "Left actuator torque vs phase",
     "Left motor tendon tension vs phase",
+    "Angular velocity vs time",
     "Structural tendon tension vs phase",
     "Structural tendon displacement vs phase",
     "Structural elastic energy vs phase",
@@ -86,6 +88,11 @@ def data_by_phase(
     actuator_ids = {name: get_actuator_id(model, name) for name in ACTUATORS}
     plot_ids = {name: actuator_ids[name] for name in PLOT_ACTUATORS}
     tendon_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name) for name in PLOT_ACTUATORS}
+    qvel_ids = {}
+    for name in PLOT_ACTUATORS:
+        prefix, station = name.split("_motor_")
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{station}_disk_hinge")
+        qvel_ids[name] = int(model.jnt_dofadr[jid])
     structural_tendon_ids = [
         tid
         for tid in range(model.ntendon)
@@ -139,7 +146,7 @@ def data_by_phase(
         elapsed = data.time - start_time
         phase = elapsed * control.fundamental_frequency_hz
         if plot_kind != "Mean lift per cycle":
-            x_values.append(phase)
+            x_values.append(elapsed if plot_kind == "Angular velocity vs time" else phase)
         if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle"):
             if phase >= periods:
                 continue
@@ -158,6 +165,10 @@ def data_by_phase(
                 )
                 series[name].append(max(0.0, tension))
             ylabel = "Motor tendon tension (N)"
+        elif plot_kind == "Angular velocity vs time":
+            for name, dof in qvel_ids.items():
+                series[name].append(abs(float(data.qvel[dof])))
+            ylabel = "|Angular velocity| (rad/s)"
         elif plot_kind == "Structural tendon tension vs phase":
             for name, tid in zip(structural_tendon_names, structural_tendon_ids):
                 rest_length = float(model.tendon_range[tid][1])
@@ -209,6 +220,8 @@ def data_by_phase(
     xlabel = "Crank phase (cycles)"
     if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle"):
         xlabel = "Cycle"
+    elif plot_kind == "Angular velocity vs time":
+        xlabel = "Time (s)"
     return x_values, series, plot_kind, xlabel, ylabel, colors
 
 
@@ -440,6 +453,16 @@ class PlotGui:
         self.root.title("DiffSim Aves Plots")
         self.root.attributes("-fullscreen", True)
         self.root.bind("<Escape>", lambda _event: self.root.attributes("-fullscreen", False))
+        self.root.bind("<Command-r>", lambda _event: self.reload_design())
+        self.root.bind("<Command-R>", lambda _event: self.reload_design())
+        self.root.bind("<Command-u>", lambda _event: self.update_phase_plots())
+        self.root.bind("<Command-U>", lambda _event: self.update_phase_plots())
+        menu = tk.Menu(self.root)
+        file_menu = tk.Menu(menu, tearoff=False)
+        file_menu.add_command(label="Reload files", accelerator="Cmd-R", command=self.reload_design)
+        file_menu.add_command(label="Update phase plots", accelerator="Cmd-U", command=self.update_phase_plots)
+        menu.add_cascade(label="File", menu=file_menu)
+        self.root.config(menu=menu)
 
         default_tg = ROOT / "design" / "baseline_shoulder.tg"
         self.tg_var = tk.StringVar(value=str(default_tg))
@@ -481,6 +504,7 @@ class PlotGui:
         self.grid.rowconfigure(1, weight=1)
 
         self.slots: list[ttk.Frame] = []
+        self.slot_controls: dict[ttk.Frame, tuple[ttk.Combobox, tk.DoubleVar, ttk.Button]] = {}
         self.plotted_slots: set[ttk.Frame] = set()
         self.add_prompt()
         self.build_work_tab()
@@ -611,7 +635,6 @@ class PlotGui:
         ttk.Button(bar, text="Control…", width=13, command=self.choose_control).grid(row=1, column=0, sticky="w", pady=(8, 0))
         ttk.Label(bar, text="control").grid(row=1, column=1, padx=(10, 8), pady=(8, 0))
         ttk.Label(bar, textvariable=self.control_display).grid(row=1, column=2, sticky="w", pady=(8, 0))
-        ttk.Button(bar, text="Reload files", width=13, command=self.reload_design).grid(row=2, column=0, sticky="w", pady=(8, 0))
         ttk.Label(
             self.settings_tab,
             text="Picking a morphology loads its coupled control automatically. "
@@ -648,14 +671,15 @@ class PlotGui:
     def reload_design(self) -> None:
         tg_path = Path(self.tg_var.get())
         control_path = Path(self.control_var.get())
-        viewer_was_running = bool(self.viewer_proc and self.viewer_proc.poll() is None)
         self.status.set("Reloading design files...")
         self.root.update_idletasks()
         try:
             load_control(control_path)
             compile_tg(tg_path, ROOT / "scene.xml")
-            if viewer_was_running:
-                self.launch_viewer()
+            if self.viewer_proc and self.viewer_proc.poll() is None:
+                self.viewer_proc.terminate()
+                self.viewer_proc = None
+                self.status.set(f"Reloaded {_short_path(str(tg_path))}; closed viewer.")
             else:
                 self.status.set(f"Reloaded {_short_path(str(tg_path))}")
         except Exception as exc:
@@ -689,6 +713,16 @@ class PlotGui:
             command=lambda: self.plot_in_slot(frame, plot_choice, periods, button),
         )
         button.pack(side=tk.LEFT)
+        self.slot_controls[frame] = (plot_choice, periods, button)
+
+    def update_phase_plots(self) -> None:
+        self.reload_design()
+        plotted = [frame for frame in self.slots if frame in self.plotted_slots]
+        if not plotted:
+            return
+        for frame in plotted:
+            plot_choice, periods, button = self.slot_controls[frame]
+            self.plot_in_slot(frame, plot_choice, periods, button)
 
     def plot_in_slot(
         self,
@@ -746,6 +780,10 @@ class PlotGui:
         ax.set_title(title)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
+        if title == "Angular velocity vs time":
+            vmax = max((max(values) for values in series.values() if values), default=0.0)
+            ax.set_ylim(0.0, max(35.0, math.ceil(vmax / 5.0) * 5.0))
+            ax.yaxis.set_major_locator(MultipleLocator(5.0))
         ax.grid(True, alpha=0.3)
 
         def update_legend() -> None:
