@@ -1,0 +1,91 @@
+name = flap-bishoulder-main
+
+# Ported from Tensegrity-Playground (origin/main, shoulder/shoulder.tg) — the
+# larger-crank-throw design (38 mm). Only the design-defining parts are carried
+# over (scale, crank_throw, ctrl range, drive, wing geometry). Stability-
+# sensitive settings are pinned to DiffSimAvesBot's known-good values, NOT the
+# playground's:
+#   - armature = 1e-6   (playground used 1e-8; matches design/shoulder.tg)
+#   - integrator = implicitfast  (same integrator as every diffsim design)
+# The `motor_speed = 28 rad/s` drive becomes a coupled control file
+# (a0 = 28 rad/s constant), and the legacy `mirror across y:` block is dropped.
+#
+# Phase-drift fix (velocity actuators have no phase memory, so per-cycle slip
+# integrates into drift): drive_phase_offset is emitted as a velocity gear
+# cos(offset), so 170 deg (gear -0.985) makes the two cranks on a shoulder run at
+# different speeds and slip ~0.09 cyc/s. Pinned to 180 deg (gear = -1, matched
+# speeds) and raised kv 0.25 -> 1.5 to cut the residual load droop; combined slip
+# ~0.004 cyc/s (effectively phase-locked). Original playground used 170 deg / kv 0.25.
+
+world:
+    gravity    = [0, 0, -9.81]
+    timestep   = 0.25 ms
+    integrator = implicitfast
+    scale      = 0.53
+    meshdir    = assets
+
+archetype strut C:
+    shape    = arc
+    radius   = 48.23931363603964 mm
+    stations = [5.8, 68.7, 111.3, 174.2] deg
+    width    = 6.0 mm
+    arc_rod  = { radius: 4.0 mm, mass: 10.001 g }
+    rung_rod = { radius: 2.0 mm, mass: 4.999 g }
+    symmetry sigma = reflect(stations: 1<->4, 2<->3 ; faces: A<->B)
+
+strut F = C { role: fixed,  plane: YZ }
+strut M = C { role: mobile, plane: XZ }
+
+arrange M relative_to F:
+    gap            = 30 mm
+    angle          = 0 deg
+    mobile_dx      = 5 mm
+    inplane_offset = 4.649 mm
+
+placement:
+    mount_height   = 258 mm
+    lateral_offset = 31 mm
+
+tendons:
+    defaults { stiffness: 200 N/m, damping: 0.5, pretension: 0.827, width: 0.75 mm }
+    length = derived
+    generators under sigma:
+        M[1A] -- F[4B]
+        M[1A] -- F[3B]
+        M[1B] -- F[2B]
+        M[1B] -- F[1B]
+        M[2A] -- F[4B]
+        M[2B] -- F[1B]
+
+motors:
+    disk { radius: 18.0 mm, crank_throw: 38 mm, tilt: 0.0 rad, pitch: 50 deg, kv: 1.5, ctrl: [-50, 50],
+           solref: [0.02857142857142857, 1.0],
+           outboard: 30.625 mm,
+           foot_outset: 0.25 mm,
+           disk_dx: 0 mm, disk_dy: -20 mm }
+    drive M[1] and M[4]
+    attach_along_edge = 0.0 rad
+    attach_radius = 1.0
+    drive_phase_offset = 180 deg
+    tendon_pretension = 0.82
+    tendon_stiffness  = 600 N/m
+    tendon_damping    = 1.0
+    control = flap_bishoulder_main_control.tg
+    motor_direction = 1
+
+wing on M.midpoint:
+    rod_length = 18.0 mm
+    mount_arm  = 55.0 mm
+    mesh       = wing.stl
+    pitch:
+        free_angle = 25 deg
+        stiffness  = 0.005
+        damping    = 1e-5
+        initial    = 0.0 rad
+        range      = [-0.7, 0.7] rad
+        armature   = 1e-6
+    aero:
+        blades      = 4
+        force_scale = 1e6
+        body_torque = off
+        cop         = derived

@@ -1,0 +1,10 @@
+# Converted from legacy `motor_speed = 10 Hz` (scale-stability working tree). The
+# disk hinge is a velocity actuator, so eval_control's value IS the commanded
+# motor speed (rad/s): a constant a0 with zero harmonics = the old constant-speed
+# drive. a0 = 10 Hz * 2*pi = 62.832 rad/s (one crank rev per flap cycle).
+# fundamental_frequency = 10 Hz, used for phase/cycle normalization in the plots.
+harmonics = 1
+fundamental_frequency = 10 Hz
+a0 = 22.832
+a_1 = 0
+b_1 = 0

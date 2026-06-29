@@ -17,7 +17,7 @@ import mujoco.viewer
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
-from runtime.control_signal import eval_control, load_control_for_morphology
+from runtime.control_signal import eval_control, load_control, load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.viewer_runtime import RealtimeSync, get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
@@ -30,6 +30,7 @@ ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 def main() -> None:
     parser = argparse.ArgumentParser(description="View the compiled morphology with its design control signal.")
     parser.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
+    parser.add_argument("--control", type=Path, default=None, help="Control .tg (default: coupled to morphology)")
     parser.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     parser.add_argument("--speed", type=float, default=0.2, help="Viewer realtime factor")
     parser.add_argument("--speed-log-interval", type=float, default=1.0, help="Wall seconds between speed logs")
@@ -46,7 +47,7 @@ def main() -> None:
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
 
-    control = load_control_for_morphology(args.tg)
+    control = load_control(args.control) if args.control else load_control_for_morphology(args.tg)
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
     actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import math
 import os
+import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
@@ -13,6 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import mujoco
+import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
@@ -20,7 +22,7 @@ from compile_tg import compile_tg
 from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
 from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
-from runtime.control_signal import eval_control, load_control_for_morphology
+from runtime.control_signal import eval_control, load_control, load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.viewer_runtime import get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
@@ -42,11 +44,29 @@ SETTLE_PERIODS = 3
 FIRST_RECORDED_CYCLE = SETTLE_PERIODS + 1
 
 
+def _short_path(path: str) -> str:
+    """Path relative to the repo root when possible, else the bare name."""
+    try:
+        return str(Path(path).resolve().relative_to(ROOT))
+    except ValueError:
+        return Path(path).name
+
+
+def coupled_control_path(tg_path: Path) -> Path:
+    """Control file referenced by a morphology, resolved relative to it."""
+    morph = load_morphology(tg_path)
+    control_path = Path(morph.motors.control_file)
+    if not control_path.is_absolute():
+        control_path = tg_path.parent / control_path
+    return control_path
+
+
 def data_by_phase(
     tg_path: Path,
     scene_path: Path,
     periods: float,
     plot_kind: str,
+    control_path: Path | None = None,
 ) -> tuple[list[float], dict[str, list[float]], str, str, str, dict[str, str]]:
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_path)
@@ -58,7 +78,7 @@ def data_by_phase(
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
 
-    control = load_control_for_morphology(tg_path)
+    control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
     period = control.period
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
@@ -220,7 +240,9 @@ def structural_tendons(model: mujoco.MjModel) -> tuple[list[int], list[str]]:
     return tendon_ids, names
 
 
-def work_loop_data(tg_path: Path, scene_path: Path, periods: float) -> dict[str, object]:
+def work_loop_data(
+    tg_path: Path, scene_path: Path, periods: float, control_path: Path | None = None
+) -> dict[str, object]:
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     compile_tg(tg_path, scene_path)
@@ -231,7 +253,7 @@ def work_loop_data(tg_path: Path, scene_path: Path, periods: float) -> dict[str,
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
 
-    control = load_control_for_morphology(tg_path)
+    control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
     actuator_ids = {name: get_actuator_id(model, name) for name in ACTUATORS}
@@ -320,12 +342,93 @@ def work_loop_data(tg_path: Path, scene_path: Path, periods: float) -> dict[str,
     }
 
 
+WINGTIP_SITE = "L_wing_aero_blade_04"
+
+
+def wing_path_data(
+    tg_path: Path, scene_path: Path, periods: float, control_path: Path | None = None
+) -> dict[str, list[float]]:
+    """Record the wingtip site's 3D world trajectory (mm) over `periods` cycles."""
+    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
+    os.environ["MUJOCO_XML_PATH"] = str(scene_path)
+    compile_tg(tg_path, scene_path)
+
+    morph = load_morphology(tg_path)
+    model = mujoco.MjModel.from_xml_path(str(scene_path))
+    data = mujoco.MjData(model)
+    calibrate_wing_pitch_at_rest(model, data)
+    sync_crank_disks_at_rest(model, data)
+
+    control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
+    aero = AeroBladeRuntime(model)
+    pitch = WingPitchLimiter(model, data)
+    actuator_ids = {name: get_actuator_id(model, name) for name in ACTUATORS}
+    tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
+    if tip_id < 0:
+        raise ValueError(f"Missing wingtip site: {WINGTIP_SITE}")
+
+    def step() -> None:
+        data.qfrc_applied[:] = 0.0
+        data.ctrl[:] = 0.0
+        aero.apply(model, data)
+        pitch.apply(model, data)
+        base_ctrl = morph.motors.motor_direction * eval_control(control, data.time)
+        for aid in actuator_ids.values():
+            if aid >= 0:
+                data.ctrl[aid] = base_ctrl
+        mujoco.mj_step(model, data)
+
+    for _ in range(math.ceil(SETTLE_PERIODS * control.period / model.opt.timestep)):
+        step()
+
+    path: dict[str, list[float]] = {"phase": [], "x": [], "y": [], "z": []}
+    start_time = data.time
+    for _ in range(math.ceil(periods * control.period / model.opt.timestep)):
+        step()
+        path["phase"].append((data.time - start_time) * control.fundamental_frequency_hz)
+        pos = data.site_xpos[tip_id]
+        path["x"].append(1000.0 * float(pos[0]))
+        path["y"].append(1000.0 * float(pos[1]))
+        path["z"].append(1000.0 * float(pos[2]))
+    return path
+
+
+def wing_path_correlation(
+    a: dict[str, list[float]], b: dict[str, list[float]]
+) -> tuple[float, dict[str, float]]:
+    """Phase-aligned similarity of two wingtip paths: overall + per-axis in [-1, 1]."""
+    span = min(a["phase"][-1], b["phase"][-1])
+    grid = np.linspace(0.0, span, 400)
+    mats = []
+    for p in (a, b):
+        m = np.stack([np.interp(grid, p["phase"], p[k]) for k in "xyz"], axis=1)
+        mats.append(m - m.mean(axis=0))
+    pa, pb = mats
+
+    def corr(u: np.ndarray, v: np.ndarray) -> float:
+        denom = float(np.linalg.norm(u) * np.linalg.norm(v))
+        return float((u * v).sum() / denom) if denom else 0.0
+
+    per_axis = {axis: corr(pa[:, i], pb[:, i]) for i, axis in enumerate("xyz")}
+    return corr(pa.ravel(), pb.ravel()), per_axis
+
+
 class PlotGui:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("DiffSim Aves Plots")
         self.root.attributes("-fullscreen", True)
         self.root.bind("<Escape>", lambda _event: self.root.attributes("-fullscreen", False))
+
+        default_tg = ROOT / "design" / "shoulder.tg"
+        self.tg_var = tk.StringVar(value=str(default_tg))
+        self.control_var = tk.StringVar(value=str(coupled_control_path(default_tg)))
+        self.tg_display = tk.StringVar()
+        self.control_display = tk.StringVar()
+        self.tg_var.trace_add("write", lambda *_: self.tg_display.set(_short_path(self.tg_var.get())))
+        self.control_var.trace_add("write", lambda *_: self.control_display.set(_short_path(self.control_var.get())))
+        self.tg_display.set(_short_path(self.tg_var.get()))
+        self.control_display.set(_short_path(self.control_var.get()))
 
         self.status = tk.StringVar(value="Ready")
         ttk.Label(self.root, textvariable=self.status, padding=(8, 0, 8, 8)).pack(side=tk.TOP, anchor=tk.W)
@@ -335,8 +438,19 @@ class PlotGui:
 
         self.plot_tab = ttk.Frame(self.tabs)
         self.work_tab = ttk.Frame(self.tabs)
+        self.wing_path_tab = ttk.Frame(self.tabs)
+        self.viewer_tab = ttk.Frame(self.tabs)
+        self.settings_tab = ttk.Frame(self.tabs)
         self.tabs.add(self.plot_tab, text="Phase plots")
         self.tabs.add(self.work_tab, text="Work loops")
+        self.tabs.add(self.wing_path_tab, text="Wing path")
+        self.tabs.add(self.viewer_tab, text="Viewer")
+        self.tabs.add(self.settings_tab, text="Settings")
+        self.viewer_proc: subprocess.Popen | None = None
+        self.wing_paths: dict[str, dict] = {}
+        self.build_wing_path_tab()
+        self.build_viewer_tab()
+        self.build_settings_tab()
 
         self.grid = ttk.Frame(self.plot_tab, padding=8)
         self.grid.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -349,6 +463,165 @@ class PlotGui:
         self.plotted_slots: set[ttk.Frame] = set()
         self.add_prompt()
         self.build_work_tab()
+
+    def build_wing_path_tab(self) -> None:
+        controls = ttk.Frame(self.wing_path_tab, padding=12)
+        controls.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(controls, text="Periods").pack(side=tk.LEFT)
+        self.wing_path_periods = tk.DoubleVar(value=2.0)
+        ttk.Entry(controls, textvariable=self.wing_path_periods, width=6).pack(side=tk.LEFT, padx=(6, 16))
+        ttk.Button(controls, text="Capture as A", command=lambda: self.capture_wing_path("A")).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Capture as B", command=lambda: self.capture_wing_path("B")).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+
+        self.wing_corr = tk.StringVar(value="Capture A and B (from the design in Settings) to compare.")
+        ttk.Label(self.wing_path_tab, textvariable=self.wing_corr, padding=(12, 0)).pack(
+            side=tk.TOP, anchor=tk.W
+        )
+        self.wing_path_plot = ttk.Frame(self.wing_path_tab, padding=12)
+        self.wing_path_plot.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    def capture_wing_path(self, slot: str) -> None:
+        periods = float(self.wing_path_periods.get())
+        if periods <= 0:
+            self.status.set("Periods must be positive.")
+            return
+        self.status.set(f"Tracing wing path {slot}...")
+        self.root.update_idletasks()
+        try:
+            path = wing_path_data(
+                Path(self.tg_var.get()), ROOT / "scene.xml", periods, Path(self.control_var.get())
+            )
+        except Exception as exc:
+            self.status.set(f"Error: {exc}")
+            raise
+        path["label"] = f"{slot}: {_short_path(self.tg_var.get())}"
+        self.wing_paths[slot] = path
+        self.redraw_wing_paths()
+        self.status.set(f"Captured wing path {slot} ({_short_path(self.tg_var.get())}).")
+
+    def redraw_wing_paths(self) -> None:
+        for child in self.wing_path_plot.winfo_children():
+            child.destroy()
+        figure = Figure(figsize=(7, 6), dpi=100)
+        ax = figure.add_subplot(111, projection="3d")
+        for slot, color in (("A", "#1f77b4"), ("B", "#ff7f0e")):
+            path = self.wing_paths.get(slot)
+            if path:
+                ax.plot(path["x"], path["y"], path["z"], color=color, label=path["label"])
+        ax.set_xlabel("x (mm)")
+        ax.set_ylabel("y (mm)")
+        ax.set_zlabel("z (mm)")
+        ax.set_title("Wingtip path in 3D")
+        if self.wing_paths:
+            ax.legend(loc="upper left", fontsize=8)
+
+        if "A" in self.wing_paths and "B" in self.wing_paths:
+            overall, per_axis = wing_path_correlation(self.wing_paths["A"], self.wing_paths["B"])
+            axes = ", ".join(f"{k}={v:+.3f}" for k, v in per_axis.items())
+            self.wing_corr.set(f"Path correlation A↔B: overall {overall:+.3f}   (per axis: {axes})")
+
+        canvas = FigureCanvasTkAgg(figure, master=self.wing_path_plot)
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        canvas.draw()
+
+    def build_viewer_tab(self) -> None:
+        self.viewer_color = tk.BooleanVar(value=False)
+        self.viewer_speed = tk.DoubleVar(value=0.2)
+
+        controls = ttk.Frame(self.viewer_tab, padding=12)
+        controls.pack(side=tk.TOP, fill=tk.X)
+        ttk.Button(controls, text="Launch / reload viewer", command=self.launch_viewer).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Close viewer", command=self.close_viewer).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Checkbutton(controls, text="Color structural tendons (--color)", variable=self.viewer_color).pack(
+            side=tk.LEFT, padx=(16, 0)
+        )
+        ttk.Label(controls, text="Speed").pack(side=tk.LEFT, padx=(16, 0))
+        ttk.Entry(controls, textvariable=self.viewer_speed, width=6).pack(side=tk.LEFT, padx=(6, 0))
+
+        ttk.Label(
+            self.viewer_tab,
+            text="Launches the MuJoCo passive viewer for the selected morphology and control "
+            "(set in Settings). Each launch re-reads the .tg files, so click again after editing "
+            "to reload. A new launch closes the previous viewer window.",
+            wraplength=720,
+            justify=tk.LEFT,
+        ).pack(side=tk.TOP, anchor=tk.W, padx=12)
+
+    def launch_viewer(self) -> None:
+        if self.viewer_proc and self.viewer_proc.poll() is None:
+            self.viewer_proc.terminate()
+        # macOS requires mujoco's mjpython (not plain python) for launch_passive.
+        launcher = sys.executable
+        if sys.platform == "darwin":
+            mjpython = Path(sys.executable).with_name("mjpython")
+            if not mjpython.exists():
+                self.status.set(f"mjpython not found next to {sys.executable}; viewer needs it on macOS.")
+                return
+            launcher = str(mjpython)
+        cmd = [
+            launcher,
+            str(ROOT / "view_fixed_frequency.py"),
+            "--tg", self.tg_var.get(),
+            "--control", self.control_var.get(),
+            "--scene", str(ROOT / "scene_viewer.xml"),
+            "--speed", str(float(self.viewer_speed.get())),
+        ]
+        if self.viewer_color.get():
+            cmd.append("--color")
+        self.viewer_proc = subprocess.Popen(cmd, cwd=str(ROOT))
+        self.status.set(f"Launched viewer for {_short_path(self.tg_var.get())}")
+
+    def close_viewer(self) -> None:
+        if self.viewer_proc and self.viewer_proc.poll() is None:
+            self.viewer_proc.terminate()
+            self.status.set("Closed viewer.")
+        else:
+            self.status.set("No viewer running.")
+
+    def build_settings_tab(self) -> None:
+        bar = ttk.LabelFrame(self.settings_tab, text="Coupled design", padding=(12, 10))
+        bar.pack(side=tk.TOP, fill=tk.X, padx=12, pady=12)
+        bar.columnconfigure(2, weight=1)
+        ttk.Button(bar, text="Morphology…", width=13, command=self.choose_morphology).grid(row=0, column=0, sticky="w")
+        ttk.Label(bar, text="shoulder").grid(row=0, column=1, padx=(10, 8))
+        ttk.Label(bar, textvariable=self.tg_display).grid(row=0, column=2, sticky="w")
+        ttk.Button(bar, text="Control…", width=13, command=self.choose_control).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(bar, text="control").grid(row=1, column=1, padx=(10, 8), pady=(8, 0))
+        ttk.Label(bar, textvariable=self.control_display).grid(row=1, column=2, sticky="w", pady=(8, 0))
+        ttk.Label(
+            self.settings_tab,
+            text="Picking a morphology loads its coupled control automatically. "
+            "Override the control to pair a design with a different signal.",
+            wraplength=720,
+            justify=tk.LEFT,
+        ).pack(side=tk.TOP, anchor=tk.W, padx=12)
+
+    def choose_morphology(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Select morphology (.tg)",
+            initialdir=str(Path(self.tg_var.get()).parent),
+            filetypes=[("Tensegrity morphology", "*.tg")],
+        )
+        if not path:
+            return
+        self.tg_var.set(path)
+        try:
+            self.control_var.set(str(coupled_control_path(Path(path))))
+            self.status.set(f"Design: {Path(path).name} (coupled control loaded)")
+        except Exception as exc:
+            self.status.set(f"Loaded morphology, but couldn't resolve coupled control: {exc}")
+
+    def choose_control(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Select control (.tg)",
+            initialdir=str(Path(self.control_var.get()).parent),
+            filetypes=[("Control", "*.tg")],
+        )
+        if path:
+            self.control_var.set(path)
+            self.status.set(f"Control: {Path(path).name}")
 
     def add_prompt(self) -> None:
         if len(self.slots) >= 4:
@@ -395,10 +668,11 @@ class PlotGui:
         self.root.update_idletasks()
         try:
             x_values, series, title, xlabel, ylabel, colors = data_by_phase(
-                ROOT / "design" / "shoulder.tg",
+                Path(self.tg_var.get()),
                 ROOT / "scene.xml",
                 periods,
                 plot_choice.get(),
+                Path(self.control_var.get()),
             )
         except Exception as exc:
             self.status.set(f"Error: {exc}")
@@ -477,7 +751,7 @@ class PlotGui:
         button.configure(text="Update")
         if len(self.slots) < 4 and len(self.plotted_slots) == len(self.slots):
             self.add_prompt()
-        control = load_control_for_morphology(ROOT / "design" / "shoulder.tg")
+        control = load_control(Path(self.control_var.get()))
         self.status.set(
             f"Plotted {periods:g} periods at control f0 {control.fundamental_frequency_hz:g} Hz, "
             f"after {SETTLE_PERIODS} settle periods."
@@ -595,7 +869,9 @@ class PlotGui:
         self.status.set("Running work-loop simulation...")
         self.root.update_idletasks()
         try:
-            data = work_loop_data(ROOT / "design" / "shoulder.tg", ROOT / "scene.xml", periods)
+            data = work_loop_data(
+                Path(self.tg_var.get()), ROOT / "scene.xml", periods, Path(self.control_var.get())
+            )
         except Exception as exc:
             self.status.set(f"Error: {exc}")
             raise

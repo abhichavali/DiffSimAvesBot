@@ -16,28 +16,24 @@ from runtime.morphology_runtime import resolve_morphology_path
 
 
 def sync_crank_disks_at_rest(model, data) -> None:
-    motors = load_morphology(resolve_morphology_path()).motors
-    feet = motors.feet
-    offset = float(motors.drive_phase_offset_rad)
+    feet = load_morphology(resolve_morphology_path()).motors.feet
 
     def joint_id(name: str) -> int:
         return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
 
     changed = False
-    # Right wing matches the left exactly; its inversion is the actuator gear,
-    # not the initial angle. Both cranks per shoulder sit `offset` apart.
-    phases = {
-        ("L", feet[0].station): 0.0,
-        ("L", feet[1].station): offset,
-        ("R", feet[0].station): 0.0,
-        ("R", feet[1].station): offset,
-    }
-    for (side, station), phase in phases.items():
-        joint = joint_id(f"{side}_t{station}_disk_hinge")
-        if joint < 0:
+    # Phasing is created by counter-rotation (the actuator gear), not the initial
+    # angle, so every crank starts from a matched zero-velocity rest. The sigma
+    # mirror swaps stations 1<->4, so the right crank mirroring L_t{a} is R_t{b}
+    # (the other foot): bring it to L's angle so both wings begin from one phase.
+    for left_foot, right_foot in zip(feet, reversed(feet)):
+        left = joint_id(f"L_t{left_foot.station}_disk_hinge")
+        right = joint_id(f"R_t{right_foot.station}_disk_hinge")
+        if left < 0 or right < 0:
             continue
-        data.qpos[model.jnt_qposadr[joint]] = phase
-        data.qvel[model.jnt_dofadr[joint]] = 0.0
+        data.qpos[model.jnt_qposadr[right]] = float(data.qpos[model.jnt_qposadr[left]])
+        data.qvel[model.jnt_dofadr[left]] = 0.0
+        data.qvel[model.jnt_dofadr[right]] = 0.0
         changed = True
 
     if changed:

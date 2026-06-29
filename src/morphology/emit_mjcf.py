@@ -614,10 +614,15 @@ def derive_motor_length(
 
 def _add_actuators(root: ET.Element, compiled: CompiledMorphology) -> None:
     spec = compiled.morph.motors.disk
+    feet = compiled.morph.motors.feet
+    ref_station = feet[0].station
+    # Second foot per side counter-rotates at cos(drive_phase_offset) so the two
+    # cranks oppose. ~-1 at the 170-180 deg design offset.
+    phase_gain = math.cos(float(compiled.morph.motors.drive_phase_offset_rad))
     act = ET.SubElement(root, "actuator")
     for shoulder in compiled.shoulders:
         prefix = shoulder.side
-        for foot in compiled.morph.motors.feet:
+        for foot in feet:
             st = foot.station
             attrs = {
                 "name": f"{prefix}_motor_t{st}",
@@ -625,11 +630,18 @@ def _add_actuators(root: ET.Element, compiled: CompiledMorphology) -> None:
                 "kv": str(spec.kv),
                 "ctrlrange": _vec2(spec.ctrlrange),
             }
-            # Y-mirrored shoulder: flip the R crank actuators (gear=-1) so +ctrl
-            # produces the same world motion as L — the right wing is the left,
-            # inverted.
-            if prefix == "R":
-                attrs["gear"] = "-1"
+            # Crank phasing is baked into the actuator transmission so every
+            # drive site (viewer, optimizer, validation) is consistent under one
+            # uniform velocity command:
+            #   - R shoulder is the Y-mirror of L -> gear -1 (+ctrl = L world motion).
+            #   - the non-reference foot counter-rotates (cos(drive_phase_offset)),
+            #     so the two cranks oppose and give the full reciprocating stroke.
+            #     The co-rotating initial-offset drive under-flapped vs this.
+            gear = -1.0 if prefix == "R" else 1.0
+            if st != ref_station:
+                gear *= phase_gain
+            if gear != 1.0:
+                attrs["gear"] = f"{gear:.6g}"
             ET.SubElement(act, "velocity", **attrs)
 
 
