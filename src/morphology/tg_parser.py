@@ -210,6 +210,7 @@ class _TgParser:
         self.attach_radius = 1.0
         self.foot_crank_throw: Dict[int, float] = {}
         self.tendon_pretension = 0.96
+        self.foot_tendon_pretension: Dict[int, float] = {}
         self.tendon_stiffness = 500.0
         self.tendon_damping = 1.0
         self.motor_direction = 1.0
@@ -400,6 +401,11 @@ class _TgParser:
                     val = math.radians(val)
                 self.drive_phase_offset_rad = val
                 continue
+            if line.startswith("tendon_pretension_t"):
+                key, value = line.split("=", 1)
+                station = int(key.strip()[len("tendon_pretension_t"):])
+                self.foot_tendon_pretension[station] = float(_parse_scalar(value.strip()))
+                continue
             if line.startswith("tendon_pretension"):
                 self.tendon_pretension = float(_parse_scalar(line.split("=", 1)[1].strip()))
                 continue
@@ -572,6 +578,7 @@ class _TgParser:
                     ),
                 ),
                 tendon_pretension=float(self.tendon_pretension),
+                foot_tendon_pretension=dict(self.foot_tendon_pretension),
                 tendon_stiffness=float(self.tendon_stiffness),
                 tendon_damping=float(self.tendon_damping),
                 drive_phase_offset_rad=float(self.drive_phase_offset_rad),

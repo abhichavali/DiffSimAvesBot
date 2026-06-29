@@ -55,6 +55,7 @@ motors:
     drive_phase_offset = 0 deg
     crank_throw_t4 = 28 mm
     tendon_pretension = 0.82
+    tendon_pretension_t1 = 0.67
     tendon_stiffness  = 1000 N/m
     tendon_damping    = 1.0
     control = baseline_control.tg

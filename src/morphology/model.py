@@ -164,6 +164,7 @@ class Motors:
     )
     # Range/spring rest: see motor_tendons.py (full disk-revolution envelope).
     tendon_pretension: float = 0.96
+    foot_tendon_pretension: Dict[int, float] = field(default_factory=dict)
     tendon_stiffness: float = 500.0
     tendon_damping: float = 1.0
     # Phase lag (rad): initial crank-angle offset of the t4 crank vs t1. The two

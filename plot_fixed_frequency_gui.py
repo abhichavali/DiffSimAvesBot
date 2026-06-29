@@ -611,6 +611,7 @@ class PlotGui:
         ttk.Button(bar, text="Control…", width=13, command=self.choose_control).grid(row=1, column=0, sticky="w", pady=(8, 0))
         ttk.Label(bar, text="control").grid(row=1, column=1, padx=(10, 8), pady=(8, 0))
         ttk.Label(bar, textvariable=self.control_display).grid(row=1, column=2, sticky="w", pady=(8, 0))
+        ttk.Button(bar, text="Reload files", width=13, command=self.reload_design).grid(row=2, column=0, sticky="w", pady=(8, 0))
         ttk.Label(
             self.settings_tab,
             text="Picking a morphology loads its coupled control automatically. "
@@ -643,6 +644,23 @@ class PlotGui:
         if path:
             self.control_var.set(path)
             self.status.set(f"Control: {Path(path).name}")
+
+    def reload_design(self) -> None:
+        tg_path = Path(self.tg_var.get())
+        control_path = Path(self.control_var.get())
+        viewer_was_running = bool(self.viewer_proc and self.viewer_proc.poll() is None)
+        self.status.set("Reloading design files...")
+        self.root.update_idletasks()
+        try:
+            load_control(control_path)
+            compile_tg(tg_path, ROOT / "scene.xml")
+            if viewer_was_running:
+                self.launch_viewer()
+            else:
+                self.status.set(f"Reloaded {_short_path(str(tg_path))}")
+        except Exception as exc:
+            self.status.set(f"Reload failed: {exc}")
+            raise
 
     def add_prompt(self) -> None:
         if len(self.slots) >= 4:

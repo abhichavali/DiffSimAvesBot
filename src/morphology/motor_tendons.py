@@ -82,11 +82,11 @@ def measure_motor_tendon_ranges(
 
         calibrate_wing_pitch_at_rest(model, data, settle_steps=settle_steps)
 
-        pretension = morph.motors.tendon_pretension
         ranges: Dict[str, MotorTendonRange] = {}
         for shoulder in ("L", "R"):
             for foot in morph.motors.feet:
                 st = foot.station
+                pretension = morph.motors.foot_tendon_pretension.get(st, morph.motors.tendon_pretension)
                 tendon_name = f"{shoulder}_motor_t{st}"
                 disk_joint = f"{shoulder}_t{st}_disk_hinge"
                 l_min, l_max, l_rest = _sweep_tendon_length(

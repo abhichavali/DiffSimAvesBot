@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from morphology.emit_mjcf import _color_to_rgba
 from morphology.model import TendonDefaults, TendonMaterial, TendonNet
 from morphology.symmetry import resolve_material_props
-from morphology.tg_parser import _parse_brace_dict, _parse_material_dict
+from morphology.tg_parser import _parse_brace_dict, _parse_material_dict, load_morphology
 
 
 def test_color_to_rgba():
@@ -39,8 +39,19 @@ def test_resolve_falls_back_to_defaults():
     assert (stiff, damp, pret, color) == (333, 0.5, 0.8, "1 0 0 1")
 
 
+def test_motor_foot_pretension_override():
+    morph = load_morphology(Path(__file__).resolve().parents[1] / "design" / "baseline_shoulder.tg")
+    assert morph.motors.tendon_pretension == 0.82
+    assert morph.motors.foot_tendon_pretension == {1: 0.67}
+
+
 if __name__ == "__main__":
-    for fn in (test_color_to_rgba, test_parse_material_dict, test_resolve_falls_back_to_defaults):
+    for fn in (
+        test_color_to_rgba,
+        test_parse_material_dict,
+        test_resolve_falls_back_to_defaults,
+        test_motor_foot_pretension_override,
+    ):
         fn()
         print(f"ok  {fn.__name__}")
     print("all passed")
