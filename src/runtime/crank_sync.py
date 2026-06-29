@@ -38,3 +38,30 @@ def sync_crank_disks_at_rest(model, data) -> None:
 
     if changed:
         mujoco.mj_forward(model, data)
+
+
+def apply_crank_phase_lag(model, data, lag_rad: float) -> None:
+    """Phase-lag the non-reference (t4 'orange') cranks by ``lag_rad`` vs t1.
+
+    The two cranks ALWAYS counter-rotate (actuator gear -1); this adds an initial
+    crank-angle offset on top, a genuine phase lag that persists under the shared
+    velocity command (both integrate the same speed, so the offset is constant).
+    Call AFTER sync_crank_disks_at_rest. ``drive_phase_offset`` in the .tg sets it;
+    sweep it to stagger the two motors' torque peaks (cuts overlap / inactive power).
+    """
+    if not lag_rad:
+        return
+    feet = load_morphology(resolve_morphology_path()).motors.feet
+    ref = feet[0].station
+    changed = False
+    for foot in feet:
+        if foot.station == ref:
+            continue
+        for side in ("L", "R"):
+            jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_t{foot.station}_disk_hinge")
+            if jid < 0:
+                continue
+            data.qpos[model.jnt_qposadr[jid]] += float(lag_rad)
+            changed = True
+    if changed:
+        mujoco.mj_forward(model, data)

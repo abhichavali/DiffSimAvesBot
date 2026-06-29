@@ -47,7 +47,7 @@ from jax.scipy.special import logsumexp
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
-from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.crank_sync import sync_crank_disks_at_rest, apply_crank_phase_lag
 from runtime.mjx import aero_runtime, rollout, wing_pitch
 from runtime.mjx.rollout import _match_dtypes
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
@@ -77,7 +77,8 @@ def set_unsteady_aero(enabled: bool):
     ma.OMEGA_DOT_CAP, ma.LIN_ACC_CAP = o, l
 
 
-def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator: str = "euler"):
+def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator: str = "euler",
+          phase_lag: float | None = None):
     """Compile, build a calibrated CPU model/data and the device-side configs.
 
     ``aero_substep`` matches the CPU runtime (4): aero is recomputed every N
@@ -98,6 +99,9 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
+    lag = (load_morphology(tg_path).motors.drive_phase_offset_rad
+           if phase_lag is None else phase_lag)
+    apply_crank_phase_lag(model, data, lag)
 
     control = load_control_for_morphology(tg_path)
     drive = rollout.build_drive_config(model, ramp_duration=0.0)
@@ -307,7 +311,7 @@ def build_rollout(mx, dx0, drive, pitch, aero, tip_id, omega, K, warmup_steps, s
 
 
 def cpu_validate_design(scene_path, ctrl_params, tendon_arrays, integrator,
-                        *, pitch_params=None, periods=3.0, warmup=2.0):
+                        *, pitch_params=None, periods=3.0, warmup=2.0, phase_lag=0.0):
     """Run the design on MuJoCo CPU (numpy aero) -> (mean_lift, peak_torque).
 
     Uses the SAME compiled scene and the SAME tendon arrays the MJX optimizer
@@ -330,6 +334,7 @@ def cpu_validate_design(scene_path, ctrl_params, tendon_arrays, integrator,
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
+    apply_crank_phase_lag(model, data, phase_lag)
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
     if pitch_params is not None:  # apply the optimized feathering params (up/down deadband, stiffness)
@@ -706,7 +711,8 @@ def main() -> None:
     for integ in ("euler", "implicitfast"):
         try:
             L, T = cpu_validate_design(args.scene, (a0, a_dep, b_dep, omega * math.exp(f_log)),
-                                       tendon_arrays, integ, pitch_params=pitch_params)
+                                       tendon_arrays, integ, pitch_params=pitch_params,
+                                       phase_lag=load_morphology(args.tg).motors.drive_phase_offset_rad)
             cpu[integ] = {"mean_lift_N": L, "peak_torque_Nm": T}
             print(f"[cpu/{integ}] lift={L*1e3:.1f} mN  peak_torque={T*1e3:.1f} mNm")
         except Exception as e:

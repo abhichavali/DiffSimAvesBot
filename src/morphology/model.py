@@ -166,9 +166,10 @@ class Motors:
     tendon_pretension: float = 0.96
     tendon_stiffness: float = 500.0
     tendon_damping: float = 1.0
-    # Initial angular offset (rad) between the two cranks on a shoulder; both
-    # spin the same direction so the offset is held (see crank_sync).
-    drive_phase_offset_rad: float = math.pi
+    # Phase lag (rad): initial crank-angle offset of the t4 crank vs t1. The two
+    # cranks always counter-rotate (gear -1); this is an added timing offset, held
+    # under the shared velocity command (see crank_sync.apply_crank_phase_lag).
+    drive_phase_offset_rad: float = 0.0
     motor_direction: float = 1.0
     control_file: str = "control.tg"
 

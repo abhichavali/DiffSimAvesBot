@@ -52,7 +52,7 @@ motors:
     drive M[1] and M[4]
     attach_along_edge = 0.0 rad
     attach_radius = 1.0
-    drive_phase_offset = 180 deg
+    drive_phase_offset = 0 deg
     crank_throw_t4 = 28 mm
     tendon_pretension = 0.82
     tendon_stiffness  = 1000 N/m

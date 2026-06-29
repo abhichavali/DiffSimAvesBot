@@ -214,7 +214,7 @@ class _TgParser:
         self.tendon_damping = 1.0
         self.motor_direction = 1.0
         self.control_file = "control.tg"
-        self.drive_phase_offset_rad = math.pi
+        self.drive_phase_offset_rad = 0.0
         self.wing: Dict[str, Any] = {}
         self.wing_pitch: Dict[str, Any] = {}
         self.wing_aero: Dict[str, Any] = {}
