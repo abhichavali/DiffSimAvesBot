@@ -21,7 +21,7 @@ import mujoco
 import mujoco.mjx as mjx
 import numpy as np
 
-from optimize_control import setup
+from optimize_control import setup, set_unsteady_aero
 from runtime.mjx import aero_runtime as mar
 from runtime.mjx import wing_pitch as mwp
 from runtime.mjx import rollout as mroll
@@ -31,7 +31,7 @@ from runtime.wing_pitch_limit import WingPitchLimiter
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 from runtime.crank_sync import sync_crank_disks_at_rest
 
-TG = ROOT / "design" / "shoulder.tg"  # meshdir 'assets' resolves from repo root
+TG = ROOT / "design" / "baseline_shoulder.tg"  # meshdir 'assets' resolves from repo root
 SCENE = Path("/tmp/cmp_scene.xml")
 NSTEPS = 60  # ~ a few crank revolutions of comparison
 
@@ -136,7 +136,12 @@ def _mjx_one(mx, dx, st, pitch, aero, flap, a0):
 
 
 def main():
-    model, mx, dx0, control, drive, pitch, aero, tip_id, tendons = setup(TG, SCENE, integrator="euler")
+    import sys as _sys
+    on = "--off" not in _sys.argv
+    set_unsteady_aero(on)  # added-mass ON by default; must precede the jitted rollout
+    print(f"added-mass (unsteady aero): {'ON' if on else 'OFF'}  integrator=euler")
+    model, mx, dx0, control, drive, pitch, aero, tip_id, tendons, motor_ids = setup(
+        TG, SCENE, integrator="euler")
     dof_compare(model, mx, dx0, drive, pitch, aero)
     lm = mjx_trace(model, mx, dx0, drive, pitch, aero, NSTEPS)
     # rebuild a fresh euler model for CPU (same scene)

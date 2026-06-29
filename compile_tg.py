@@ -25,7 +25,7 @@ def compile_tg(tg_path: Path, output_path: Path, *, color_structural_tendons: bo
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compile a .tg morphology to MuJoCo XML.")
-    parser.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
+    parser.add_argument("--tg", type=Path, default=ROOT / "design" / "baseline_shoulder.tg")
     parser.add_argument("--out", type=Path, default=ROOT / "scene.xml")
     parser.add_argument("--color", action="store_true", help="Color structural tendons with plot colors")
     args = parser.parse_args()

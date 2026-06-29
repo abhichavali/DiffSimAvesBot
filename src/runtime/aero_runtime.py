@@ -100,19 +100,21 @@ class AeroBladeRuntime:
         return site_id
 
     def _compute_wing(self, model, data, wing: WingAeroState) -> None:
-        root_velocity = np.zeros(6)
-        mujoco.mj_objectVelocity(
-            model,
-            data,
-            mujoco.mjtObj.mjOBJ_SITE,
-            wing.root_site_id,
-            root_velocity,
-            0,
-        )
+        # Read the root-site spatial velocity from the site Jacobian, NOT
+        # mj_objectVelocity: the latter uses d.cvel, which after mj_step is stale
+        # (it reflects the pre-integration qvel of the last step), so the aero
+        # would run on a one-step-lagged velocity while the force is applied at the
+        # current position. That ~20% velocity error is harmless for the quasi-
+        # steady terms but the added-mass term finite-differences velocity (x
+        # lamda/dt), so it blew up into a ~17x MJX<->CPU lift gap. jac @ qvel uses
+        # the current qvel and matches the MJX runtime to ~1e-4 (the transfer fix).
+        jacp = np.zeros((3, model.nv))
+        jacr = np.zeros((3, model.nv))
+        mujoco.mj_jacSite(model, data, jacp, jacr, wing.root_site_id)
+        omega_global = jacr @ data.qvel
+        velocity_global = jacp @ data.qvel
 
         root_rotation = np.asarray(data.site_xmat[wing.root_site_id]).reshape(3, 3)
-        omega_global = root_velocity[:3]
-        velocity_global = root_velocity[3:]
         omega_local = root_rotation.T @ omega_global
         velocity_local = root_rotation.T @ velocity_global
 

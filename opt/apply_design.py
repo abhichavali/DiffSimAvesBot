@@ -70,7 +70,7 @@ if __name__ == "__main__":  # tiny self-check on the generated structure
     rd = ROOT / "opt" / "runs_joint"
     if (rd / "control_optimized.tg").exists():
         d = pathlib.Path(tempfile.mkdtemp())
-        write_design(rd, ROOT / "design" / "shoulder.tg", d / "shoulder.tg", d / "control.tg")
+        write_design(rd, ROOT / "design" / "baseline_shoulder.tg", d / "shoulder.tg", d / "control.tg")
         s = (d / "shoulder.tg").read_text()
         assert "overrides:" in s and "pretension: 1.0" in s, "override block missing"
         print("ok: wrote", d / "shoulder.tg")

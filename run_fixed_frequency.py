@@ -73,7 +73,7 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the compiled morphology with its design control signal.")
-    parser.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
+    parser.add_argument("--tg", type=Path, default=ROOT / "design" / "baseline_shoulder.tg")
     parser.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     parser.add_argument("--periods", type=float, default=5.0)
     parser.add_argument("--warmup-periods", type=float, default=2.0)

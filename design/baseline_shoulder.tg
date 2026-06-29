@@ -1,27 +1,13 @@
-name = flap-bishoulder-main
-
-# Ported from Tensegrity-Playground (origin/main, shoulder/shoulder.tg) — the
-# larger-crank-throw design (38 mm). Only the design-defining parts are carried
-# over (scale, crank_throw, ctrl range, drive, wing geometry). Stability-
-# sensitive settings are pinned to DiffSimAvesBot's known-good values, NOT the
-# playground's:
-#   - armature = 1e-6   (playground used 1e-8; matches design/shoulder.tg)
-#   - integrator = implicitfast  (same integrator as every diffsim design)
-# The `motor_speed = 28 rad/s` drive becomes a coupled control file
-# (a0 = 28 rad/s constant), and the legacy `mirror across y:` block is dropped.
-#
-# Phase-drift fix (velocity actuators have no phase memory, so per-cycle slip
-# integrates into drift): drive_phase_offset is emitted as a velocity gear
-# cos(offset), so 170 deg (gear -0.985) makes the two cranks on a shoulder run at
-# different speeds and slip ~0.09 cyc/s. Pinned to 180 deg (gear = -1, matched
-# speeds) and raised kv 0.25 -> 1.5 to cut the residual load droop; combined slip
-# ~0.004 cyc/s (effectively phase-locked). Original playground used 170 deg / kv 0.25.
+name = bi-shoulder
 
 world:
     gravity    = [0, 0, -9.81]
-    timestep   = 0.25 ms
+    # Stable timestep scales as scale^1.5 (spring-mass freq ~1/scale^1.5 as rod
+    # mass drops with scale^3). 0.50 ms holds at scale 1.0; at scale 0.4 that needs
+    # 0.50 * 0.4^1.5 ~ 0.13 ms or the full-size wing's aero diverges the rig.
+    timestep   = 0.13 ms
     integrator = implicitfast
-    scale      = 0.53
+    scale      = 0.4
     meshdir    = assets
 
 archetype strut C:
@@ -29,8 +15,8 @@ archetype strut C:
     radius   = 48.23931363603964 mm
     stations = [5.8, 68.7, 111.3, 174.2] deg
     width    = 6.0 mm
-    arc_rod  = { radius: 4.0 mm, mass: 10.001 g }
-    rung_rod = { radius: 2.0 mm, mass: 4.999 g }
+    arc_rod  = { radius: 4.0 mm, mass: 10 g }
+    rung_rod = { radius: 2.0 mm, mass: 5 g }
     symmetry sigma = reflect(stations: 1<->4, 2<->3 ; faces: A<->B)
 
 strut F = C { role: fixed,  plane: YZ }
@@ -58,7 +44,7 @@ tendons:
         M[2B] -- F[1B]
 
 motors:
-    disk { radius: 18.0 mm, crank_throw: 38 mm, tilt: 0.0 rad, pitch: 50 deg, kv: 1.5, ctrl: [-50, 50],
+    disk { radius: 18.0 mm, crank_throw: 23 mm, tilt: 0.0 rad, pitch: 50 deg, kv: 1.0, ctrl: [-120, 120],
            solref: [0.02857142857142857, 1.0],
            outboard: 30.625 mm,
            foot_outset: 0.25 mm,
@@ -67,10 +53,11 @@ motors:
     attach_along_edge = 0.0 rad
     attach_radius = 1.0
     drive_phase_offset = 180 deg
+    crank_throw_t4 = 28 mm
     tendon_pretension = 0.82
-    tendon_stiffness  = 600 N/m
+    tendon_stiffness  = 1000 N/m
     tendon_damping    = 1.0
-    control = flap_bishoulder_main_control.tg
+    control = baseline_control.tg
     motor_direction = 1
 
 wing on M.midpoint:
@@ -78,8 +65,8 @@ wing on M.midpoint:
     mount_arm  = 55.0 mm
     mesh       = wing.stl
     pitch:
-        free_angle = 25 deg
-        stiffness  = 0.005
+        free_angle = 10 deg
+        stiffness  = 0.05
         damping    = 1e-5
         initial    = 0.0 rad
         range      = [-0.7, 0.7] rad

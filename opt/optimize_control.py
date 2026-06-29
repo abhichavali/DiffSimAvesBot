@@ -54,7 +54,7 @@ from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 
 WINGTIP_SITE = "L_wing_aero_blade_04"  # stroke-amplitude proxy (z excursion of tip)
 G = 9.81
-TAU_CURRICULUM_NM = (0.400, 0.200, 0.100, 0.080)  # 400 -> 200 -> 100 -> 80 mNm
+TAU_CURRICULUM_NM = (0.300, 0.250, 0.200, 0.150, 0.100)  # 300 -> 250 -> 200 -> 150 -> 100 mNm
 
 
 _INTEGRATORS = {"euler": 0, "rk4": 1, "implicit": 2, "implicitfast": 3}
@@ -349,18 +349,31 @@ def _soft_hinge(x, s):
     return jax.nn.softplus(x / s) * s
 
 
-def make_loss(metrics, *, lift_floor, lift_cap, lift_smooth, A_target, tau_max, weights, w_lc, w_power):
-    """Scalar loss = -R, normalized per the design spec, with metrics as aux."""
+def make_loss(metrics, *, lift_floor, lift_cap, lift_smooth, lift_above_weight,
+              A_target, tau_max, weights, w_lc, w_power):
+    """Scalar loss = -R, normalized per the design spec, with metrics as aux.
+
+    Asymmetries (per the demo objective):
+      * Lift band [lift_floor, lift_cap] (190-200 mN): below is penalized at full
+        weight (strict floor), above only at ``lift_above_weight`` (moderate) so
+        the optimizer is free to overshoot lift but never starve it.
+      * Stroke amplitude: penalized ONLY when it drops below the baseline A_target
+        (one-sided soft hinge). Flapping bigger than baseline is free; shrinking
+        the flap is heavily penalized (that is the whole point of the demo gait).
+    """
     wL, wtau, wK, ws = weights
+    A_smooth = max(1e-9, 0.02 * A_target)  # ~2% band tolerance before the amp floor bites
 
     def loss(theta, tau_max):
         Lbar, tau_hat, A_stroke, S, C_lc, P_inactive = metrics(theta)
-        # Smooth lift floor (penalize below lift_floor); optional upper cap.
+        # Lift band: strict below the floor, moderate above the cap.
         below = _soft_hinge(lift_floor - Lbar, lift_smooth)
         above = _soft_hinge(Lbar - lift_cap, lift_smooth) if lift_cap is not None else 0.0
-        PhiL = -(below**2 + above**2) / lift_floor**2
+        PhiL = -(below**2 + lift_above_weight * above**2) / lift_floor**2
         Ptau = (jnp.maximum(0.0, tau_hat - tau_max) ** 2) / tau_max**2
-        Ckin = (A_stroke - A_target) ** 2 / A_target**2
+        # One-sided: penalize only A_stroke < A_target (shrinking the flap).
+        amp_short = _soft_hinge(A_target - A_stroke, A_smooth)
+        Ckin = amp_short**2 / A_target**2
         Clc = C_lc  # already dimensionless (relative cross-cycle lift variance)
         R = wL * PhiL - wtau * Ptau - wK * Ckin - ws * S - w_lc * Clc - w_power * P_inactive
         aux = (Lbar, tau_hat, A_stroke, S, Clc, P_inactive, -R)
@@ -386,13 +399,15 @@ def load_control_seed(path: Path | None, K: int, drive, base_a0: float) -> list[
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
+    p.add_argument("--tg", type=Path, default=ROOT / "design" / "baseline_shoulder.tg")
     p.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     p.add_argument("--harmonics", type=int, default=5, help="K Fourier harmonics")
-    p.add_argument("--lift-floor", type=float, default=0.185,
-                   help="penalize mean lift below this [N] (smooth softplus hinge)")
-    p.add_argument("--lift-cap", type=float, default=None,
-                   help="optional upper cap [N]; penalize lift above it. Omit to keep lift margin")
+    p.add_argument("--lift-floor", type=float, default=0.190,
+                   help="STRICT floor: penalize mean lift below this [N] (smooth softplus hinge)")
+    p.add_argument("--lift-cap", type=float, default=0.200,
+                   help="upper cap [N]; lift above it is penalized only at --lift-above-weight")
+    p.add_argument("--lift-above-weight", type=float, default=0.25,
+                   help="relative weight on the above-cap lift penalty (moderate vs the strict floor)")
     p.add_argument("--lift-smooth", type=float, default=0.005,
                    help="softplus smoothing scale [N] for the lift hinge")
     p.add_argument("--warmup-periods", type=float, default=2.0)
@@ -401,15 +416,15 @@ def main() -> None:
                    help="recompute aero every N steps, hold between (CPU parity; 1 = noisy every-step)")
     p.add_argument("--integrator", choices=list(_INTEGRATORS), default="euler",
                    help="physics integrator; euler is the MJX<->CPU-matching choice (default)")
-    p.add_argument("--tau-min", type=float, default=0.080,
-                   help="tightest torque-budget stage [Nm]; curriculum 0.4->0.2->0.1 clamped to this. "
-                        "Forcing it too low (e.g. 0.08) over-reduces torque and collapses CPU lift")
+    p.add_argument("--tau-min", type=float, default=0.100,
+                   help="tightest torque-budget stage [Nm]; curriculum 0.30->0.25->0.20->0.15->0.10 "
+                        "clamped to this. Stage 5 (100 mNm) is the demo target")
     p.add_argument("--added-mass", action="store_true",
                    help="enable the unsteady added-mass aero term. OFF by default: its MJX/CPU "
                         "implementations diverge ~4x and break transfer (see set_unsteady_aero)")
     p.add_argument("--iters-per-stage", type=int, default=40)
     p.add_argument("--lr", type=float, default=2e-3)
-    p.add_argument("--weights", type=float, nargs=4, default=(10.0, 10.0, 1.0, 0.01),
+    p.add_argument("--weights", type=float, nargs=4, default=(10.0, 10.0, 8.0, 0.01),
                    metavar=("wL", "wtau", "wK", "ws"))
     p.add_argument("--w-power", type=float, default=0.0,
                    help="weight on inactive (reactive/braking) motor power -- pushes elastic "
@@ -491,7 +506,8 @@ def main() -> None:
           f"A*={A_target*1e3:.2f} mm  w_lc={args.w_lc}")
 
     grad_fn = make_loss(metrics, lift_floor=args.lift_floor, lift_cap=args.lift_cap,
-                        lift_smooth=args.lift_smooth, A_target=A_target, tau_max=None,
+                        lift_smooth=args.lift_smooth, lift_above_weight=args.lift_above_weight,
+                        A_target=A_target, tau_max=None,
                         weights=tuple(args.weights), w_lc=args.w_lc, w_power=args.w_power)
 
     # Hand-rolled Adam (no optax dependency).
@@ -509,10 +525,11 @@ def main() -> None:
 
     base_freq = control.fundamental_frequency_hz
 
-    def dump(design, log):
+    def dump(design, log, out_dir=args.out):
         """Checkpoint the selected design to disk (interrupted run isn't lost)."""
+        out_dir.mkdir(parents=True, exist_ok=True)
         out = np.asarray(design["theta"])
-        (args.out / "log.json").write_text(json.dumps(log, indent=2))
+        (out_dir / "log.json").write_text(json.dumps(log, indent=2))
         i = 0
         freq_hz = base_freq
         if tune_control:
@@ -529,8 +546,8 @@ def main() -> None:
             for j in range(K):
                 lines.append(f"a_{j+1} = {a_out[j] / motor_dir:.6g}")
                 lines.append(f"b_{j+1} = {b_out[j] / motor_dir:.6g}")
-            (args.out / "control_optimized.tg").write_text("\n".join(lines) + "\n")
-            (args.out / "theta_best.json").write_text(json.dumps(
+            (out_dir / "control_optimized.tg").write_text("\n".join(lines) + "\n")
+            (out_dir / "theta_best.json").write_text(json.dumps(
                 {"a0": float(a0), "a": [float(x) for x in a_out], "b": [float(x) for x in b_out],
                  "frequency_hz": float(freq_hz), "omega": float(math.tau * freq_hz),
                  "motor_direction": motor_dir, "Lbar": design["Lbar"],
@@ -546,11 +563,11 @@ def main() -> None:
                 }
                 for k in range(12)
             }
-            (args.out / "tendon_optimized.json").write_text(json.dumps(
+            (out_dir / "tendon_optimized.json").write_text(json.dumps(
                 {"tau_hat": design["tau"], "Lbar": design["Lbar"], "pairs": tendon_out}, indent=2))
         if tune_pitch:
             p4 = out[i : i + 4]; i += 4
-            (args.out / "pitch_optimized.json").write_text(json.dumps({
+            (out_dir / "pitch_optimized.json").write_text(json.dumps({
                 "upstroke_pitch_rad": float(pitch.upstroke_pitch) * math.exp(p4[0]),
                 "downstroke_pitch_rad": float(pitch.downstroke_pitch) * math.exp(p4[1]),
                 "upstroke_stiffness": float(pitch.upstroke_stiffness) * math.exp(p4[2]),
@@ -559,7 +576,7 @@ def main() -> None:
         if tune_motor:
             ml = out[i : i + 2]
             mids = np.asarray(motor_ids)
-            (args.out / "motor_tendon_optimized.json").write_text(json.dumps({
+            (out_dir / "motor_tendon_optimized.json").write_text(json.dumps({
                 "stiffness": float(base_stiff[mids[0]] * math.exp(ml[0])),
                 "stiffness_factor": float(math.exp(ml[0])),
                 "pretension_factor": float(math.exp(ml[1])),
@@ -574,6 +591,9 @@ def main() -> None:
     print(f"[curriculum] tau_max stages (mNm): {[round(x*1e3) for x in curriculum]}")
     for tau_max in curriculum:
         print(f"\n=== stage tau_max = {tau_max*1e3:.0f} mNm ===")
+        # Per-stage winner: lowest peak-torque design that clears the lift floor AT
+        # THIS budget. Saved to its own subdir so the demo has one design per stage.
+        stage_best = {"tau": math.inf, "theta": theta, "Lbar": float("nan"), "Pin": float("nan")}
         for it in range(args.iters_per_stage):
             theta_eval = theta  # metrics below describe THIS theta (pre-update)
             grad, aux = grad_fn(theta, tau_max)
@@ -589,10 +609,17 @@ def main() -> None:
                         "tau_hat": tau_hat, "A_stroke": A_stroke, "S": S, "C_lc": Clc, "P_inactive": Pin})
             if Lbar >= args.lift_floor and tau_hat < best["tau"]:
                 best = {"tau": tau_hat, "theta": theta_eval, "Lbar": Lbar, "Pin": Pin}
+            if Lbar >= args.lift_floor and tau_hat < stage_best["tau"]:
+                stage_best = {"tau": tau_hat, "theta": theta_eval, "Lbar": Lbar, "Pin": Pin}
             print(f"  it{it:03d} loss={loss:.4f}  L={Lbar*1e3:6.1f}mN  "
                   f"tau={tau_hat*1e3:6.1f}mNm  A={A_stroke*1e3:5.2f}mm  S={S:.3g}  "
                   f"Clc={Clc:.3g}  Pin={Pin:.3g}", flush=True)
-        dump(best, log)  # checkpoint after every curriculum stage
+        stage_dir = args.out / f"stage_{round(tau_max*1e3)}mNm"
+        dump(stage_best, log, out_dir=stage_dir)  # per-stage design for the demo
+        dump(best, log)                            # running global best (interrupt-safe)
+        feasible = "OK" if stage_best["tau"] <= tau_max else "MISS"
+        print(f"  [stage {round(tau_max*1e3)} mNm] best tau={stage_best['tau']*1e3:.1f} mNm "
+              f"L={stage_best['Lbar']*1e3:.1f} mN [{feasible}] -> {stage_dir}")
 
     dump(best, log)
     print(f"\nbest design: tau={best['tau']*1e3:.1f} mNm  L={best['Lbar']*1e3:.1f} mN "

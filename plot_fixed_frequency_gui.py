@@ -441,7 +441,7 @@ class PlotGui:
         self.root.attributes("-fullscreen", True)
         self.root.bind("<Escape>", lambda _event: self.root.attributes("-fullscreen", False))
 
-        default_tg = ROOT / "design" / "shoulder.tg"
+        default_tg = ROOT / "design" / "baseline_shoulder.tg"
         self.tg_var = tk.StringVar(value=str(default_tg))
         self.control_var = tk.StringVar(value=str(coupled_control_path(default_tg)))
         self.tg_display = tk.StringVar()
