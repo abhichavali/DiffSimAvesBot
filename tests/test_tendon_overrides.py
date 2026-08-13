@@ -87,6 +87,31 @@ def test_motor_tendons_are_crossed():
     assert tendons["L_motor_t4"] == ["L_part_1_motor_t1", "crank_disks_L_t4"]
 
 
+def test_individual_structural_tendon_override(tmp_path=None):
+    baseline = Path(__file__).resolve().parents[1] / "design" / "baseline_shoulder.tg"
+    text = baseline.read_text().replace(
+        "motors:\n",
+        "    overrides:\n"
+        "        L_t1_to_t1_2 { stiffness: 123, pretension: 0.7 }\n"
+        "        R_t1_to_t1_2 { stiffness: 456, pretension: 0.9 }\n"
+        "motors:\n",
+        1,
+    )
+    if tmp_path is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shoulder.tg"
+            path.write_text(text)
+            morph = load_morphology(path)
+    else:
+        path = tmp_path / "shoulder.tg"
+        path.write_text(text)
+        morph = load_morphology(path)
+    root = ET.fromstring(emit_mjcf(compile_morphology(morph)))
+    tendons = {el.attrib["name"]: el.attrib for el in root.find("tendon")}
+    assert tendons["L_t1_to_t1_2"]["stiffness"] == "123.0"
+    assert tendons["R_t1_to_t1_2"]["stiffness"] == "456.0"
+
+
 if __name__ == "__main__":
     for fn in (
         test_color_to_rgba,
@@ -95,6 +120,7 @@ if __name__ == "__main__":
         test_motor_tendon_rest_length,
         test_motor_tendon_rest_length_foot_override,
         test_motor_tendons_are_crossed,
+        test_individual_structural_tendon_override,
     ):
         fn()
         print(f"ok  {fn.__name__}")

@@ -101,6 +101,8 @@ class TendonNet:
     generators: Tuple[TendonGenerator, ...] = ()
     # per-edge overrides keyed by canonical edge id, e.g. "M1A-F4B"
     edge_overrides: Dict[str, TendonMaterial] = field(default_factory=dict)
+    # per-emitted tendon overrides keyed by legacy MJCF name, e.g. "L_t1_to_t1_2"
+    individual_overrides: Dict[str, TendonMaterial] = field(default_factory=dict)
 
 
 @dataclass

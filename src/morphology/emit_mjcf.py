@@ -537,6 +537,12 @@ def _add_tendons(
             name = legacy_edge_name(prefix, m_node, f_node)
             length = shoulder.tendon_lengths[edge_topology_key(edge)]
             stiff, damp, pret, color = resolve_material_props(morph.tendons, edge)
+            if name in morph.tendons.individual_overrides:
+                mat = morph.tendons.individual_overrides[name]
+                stiff = mat.stiffness if mat.stiffness is not None else stiff
+                damp = mat.damping if mat.damping is not None else damp
+                pret = mat.pretension if mat.pretension is not None else pret
+                color = mat.color if mat.color is not None else color
             attrs = {
                 "name": name,
                 "class": "string",

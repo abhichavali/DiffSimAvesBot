@@ -1,0 +1,21 @@
+{
+  "phase_ref_joint": "L_t1_disk_hinge",
+  "tilt0_rad": 0.0,
+  "pitch0_rad": 0.3490658503988659,
+  "max_delta_rad": 0.3,
+  "tilt_coeffs": [
+    0.0,
+    0.25,
+    0.433,
+    0.0,
+    0.0
+  ],
+  "pitch_coeffs": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model": "angle = angle0 + max*tanh((c0 + c1*cos(th) + c2*sin(th) + c3*cos(2th) + c4*sin(2th))/max), th = L_t1 crank angle"
+}

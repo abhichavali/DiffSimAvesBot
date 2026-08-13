@@ -29,11 +29,13 @@ import jax.numpy as jnp
 import mujoco
 import mujoco.mjx as mjx
 
-from runtime.mjx.aero import RHO_AIR, AeroParams, aero_wing
-
-OMEGA_DOT_CAP = 5.0e4
-LIN_ACC_CAP = 1.0e3
+from runtime.mjx.aero import RHO_AIR, AeroParams, aero_wing, aero_wing_diagnostics
 from utils.aero.wing_geometry import load_default_wing_geometry
+
+# Match the CPU runtime: quasi-steady by default. set_unsteady_aero(True) opts
+# into the explicit finite-difference added-mass hack for diagnostics.
+OMEGA_DOT_CAP = 0.0
+LIN_ACC_CAP = 0.0
 
 _DEFAULT_SIDES = ("L", "R")
 
@@ -156,6 +158,17 @@ def _wing_qfrc(m, d, cfg: AeroConfig, wing_idx: int, side: str, state: AeroState
         rho=cfg.rho,
         dt=cfg.dt,
     )
+    alpha, speed = aero_wing_diagnostics(
+        omega_local,
+        jnp.zeros(3),
+        vel_local,
+        omega_dot,
+        prev_vel,
+        chords=cfg.chords,
+        length=cfg.length,
+        num_blade=cfg.num_blade,
+        dt=cfg.dt,
+    )
 
     # Rotate strip wrenches root-frame -> world: row i is rot @ f_i  ==  f @ rot.T.
     forces_world = forces_local @ rot.T
@@ -169,7 +182,7 @@ def _wing_qfrc(m, d, cfg: AeroConfig, wing_idx: int, side: str, state: AeroState
         cfg.blade_site_ids[wing_idx], forces_world, torques_world
     ).sum(axis=0)
     net_force_world = forces_world.sum(axis=0)  # (3,) — this wing's net aero force
-    return qfrc, net_force_world, omega_local, vel_local
+    return qfrc, net_force_world, omega_local, vel_local, jnp.max(alpha), jnp.mean(speed)
 
 
 def aero_wrench(m, d, cfg: AeroConfig, state: AeroState):
@@ -179,22 +192,33 @@ def aero_wrench(m, d, cfg: AeroConfig, state: AeroState):
     ``net_force_world`` is the (3,) world-frame aerodynamic force summed over both
     wings — its z-component is the instantaneous aerodynamic **lift**.
     """
+    qfrc, net_force_world, new_state, _alpha, _speed = aero_wrench_with_diagnostics(m, d, cfg, state)
+    return qfrc, net_force_world, new_state
+
+
+def aero_wrench_with_diagnostics(m, d, cfg: AeroConfig, state: AeroState):
+    """Aero wrench plus max folded AoA and mean relative strip speed."""
     qfrc = jnp.zeros_like(d.qvel)
     net_force_world = jnp.zeros(3)
     omegas: list[jax.Array] = []
     vels: list[jax.Array] = []
+    alphas: list[jax.Array] = []
+    speeds: list[jax.Array] = []
     for wing_idx, side in enumerate(cfg.sides):
-        q, fworld, omega_local, vel_local = _wing_qfrc(m, d, cfg, wing_idx, side, state)
+        q, fworld, omega_local, vel_local, alpha, speed = _wing_qfrc(
+            m, d, cfg, wing_idx, side, state)
         qfrc = qfrc + q
         net_force_world = net_force_world + fworld
         omegas.append(omega_local)
         vels.append(vel_local)
+        alphas.append(alpha)
+        speeds.append(speed)
     new_state = AeroState(
         prev_omega_local=jnp.stack(omegas),
         prev_velocity_local=jnp.stack(vels),
         initialized=jnp.ones(()),
     )
-    return qfrc, net_force_world, new_state
+    return qfrc, net_force_world, new_state, jnp.max(jnp.stack(alphas)), jnp.mean(jnp.stack(speeds))
 
 
 def aero_qfrc(m, d, cfg: AeroConfig, state: AeroState):

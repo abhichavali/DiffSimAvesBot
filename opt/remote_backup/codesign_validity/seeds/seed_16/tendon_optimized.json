@@ -1,0 +1,148 @@
+{
+  "pairs": {
+    "L_t1_to_t1_2": {
+      "stiffness": 218.9971466064453,
+      "stiffness_factor": 1.0949856785044991,
+      "pretension_factor": 1.0140722209288078,
+      "rest_length": 0.023692335933446884
+    },
+    "L_t4_2_to_t1": {
+      "stiffness": 207.0705108642578,
+      "stiffness_factor": 1.035352554874438,
+      "pretension_factor": 1.048401771216507,
+      "rest_length": 0.022694217041134834
+    },
+    "L_t1_to_t2_2": {
+      "stiffness": 195.30909729003906,
+      "stiffness_factor": 0.9765454603552604,
+      "pretension_factor": 0.9162562344601682,
+      "rest_length": 0.015663672238588333
+    },
+    "L_t4_2_to_t2": {
+      "stiffness": 248.4313201904297,
+      "stiffness_factor": 1.2421566324815343,
+      "pretension_factor": 0.8924048253448902,
+      "rest_length": 0.01426729466766119
+    },
+    "L_t1_2_to_t3_2": {
+      "stiffness": 264.6194152832031,
+      "stiffness_factor": 1.323097085476258,
+      "pretension_factor": 1.0204357879926442,
+      "rest_length": 0.01685667410492897
+    },
+    "L_t4_to_t3": {
+      "stiffness": 177.7039337158203,
+      "stiffness_factor": 0.8885196780096132,
+      "pretension_factor": 1.1602390474710684,
+      "rest_length": 0.019239263609051704
+    },
+    "L_t1_2_to_t4_2": {
+      "stiffness": 230.967529296875,
+      "stiffness_factor": 1.1548375860671363,
+      "pretension_factor": 1.0679234139835452,
+      "rest_length": 0.023539219051599503
+    },
+    "L_t4_to_t4": {
+      "stiffness": 180.6990203857422,
+      "stiffness_factor": 0.9034951364039777,
+      "pretension_factor": 0.8932495064966414,
+      "rest_length": 0.020536478608846664
+    },
+    "L_t2_to_t1_2": {
+      "stiffness": 170.0038604736328,
+      "stiffness_factor": 0.8500193631846987,
+      "pretension_factor": 0.8016826327921482,
+      "rest_length": 0.014040106907486916
+    },
+    "L_t3_2_to_t1": {
+      "stiffness": 200.14923095703125,
+      "stiffness_factor": 1.0007460729098923,
+      "pretension_factor": 1.0112423684903586,
+      "rest_length": 0.01570304110646248
+    },
+    "L_t2_2_to_t4_2": {
+      "stiffness": 194.88365173339844,
+      "stiffness_factor": 0.9744182123277667,
+      "pretension_factor": 1.0760041082325653,
+      "rest_length": 0.01690085045993328
+    },
+    "L_t3_to_t4": {
+      "stiffness": 217.31300354003906,
+      "stiffness_factor": 1.0865650390683341,
+      "pretension_factor": 0.8893752066485539,
+      "rest_length": 0.015433602966368198
+    },
+    "R_t1_to_t1_2": {
+      "stiffness": 198.07936096191406,
+      "stiffness_factor": 0.9903967924135408,
+      "pretension_factor": 0.9471222798775342,
+      "rest_length": 0.02212814800441265
+    },
+    "R_t4_2_to_t1": {
+      "stiffness": 200.0,
+      "stiffness_factor": 1.0,
+      "pretension_factor": 1.0074371251868952,
+      "rest_length": 0.0218074768781662
+    },
+    "R_t1_to_t2_2": {
+      "stiffness": 184.70684814453125,
+      "stiffness_factor": 0.9235342523276892,
+      "pretension_factor": 1.027833215543964,
+      "rest_length": 0.017571112141013145
+    },
+    "R_t4_2_to_t2": {
+      "stiffness": 209.81988525390625,
+      "stiffness_factor": 1.0490995045647886,
+      "pretension_factor": 0.9094499068577386,
+      "rest_length": 0.014539802446961403
+    },
+    "R_t1_2_to_t3_2": {
+      "stiffness": 223.50099182128906,
+      "stiffness_factor": 1.1175049818830933,
+      "pretension_factor": 0.9744136276602817,
+      "rest_length": 0.016096429899334908
+    },
+    "R_t4_to_t3": {
+      "stiffness": 200.09303283691406,
+      "stiffness_factor": 1.000465200421384,
+      "pretension_factor": 1.1305392999451231,
+      "rest_length": 0.01874677650630474
+    },
+    "R_t1_2_to_t4_2": {
+      "stiffness": 150.82008361816406,
+      "stiffness_factor": 0.7541004539907221,
+      "pretension_factor": 1.1087513061038778,
+      "rest_length": 0.024439148604869843
+    },
+    "R_t4_to_t4": {
+      "stiffness": 178.89053344726562,
+      "stiffness_factor": 0.8944527027464364,
+      "pretension_factor": 1.0362085969719874,
+      "rest_length": 0.023823216557502747
+    },
+    "R_t2_to_t1_2": {
+      "stiffness": 193.12498474121094,
+      "stiffness_factor": 0.965624927309292,
+      "pretension_factor": 1.067447497592636,
+      "rest_length": 0.018694525584578514
+    },
+    "R_t3_2_to_t1": {
+      "stiffness": 196.93284606933594,
+      "stiffness_factor": 0.9846641951800154,
+      "pretension_factor": 0.9469707900867113,
+      "rest_length": 0.014705001376569271
+    },
+    "R_t2_2_to_t4_2": {
+      "stiffness": 215.8944091796875,
+      "stiffness_factor": 1.0794721086984682,
+      "pretension_factor": 0.9188459007395122,
+      "rest_length": 0.014432357624173164
+    },
+    "R_t3_to_t4": {
+      "stiffness": 189.633544921875,
+      "stiffness_factor": 0.9481677570758476,
+      "pretension_factor": 1.1496600793499536,
+      "rest_length": 0.01995040662586689
+    }
+  }
+}

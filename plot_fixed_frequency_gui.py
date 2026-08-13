@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
+import pickle
 import subprocess
 import sys
+import tempfile
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
@@ -22,9 +27,12 @@ from matplotlib.ticker import MultipleLocator
 from compile_tg import compile_tg
 from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
 from morphology.tg_parser import load_morphology
+import runtime.aero_runtime as aero_runtime
 from runtime.aero_runtime import AeroBladeRuntime
-from runtime.control_signal import eval_control, load_control, load_control_for_morphology
+from runtime.control_signal import eval_control, load_control, load_control_for_morphology, ramp_factor
 from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.disk_orientation import DiskOrientation
+from runtime.morphology_runtime import load_design_morphology
 from runtime.viewer_runtime import get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 from runtime.wing_pitch_limit import WingPitchLimiter
@@ -35,16 +43,51 @@ PLOT_ACTUATORS = ("L_motor_t1", "L_motor_t4")
 PLOT_CHOICES = (
     "Left actuator torque vs phase",
     "Left motor tendon tension vs phase",
+    "Angular velocity vs phase",
     "Angular velocity vs time",
     "Structural tendon tension vs phase",
     "Structural tendon displacement vs phase",
     "Structural elastic energy vs phase",
     "Wingtip stroke vs phase (3D)",
+    "Stroke plane deviation vs phase",
     "Mean lift per cycle",
     "Mean lift per half-cycle",
 )
+DEFAULT_PHASE_PLOTS = (
+    "Left actuator torque vs phase",
+    "Mean lift per cycle",
+    "Left motor tendon tension vs phase",
+    "Angular velocity vs phase",
+)
 SETTLE_PERIODS = 3
-FIRST_RECORDED_CYCLE = SETTLE_PERIODS + 1
+_COMPILE_CACHE: dict[tuple[Path, bool], tuple[Path, int]] = {}
+PLOT_CACHE_DIR = Path(__file__).resolve().parent / ".gui_plot_cache"
+
+
+def cached_sim(func, tg_path: Path, scene_path: Path, *args, control_path: Path | None = None,
+               settle_periods: float = SETTLE_PERIODS):
+    """Disk-cache sim results keyed by the design files' mtimes; unchanged designs plot instantly.
+
+    scene_path is excluded from the key: it's a per-pane temp compile target and
+    doesn't affect results.
+    """
+    tg = tg_path.resolve()
+    control = (control_path or coupled_control_path(tg)).resolve()
+    sp_json = tg.parent / "strokeplane_optimized.json"
+    key = (func.__name__, Path(func.__code__.co_filename).stat().st_mtime_ns,
+           str(tg), tg.stat().st_mtime_ns, str(control), control.stat().st_mtime_ns,
+           sp_json.stat().st_mtime_ns if sp_json.exists() else 0, args, settle_periods)
+    cache_file = PLOT_CACHE_DIR / (hashlib.sha1(repr(key).encode()).hexdigest() + ".pkl")
+    if cache_file.exists():
+        try:
+            return pickle.loads(cache_file.read_bytes())
+        except Exception:
+            pass  # corrupt entry: fall through and recompute
+    result = func(tg_path, scene_path, *args, control_path=control_path, settle_periods=settle_periods)
+    PLOT_CACHE_DIR.mkdir(exist_ok=True)
+    cache_file.write_bytes(pickle.dumps(result))
+    # ponytail: entries for old mtimes accumulate; `rm -r .gui_plot_cache` to clear.
+    return result
 
 
 def _short_path(path: str) -> str:
@@ -64,22 +107,68 @@ def coupled_control_path(tg_path: Path) -> Path:
     return control_path
 
 
+def design_tab_title(tg_path: str) -> str:
+    path = Path(tg_path)
+    return path.parent.name if path.name == "shoulder.tg" else path.stem
+
+
+def embed_figure(figure: Figure, master: ttk.Frame, **pack_options) -> FigureCanvasTkAgg:
+    canvas = FigureCanvasTkAgg(figure, master=master)
+    widget = canvas.get_tk_widget()
+    widget.pack(**pack_options)
+    size = None
+
+    def resize_if_needed(event) -> None:
+        nonlocal size
+        new_size = (event.width, event.height)
+        if new_size == size:
+            return
+        size = new_size
+        canvas.resize(event)
+
+    widget.bind("<Configure>", resize_if_needed)
+    canvas.draw()
+    return canvas
+
+
+def prepare_scene(tg_path: Path, scene_path: Path, *, color_structural_tendons: bool = False) -> Path:
+    """Compile only when the selected morphology changed."""
+    tg_path = tg_path.resolve()
+    scene_path = scene_path.resolve()
+    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
+    os.environ["MUJOCO_XML_PATH"] = str(scene_path)
+    load_design_morphology.cache_clear()
+    stamp = (tg_path, tg_path.stat().st_mtime_ns)
+    key = (scene_path, color_structural_tendons)
+    stamp_file = scene_path.with_suffix(scene_path.suffix + (".color.stamp" if color_structural_tendons else ".stamp"))
+    stamp_text = f"{tg_path}\n{stamp[1]}\n{int(color_structural_tendons)}\n"
+    if (
+        _COMPILE_CACHE.get(key) != stamp
+        and (not scene_path.exists() or not stamp_file.exists() or stamp_file.read_text() != stamp_text)
+    ):
+        compile_tg(tg_path, scene_path, color_structural_tendons=color_structural_tendons)
+        stamp_file.write_text(stamp_text)
+        _COMPILE_CACHE[key] = stamp
+    return scene_path
+
+
 def data_by_phase(
     tg_path: Path,
     scene_path: Path,
     periods: float,
     plot_kind: str,
     control_path: Path | None = None,
+    settle_periods: float = SETTLE_PERIODS,
 ) -> tuple[list[float], dict[str, list[float]], str, str, str, dict[str, str]]:
-    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
-    os.environ["MUJOCO_XML_PATH"] = str(scene_path)
-    compile_tg(tg_path, scene_path)
+    is_mean_lift_plot = plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle")
+    prepare_scene(tg_path, scene_path)
 
     morph = load_morphology(tg_path)
     model = mujoco.MjModel.from_xml_path(str(scene_path))
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
+    drive_start = data.time
 
     control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
     period = control.period
@@ -105,18 +194,48 @@ def data_by_phase(
     ]
     tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
 
+    # Optimized designs carry a learned stroke-plane signal (disk-mount tilt/pitch
+    # over crank phase, see optimize_control --tune-strokeplane). When the artifact
+    # sits next to the tg, apply it every step so ALL plots reflect the design.
+    sp_signal = None
+    sp_file = tg_path.parent / "strokeplane_optimized.json"
+    if sp_file.exists():
+        spd = json.loads(sp_file.read_text())
+        _jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, spd["phase_ref_joint"])
+        sp_signal = (DiskOrientation(model), int(model.jnt_qposadr[_jid]),
+                     np.asarray(spd["tilt_coeffs"] + spd["pitch_coeffs"], dtype=float),
+                     float(spd["tilt0_rad"]), float(spd["pitch0_rad"]),
+                     float(spd["max_delta_rad"]))
+
+    def strokeplane_angles() -> tuple[float, float]:
+        _, qadr, coef, tilt0, pitch0, mx = sp_signal
+        th = float(data.qpos[qadr])
+        basis = np.array([1.0, math.cos(th), math.sin(th), math.cos(2.0 * th), math.sin(2.0 * th)])
+        return (tilt0 + mx * math.tanh(float(coef[:5] @ basis) / mx),
+                pitch0 + mx * math.tanh(float(coef[5:] @ basis) / mx))
+
     def step() -> None:
         data.qfrc_applied[:] = 0.0
         data.ctrl[:] = 0.0
-        aero.apply(model, data)
+        caps = (aero_runtime.OMEGA_DOT_CAP, aero_runtime.LIN_ACC_CAP)
+        if is_mean_lift_plot:
+            aero_runtime.OMEGA_DOT_CAP = aero_runtime.LIN_ACC_CAP = 0.0
+        try:
+            aero.apply(model, data)
+        finally:
+            if is_mean_lift_plot:
+                aero_runtime.OMEGA_DOT_CAP, aero_runtime.LIN_ACC_CAP = caps
         pitch.apply(model, data)
-        base_ctrl = morph.motors.motor_direction * eval_control(control, data.time)
+        ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
+        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
         for aid in actuator_ids.values():
             if aid >= 0:
                 data.ctrl[aid] = base_ctrl
+        if sp_signal is not None:
+            sp_signal[0].set(*strokeplane_angles())
         mujoco.mj_step(model, data)
 
-    for _ in range(math.ceil(SETTLE_PERIODS * period / model.opt.timestep)):
+    for _ in range(math.ceil(settle_periods * period / model.opt.timestep)):
         step()
 
     x_values: list[float] = []
@@ -125,9 +244,11 @@ def data_by_phase(
         "Structural tendon displacement vs phase",
     )
     is_wingtip = plot_kind == "Wingtip stroke vs phase (3D)"
+    is_strokeplane = plot_kind == "Stroke plane deviation vs phase"
     names = ["x", "y", "z"] if is_wingtip else (
+        ["tilt", "pitch"] if is_strokeplane else
         ["U_tens"] if plot_kind == "Structural elastic energy vs phase" else
-        ["mean_lift"] if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle") else
+        ["mean_lift"] if is_mean_lift_plot else
         structural_tendon_names if is_structural_plot else list(PLOT_ACTUATORS)
     )
     series = {name: [] for name in names}
@@ -147,11 +268,11 @@ def data_by_phase(
         phase = elapsed * control.fundamental_frequency_hz
         if plot_kind != "Mean lift per cycle":
             x_values.append(elapsed if plot_kind == "Angular velocity vs time" else phase)
-        if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle"):
+        if is_mean_lift_plot:
             if phase >= periods:
                 continue
             lift = sum(float(sum(force[2] for force in (wing.cached_forces or []))) for wing in aero.wings)
-            cycle = int(phase) + FIRST_RECORDED_CYCLE
+            cycle = int(phase) + int(math.floor(settle_periods)) + 1
             key = cycle if plot_kind == "Mean lift per cycle" else cycle + (0.0 if phase % 1.0 < 0.5 else 0.5)
             lift_sums[key] = lift_sums.get(key, 0.0) + 1000.0 * lift
             lift_counts[key] = lift_counts.get(key, 0) + 1
@@ -165,7 +286,7 @@ def data_by_phase(
                 )
                 series[name].append(max(0.0, tension))
             ylabel = "Motor tendon tension (N)"
-        elif plot_kind == "Angular velocity vs time":
+        elif plot_kind in ("Angular velocity vs phase", "Angular velocity vs time"):
             for name, dof in qvel_ids.items():
                 series[name].append(abs(float(data.qvel[dof])))
             ylabel = "|Angular velocity| (rad/s)"
@@ -191,6 +312,15 @@ def data_by_phase(
                 energy += 0.5 * float(model.tendon_stiffness[tid]) * displacement * displacement
             series["U_tens"].append(energy)
             ylabel = "Elastic energy (J)"
+        elif is_strokeplane:
+            if sp_signal is not None:
+                tilt, pitv = strokeplane_angles()
+                dev_t, dev_p = tilt - sp_signal[3], pitv - sp_signal[4]
+            else:  # no learned signal next to this design: flat zero deviation
+                dev_t = dev_p = 0.0
+            series["tilt"].append(math.degrees(dev_t))
+            series["pitch"].append(math.degrees(dev_p))
+            ylabel = "Stroke-plane deviation (deg)"
         elif is_wingtip:
             pos = data.site_xpos[tip_id]
             series["x"].append(1000.0 * float(pos[0]))
@@ -202,7 +332,7 @@ def data_by_phase(
                 series[name].append(1000.0 * float(data.actuator_force[aid]))
             ylabel = "Actuator torque (mN m)"
 
-    if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle"):
+    if is_mean_lift_plot:
         x_values = sorted(lift_sums)
         series["mean_lift"] = [lift_sums[key] / lift_counts[key] for key in x_values]
 
@@ -218,7 +348,7 @@ def data_by_phase(
         series[f"|3D| (max {mag.max():.1f} mm)"] = mag.tolist()
 
     xlabel = "Crank phase (cycles)"
-    if plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle"):
+    if is_mean_lift_plot:
         xlabel = "Cycle"
     elif plot_kind == "Angular velocity vs time":
         xlabel = "Time (s)"
@@ -229,12 +359,14 @@ def actuator_torque_by_phase(
     tg_path: Path,
     scene_path: Path,
     periods: float,
+    settle_periods: float = SETTLE_PERIODS,
 ) -> tuple[list[float], dict[str, list[float]]]:
     phases, series, _title, _xlabel, _ylabel, _colors = data_by_phase(
         tg_path,
         scene_path,
         periods,
         "Left actuator torque vs phase",
+        settle_periods=settle_periods,
     )
     return phases, series
 
@@ -274,18 +406,32 @@ def structural_tendons(model: mujoco.MjModel) -> tuple[list[int], list[str]]:
     return tendon_ids, names
 
 
+def structural_tendon_stiffness_rows(tg_path: Path, scene_path: Path) -> list[tuple[str, str, float]]:
+    """Return (color, tendon name, stiffness) for the left color-coded structural tendons."""
+    prepare_scene(tg_path, scene_path, color_structural_tendons=True)
+    model = mujoco.MjModel.from_xml_path(str(scene_path))
+    tendon_ids, names = structural_tendons(model)
+    return [
+        (STRUCTURAL_TENDON_COLORS[i], name, float(model.tendon_stiffness[tid]))
+        for i, (tid, name) in enumerate(zip(tendon_ids, names))
+    ]
+
+
 def work_loop_data(
-    tg_path: Path, scene_path: Path, periods: float, control_path: Path | None = None
+    tg_path: Path,
+    scene_path: Path,
+    periods: float,
+    control_path: Path | None = None,
+    settle_periods: float = SETTLE_PERIODS,
 ) -> dict[str, object]:
-    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
-    os.environ["MUJOCO_XML_PATH"] = str(scene_path)
-    compile_tg(tg_path, scene_path)
+    prepare_scene(tg_path, scene_path)
 
     morph = load_morphology(tg_path)
     model = mujoco.MjModel.from_xml_path(str(scene_path))
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
+    drive_start = data.time
 
     control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
     aero = AeroBladeRuntime(model)
@@ -302,13 +448,14 @@ def work_loop_data(
         data.ctrl[:] = 0.0
         aero.apply(model, data)
         pitch.apply(model, data)
-        base_ctrl = morph.motors.motor_direction * eval_control(control, data.time)
+        ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
+        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
         for aid in actuator_ids.values():
             if aid >= 0:
                 data.ctrl[aid] = base_ctrl
         mujoco.mj_step(model, data)
 
-    for _ in range(math.ceil(SETTLE_PERIODS * control.period / model.opt.timestep)):
+    for _ in range(math.ceil(settle_periods * control.period / model.opt.timestep)):
         step()
 
     shaft_loops = {
@@ -323,12 +470,11 @@ def work_loop_data(
         name: {"x": [], "y": [], "color": STRUCTURAL_TENDON_COLORS[i]}
         for i, name in enumerate(structural_names)
     }
-    wing_loop = {"x": [], "y": [], "color": "#2ca02c"}
+    wing_loops = {
+        "Downstroke motor (orange)": {"x": [], "y": [], "color": "#ff7f0e"},
+        "Upstroke motor (blue)": {"x": [], "y": [], "color": "#1f77b4"},
+    }
 
-    l_body_jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "L_part_1_freejoint")
-    if l_body_jid < 0:
-        raise ValueError("Missing joint: L_part_1_freejoint")
-    flap_dof = int(model.jnt_dofadr[l_body_jid]) + 5
     start_yaw = body_yaw(model, data, "L_part_1")
     previous_yaw = start_yaw
     unwrapped_yaw = start_yaw
@@ -364,15 +510,18 @@ def work_loop_data(
             delta += 2.0 * math.pi
         unwrapped_yaw += delta
         previous_yaw = yaw
-        wing_loop["x"].append(math.degrees(unwrapped_yaw - start_yaw))
-        wing_loop["y"].append(1000.0 * float(data.qfrc_passive[flap_dof]))
+        wing_angle = math.degrees(unwrapped_yaw - start_yaw)
+        wing_loops["Downstroke motor (orange)"]["x"].append(wing_angle)
+        wing_loops["Downstroke motor (orange)"]["y"].append(1000.0 * float(data.actuator_force[actuator_ids["L_motor_t4"]]))
+        wing_loops["Upstroke motor (blue)"]["x"].append(wing_angle)
+        wing_loops["Upstroke motor (blue)"]["y"].append(1000.0 * float(data.actuator_force[actuator_ids["L_motor_t1"]]))
 
     return {
         "control_frequency_hz": control.fundamental_frequency_hz,
         "shaft_loops": shaft_loops,
         "motor_tendon_loops": motor_tendon_loops,
         "structural_loops": structural_loops,
-        "wing_loop": wing_loop,
+        "wing_loops": wing_loops,
     }
 
 
@@ -380,18 +529,21 @@ WINGTIP_SITE = "L_wing_aero_blade_04"
 
 
 def wing_path_data(
-    tg_path: Path, scene_path: Path, periods: float, control_path: Path | None = None
+    tg_path: Path,
+    scene_path: Path,
+    periods: float,
+    control_path: Path | None = None,
+    settle_periods: float = SETTLE_PERIODS,
 ) -> dict[str, list[float]]:
     """Record the wingtip site's 3D world trajectory (mm) over `periods` cycles."""
-    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
-    os.environ["MUJOCO_XML_PATH"] = str(scene_path)
-    compile_tg(tg_path, scene_path)
+    prepare_scene(tg_path, scene_path)
 
     morph = load_morphology(tg_path)
     model = mujoco.MjModel.from_xml_path(str(scene_path))
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
+    drive_start = data.time
 
     control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
     aero = AeroBladeRuntime(model)
@@ -406,13 +558,14 @@ def wing_path_data(
         data.ctrl[:] = 0.0
         aero.apply(model, data)
         pitch.apply(model, data)
-        base_ctrl = morph.motors.motor_direction * eval_control(control, data.time)
+        ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
+        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
         for aid in actuator_ids.values():
             if aid >= 0:
                 data.ctrl[aid] = base_ctrl
         mujoco.mj_step(model, data)
 
-    for _ in range(math.ceil(SETTLE_PERIODS * control.period / model.opt.timestep)):
+    for _ in range(math.ceil(settle_periods * control.period / model.opt.timestep)):
         step()
 
     path: dict[str, list[float]] = {"phase": [], "x": [], "y": [], "z": []}
@@ -447,24 +600,23 @@ def wing_path_correlation(
     return corr(pa.ravel(), pb.ravel()), per_axis
 
 
-class PlotGui:
-    def __init__(self) -> None:
-        self.root = tk.Tk()
-        self.root.title("DiffSim Aves Plots")
-        self.root.attributes("-fullscreen", True)
-        self.root.bind("<Escape>", lambda _event: self.root.attributes("-fullscreen", False))
-        self.root.bind("<Command-r>", lambda _event: self.reload_design())
-        self.root.bind("<Command-R>", lambda _event: self.reload_design())
-        self.root.bind("<Command-u>", lambda _event: self.update_phase_plots())
-        self.root.bind("<Command-U>", lambda _event: self.update_phase_plots())
-        menu = tk.Menu(self.root)
-        file_menu = tk.Menu(menu, tearoff=False)
-        file_menu.add_command(label="Reload files", accelerator="Cmd-R", command=self.reload_design)
-        file_menu.add_command(label="Update phase plots", accelerator="Cmd-U", command=self.update_phase_plots)
-        menu.add_cascade(label="File", menu=file_menu)
-        self.root.config(menu=menu)
+class DesignPane:
+    def __init__(
+        self,
+        root: tk.Tk,
+        parent: ttk.Frame,
+        status: tk.StringVar,
+        default_tg: Path,
+        on_title_change: Callable[[str], None],
+    ) -> None:
+        self.root = root
+        self.status = status
+        self.on_title_change = on_title_change
+        self.scene_dir = Path(tempfile.mkdtemp(prefix="diffsim_gui_", dir="/private/tmp"))
+        self.scene_path = self.scene_dir / "scene.xml"
+        self.tendon_scene_path = self.scene_dir / "scene_tendons.xml"
+        self.viewer_scene_path = self.scene_dir / "scene_viewer.xml"
 
-        default_tg = ROOT / "design" / "baseline_shoulder.tg"
         self.tg_var = tk.StringVar(value=str(default_tg))
         self.control_var = tk.StringVar(value=str(coupled_control_path(default_tg)))
         self.tg_display = tk.StringVar()
@@ -474,10 +626,9 @@ class PlotGui:
         self.tg_display.set(_short_path(self.tg_var.get()))
         self.control_display.set(_short_path(self.control_var.get()))
 
-        self.status = tk.StringVar(value="Ready")
-        ttk.Label(self.root, textvariable=self.status, padding=(8, 0, 8, 8)).pack(side=tk.TOP, anchor=tk.W)
+        self.settle_periods = tk.DoubleVar(value=float(SETTLE_PERIODS))
 
-        self.tabs = ttk.Notebook(self.root)
+        self.tabs = ttk.Notebook(parent)
         self.tabs.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         self.plot_tab = ttk.Frame(self.tabs)
@@ -506,7 +657,8 @@ class PlotGui:
         self.slots: list[ttk.Frame] = []
         self.slot_controls: dict[ttk.Frame, tuple[ttk.Combobox, tk.DoubleVar, ttk.Button]] = {}
         self.plotted_slots: set[ttk.Frame] = set()
-        self.add_prompt()
+        for plot_kind in DEFAULT_PHASE_PLOTS:
+            self.add_prompt(plot_kind)
         self.build_work_tab()
 
     def build_wing_path_tab(self) -> None:
@@ -532,11 +684,19 @@ class PlotGui:
         if periods <= 0:
             self.status.set("Periods must be positive.")
             return
+        settle_periods = self.get_settle_periods()
+        if settle_periods is None:
+            return
         self.status.set(f"Tracing wing path {slot}...")
         self.root.update_idletasks()
         try:
-            path = wing_path_data(
-                Path(self.tg_var.get()), ROOT / "scene.xml", periods, Path(self.control_var.get())
+            path = cached_sim(
+                wing_path_data,
+                Path(self.tg_var.get()),
+                self.scene_path,
+                periods,
+                control_path=Path(self.control_var.get()),
+                settle_periods=settle_periods,
             )
         except Exception as exc:
             self.status.set(f"Error: {exc}")
@@ -567,9 +727,7 @@ class PlotGui:
             axes = ", ".join(f"{k}={v:+.3f}" for k, v in per_axis.items())
             self.wing_corr.set(f"Path correlation A↔B: overall {overall:+.3f}   (per axis: {axes})")
 
-        canvas = FigureCanvasTkAgg(figure, master=self.wing_path_plot)
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        canvas.draw()
+        embed_figure(figure, self.wing_path_plot, side=tk.TOP, fill=tk.BOTH, expand=True)
 
     def build_viewer_tab(self) -> None:
         self.viewer_color = tk.BooleanVar(value=False)
@@ -607,10 +765,10 @@ class PlotGui:
             launcher = str(mjpython)
         cmd = [
             launcher,
-            str(ROOT / "view_fixed_frequency.py"),
+            str(ROOT / "src" / "view_fixed_frequency.py"),
             "--tg", self.tg_var.get(),
             "--control", self.control_var.get(),
-            "--scene", str(ROOT / "scene_viewer.xml"),
+            "--scene", str(self.viewer_scene_path),
             "--speed", str(float(self.viewer_speed.get())),
         ]
         if self.viewer_color.get():
@@ -635,6 +793,8 @@ class PlotGui:
         ttk.Button(bar, text="Control…", width=13, command=self.choose_control).grid(row=1, column=0, sticky="w", pady=(8, 0))
         ttk.Label(bar, text="control").grid(row=1, column=1, padx=(10, 8), pady=(8, 0))
         ttk.Label(bar, textvariable=self.control_display).grid(row=1, column=2, sticky="w", pady=(8, 0))
+        ttk.Label(bar, text="settle periods").grid(row=2, column=1, padx=(10, 8), pady=(8, 0))
+        ttk.Entry(bar, textvariable=self.settle_periods, width=8).grid(row=2, column=2, sticky="w", pady=(8, 0))
         ttk.Label(
             self.settings_tab,
             text="Picking a morphology loads its coupled control automatically. "
@@ -642,6 +802,37 @@ class PlotGui:
             wraplength=720,
             justify=tk.LEFT,
         ).pack(side=tk.TOP, anchor=tk.W, padx=12)
+        self.tendon_table = ttk.LabelFrame(
+            self.settings_tab,
+            text="Color-coded structural tendon stiffness",
+            padding=(12, 10),
+        )
+        self.tendon_table.pack(side=tk.TOP, fill=tk.X, padx=12, pady=12)
+        self.refresh_tendon_table()
+
+    def refresh_tendon_table(self) -> None:
+        for child in self.tendon_table.winfo_children():
+            child.destroy()
+        try:
+            rows = structural_tendon_stiffness_rows(
+                Path(self.tg_var.get()),
+                self.tendon_scene_path,
+            )
+        except Exception as exc:
+            ttk.Label(self.tendon_table, text=f"Unable to load tendon stiffness: {exc}").grid(
+                row=0, column=0, sticky="w"
+            )
+            return
+
+        ttk.Label(self.tendon_table, text="").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.tendon_table, text="Tendon").grid(row=0, column=1, sticky="w", padx=(6, 16))
+        ttk.Label(self.tendon_table, text="Stiffness (N/m)").grid(row=0, column=2, sticky="e")
+        for row, (color, name, stiffness) in enumerate(rows, start=1):
+            tk.Label(self.tendon_table, text="  ", bg=color, width=2).grid(row=row, column=0, sticky="w", pady=1)
+            ttk.Label(self.tendon_table, text=name.removeprefix("L_")).grid(
+                row=row, column=1, sticky="w", padx=(6, 16), pady=1
+            )
+            ttk.Label(self.tendon_table, text=f"{stiffness:g}").grid(row=row, column=2, sticky="e", pady=1)
 
     def choose_morphology(self) -> None:
         path = filedialog.askopenfilename(
@@ -654,6 +845,8 @@ class PlotGui:
         self.tg_var.set(path)
         try:
             self.control_var.set(str(coupled_control_path(Path(path))))
+            self.refresh_tendon_table()
+            self.on_title_change(design_tab_title(path))
             self.status.set(f"Design: {Path(path).name} (coupled control loaded)")
         except Exception as exc:
             self.status.set(f"Loaded morphology, but couldn't resolve coupled control: {exc}")
@@ -675,7 +868,8 @@ class PlotGui:
         self.root.update_idletasks()
         try:
             load_control(control_path)
-            compile_tg(tg_path, ROOT / "scene.xml")
+            prepare_scene(tg_path, self.scene_path)
+            self.refresh_tendon_table()
             if self.viewer_proc and self.viewer_proc.poll() is None:
                 self.viewer_proc.terminate()
                 self.viewer_proc = None
@@ -686,7 +880,18 @@ class PlotGui:
             self.status.set(f"Reload failed: {exc}")
             raise
 
-    def add_prompt(self) -> None:
+    def get_settle_periods(self) -> float | None:
+        try:
+            settle_periods = float(self.settle_periods.get())
+        except (tk.TclError, ValueError):
+            self.status.set("Settle periods must be a number.")
+            return None
+        if settle_periods < 0:
+            self.status.set("Settle periods must be non-negative.")
+            return None
+        return settle_periods
+
+    def add_prompt(self, default_plot: str | None = None) -> None:
         if len(self.slots) >= 4:
             return
 
@@ -700,7 +905,7 @@ class PlotGui:
 
         ttk.Label(controls, text="Plot").pack(side=tk.LEFT)
         plot_choice = ttk.Combobox(controls, values=PLOT_CHOICES, state="readonly", width=36)
-        plot_choice.current(0)
+        plot_choice.current(PLOT_CHOICES.index(default_plot) if default_plot in PLOT_CHOICES else 0)
         plot_choice.pack(side=tk.LEFT, padx=(6, 12))
 
         ttk.Label(controls, text="Periods").pack(side=tk.LEFT)
@@ -717,12 +922,31 @@ class PlotGui:
 
     def update_phase_plots(self) -> None:
         self.reload_design()
-        plotted = [frame for frame in self.slots if frame in self.plotted_slots]
-        if not plotted:
-            return
-        for frame in plotted:
+        while len(self.slots) < len(DEFAULT_PHASE_PLOTS):
+            self.add_prompt(DEFAULT_PHASE_PLOTS[len(self.slots)])
+        errors = []
+        for frame in list(self.slots):
             plot_choice, periods, button = self.slot_controls[frame]
-            self.plot_in_slot(frame, plot_choice, periods, button)
+            try:
+                self.plot_in_slot(frame, plot_choice, periods, button)
+            except Exception as exc:
+                errors.append(f"{plot_choice.get()}: {exc}")
+        if errors:
+            self.status.set("Plot errors — " + "; ".join(errors))
+
+    def update_current_tab_graphs(self) -> None:
+        selected = self.tabs.select()
+        if selected == str(self.work_tab):
+            self.plot_work_loops()
+        elif selected == str(self.wing_path_tab):
+            slots = list(self.wing_paths) or ["A"]
+            for slot in slots:
+                self.capture_wing_path(slot)
+        else:
+            # Viewer/Settings (where fresh tabs usually sit) have no graphs of
+            # their own: jump to phase plots so Cmd+U always visibly does something.
+            self.tabs.select(self.plot_tab)
+            self.update_phase_plots()
 
     def plot_in_slot(
         self,
@@ -735,17 +959,22 @@ class PlotGui:
         if periods <= 0:
             self.status.set("Periods must be positive.")
             return
+        settle_periods = self.get_settle_periods()
+        if settle_periods is None:
+            return
 
         button.configure(state=tk.DISABLED)
         self.status.set("Running simulation...")
         self.root.update_idletasks()
         try:
-            x_values, series, title, xlabel, ylabel, colors = data_by_phase(
+            x_values, series, title, xlabel, ylabel, colors = cached_sim(
+                data_by_phase,
                 Path(self.tg_var.get()),
-                ROOT / "scene.xml",
+                self.scene_path,
                 periods,
                 plot_choice.get(),
-                Path(self.control_var.get()),
+                control_path=Path(self.control_var.get()),
+                settle_periods=settle_periods,
             )
         except Exception as exc:
             self.status.set(f"Error: {exc}")
@@ -777,13 +1006,18 @@ class PlotGui:
                 if colors:
                     line.set_visible(False)
                 lines[name] = line
+        if title == "Left actuator torque vs phase":
+            peak = max((max(map(abs, v)) for v in series.values() if v), default=0.0)
+            title = f"{title} — peak {peak:.1f} mN·m"
         ax.set_title(title)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
-        if title == "Angular velocity vs time":
+        if title in ("Angular velocity vs phase", "Angular velocity vs time"):
             vmax = max((max(values) for values in series.values() if values), default=0.0)
             ax.set_ylim(0.0, max(35.0, math.ceil(vmax / 5.0) * 5.0))
             ax.yaxis.set_major_locator(MultipleLocator(5.0))
+            if title == "Angular velocity vs time":
+                ax.set_xlim(50.0, 75.0)
         ax.grid(True, alpha=0.3)
 
         def update_legend() -> None:
@@ -799,9 +1033,7 @@ class PlotGui:
         elif lines:
             ax.legend()
 
-        canvas = FigureCanvasTkAgg(figure, master=plot_area)
-        canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        canvas.draw()
+        canvas = embed_figure(figure, plot_area, side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         if colors:
             toggles = ttk.Frame(plot_area, padding=(8, 0, 0, 0))
@@ -831,7 +1063,7 @@ class PlotGui:
         control = load_control(Path(self.control_var.get()))
         self.status.set(
             f"Plotted {periods:g} periods at control f0 {control.fundamental_frequency_hz:g} Hz, "
-            f"after {SETTLE_PERIODS} settle periods."
+            f"after {settle_periods:g} settle periods."
         )
 
     def build_work_tab(self) -> None:
@@ -856,7 +1088,7 @@ class PlotGui:
         self.work_sets.add(self.shaft_frame, text="Motor shafts")
         self.work_sets.add(self.motor_tendon_frame, text="Motor tendons")
         self.work_sets.add(self.structural_frame, text="Passive tendons")
-        self.work_sets.add(self.wing_frame, text="Wing output")
+        self.work_sets.add(self.wing_frame, text="Wing angle vs motor torque")
 
     def clear_frame(self, frame: ttk.Frame) -> None:
         for child in frame.winfo_children():
@@ -883,9 +1115,7 @@ class PlotGui:
         ax.set_ylabel(ylabel)
         ax.grid(True, alpha=0.3)
 
-        canvas = FigureCanvasTkAgg(figure, master=frame)
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        canvas.draw()
+        embed_figure(figure, frame, side=tk.TOP, fill=tk.BOTH, expand=True)
 
     def plot_structural_work_loops(self, loops: dict[str, dict[str, object]]) -> None:
         plot_area = ttk.Frame(self.structural_frame)
@@ -911,9 +1141,7 @@ class PlotGui:
             if visible_lines:
                 ax.legend(visible_lines, [line.get_label() for line in visible_lines])
 
-        canvas = FigureCanvasTkAgg(figure, master=plot_area)
-        canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        canvas.draw()
+        canvas = embed_figure(figure, plot_area, side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         toggles = ttk.Frame(plot_area, padding=(8, 0, 0, 0))
         toggles.pack(side=tk.RIGHT, fill=tk.Y)
@@ -941,13 +1169,21 @@ class PlotGui:
         if periods <= 0:
             self.status.set("Periods must be positive.")
             return
+        settle_periods = self.get_settle_periods()
+        if settle_periods is None:
+            return
 
         self.work_button.configure(state=tk.DISABLED)
         self.status.set("Running work-loop simulation...")
         self.root.update_idletasks()
         try:
-            data = work_loop_data(
-                Path(self.tg_var.get()), ROOT / "scene.xml", periods, Path(self.control_var.get())
+            data = cached_sim(
+                work_loop_data,
+                Path(self.tg_var.get()),
+                self.scene_path,
+                periods,
+                control_path=Path(self.control_var.get()),
+                settle_periods=settle_periods,
             )
         except Exception as exc:
             self.status.set(f"Error: {exc}")
@@ -958,7 +1194,7 @@ class PlotGui:
         for frame in (self.shaft_frame, self.motor_tendon_frame, self.structural_frame, self.wing_frame):
             self.clear_frame(frame)
 
-        for frame in (self.shaft_frame, self.motor_tendon_frame):
+        for frame in (self.shaft_frame, self.motor_tendon_frame, self.wing_frame):
             frame.columnconfigure(0, weight=1)
             frame.columnconfigure(1, weight=1)
             frame.rowconfigure(0, weight=1)
@@ -1004,22 +1240,111 @@ class PlotGui:
         )
 
         self.plot_structural_work_loops(data["structural_loops"])
+        wing_loops = data["wing_loops"]
         self.plot_single_loop(
             self.wing_frame,
-            data["wing_loop"],
-            "Wing output loop",
-            "Wing stroke angle theta_w (deg)",
-            "Tensegrity generalized torque (mN m)",
+            wing_loops["Downstroke motor (orange)"],
+            "Downstroke motor torque vs wing angle",
+            "Wing angle (deg)",
+            "Motor torque (mN m)",
             0,
             0,
         )
-        self.wing_frame.columnconfigure(0, weight=1)
-        self.wing_frame.rowconfigure(0, weight=1)
+        self.plot_single_loop(
+            self.wing_frame,
+            wing_loops["Upstroke motor (blue)"],
+            "Upstroke motor torque vs wing angle",
+            "Wing angle (deg)",
+            "Motor torque (mN m)",
+            0,
+            1,
+        )
 
         self.status.set(
             f"Plotted work loops for {periods:g} periods at control f0 "
-            f"{data['control_frequency_hz']:g} Hz, after {SETTLE_PERIODS} settle periods."
+            f"{data['control_frequency_hz']:g} Hz, after {settle_periods:g} settle periods."
         )
+
+class PlotGui:
+    def __init__(self) -> None:
+        self.root = tk.Tk()
+        self.root.title("DiffSim Aves Plots")
+        self.root.attributes("-fullscreen", True)
+        self.root.bind("<Escape>", lambda _event: self.root.attributes("-fullscreen", False))
+        self.root.bind_all("<Command-r>", lambda _event: self.reload_design())
+        self.root.bind_all("<Command-R>", lambda _event: self.reload_design())
+        self.root.bind_all("<Command-t>", lambda _event: self.add_design_tab())
+        self.root.bind_all("<Command-T>", lambda _event: self.add_design_tab())
+        self.root.bind_all("<Command-u>", lambda _event: self.update_current_tab_graphs())
+        self.root.bind_all("<Command-U>", lambda _event: self.update_current_tab_graphs())
+
+        menu = tk.Menu(self.root)
+        file_menu = tk.Menu(menu, tearoff=False)
+        file_menu.add_command(label="New morphology tab", accelerator="Cmd-T", command=self.add_design_tab)
+        file_menu.add_command(label="Reload current tab", accelerator="Cmd-R", command=self.reload_design)
+        file_menu.add_command(label="Update current tab graphs", accelerator="Cmd-U", command=self.update_current_tab_graphs)
+        menu.add_cascade(label="File", menu=file_menu)
+        self.root.config(menu=menu)
+
+        self.status = tk.StringVar(value="Ready")
+        ttk.Label(self.root, textvariable=self.status, padding=(8, 0, 8, 8)).pack(side=tk.TOP, anchor=tk.W)
+
+        self.design_tabs = ttk.Notebook(self.root)
+        self.design_tabs.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.panes: dict[str, DesignPane] = {}
+
+        self.add_design_tab(ROOT / "design" / "baseline_shoulder.tg", select=True)
+
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+    def active_pane(self) -> DesignPane | None:
+        selected = self.design_tabs.select()
+        return self.panes.get(selected) if selected else None
+
+    def add_design_tab(self, tg_path: Path | None = None, *, select: bool = True) -> None:
+        active = self.active_pane()
+        if tg_path is None:
+            initial = Path(active.tg_var.get()).parent if active else ROOT / "flight-orientations"
+            path = filedialog.askopenfilename(
+                title="Select morphology for new tab",
+                initialdir=str(initial),
+                filetypes=[("Tensegrity morphology", "*.tg")],
+            )
+            if not path:
+                return
+            tg_path = Path(path)
+        default_tg = tg_path
+        frame = ttk.Frame(self.design_tabs)
+
+        def rename(title: str, frame: ttk.Frame = frame) -> None:
+            self.design_tabs.tab(frame, text=title)
+
+        pane = DesignPane(self.root, frame, self.status, default_tg, rename)
+        self.panes[str(frame)] = pane
+        self.design_tabs.add(frame, text=design_tab_title(str(default_tg)))
+        if select:
+            self.design_tabs.select(frame)
+
+    def reload_design(self) -> None:
+        pane = self.active_pane()
+        if pane:
+            pane.reload_design()
+
+    def update_phase_plots(self) -> None:
+        pane = self.active_pane()
+        if pane:
+            pane.update_phase_plots()
+
+    def update_current_tab_graphs(self) -> None:
+        pane = self.active_pane()
+        if pane:
+            pane.update_current_tab_graphs()
+
+    def close(self) -> None:
+        for pane in self.panes.values():
+            if pane.viewer_proc and pane.viewer_proc.poll() is None:
+                pane.viewer_proc.terminate()
+        self.root.destroy()
 
     def run(self) -> None:
         self.root.mainloop()

@@ -217,6 +217,35 @@ def aero_strip(
     return force, torque
 
 
+def aero_strip_diagnostics(
+    omega_w: jax.Array,
+    omega_b: jax.Array,
+    vel_h: jax.Array,
+    omega_w_d: jax.Array,
+    vel_h_prev: jax.Array,
+    span_fraction: jax.Array,
+    chord: jax.Array,
+    *,
+    length: float,
+    dt: float,
+) -> tuple[jax.Array, jax.Array]:
+    """Folded angle of attack and local speed for one blade strip."""
+    del chord
+    rle = -span_fraction * length
+    lever = jnp.stack([jnp.zeros_like(rle), rle, jnp.zeros_like(rle)])
+    vle = jnp.cross(omega_w + omega_b, lever) + vel_h
+    vle = vle.at[1].set(0.0)
+    omega_wLI = omega_w - omega_w_d * dt
+    vleLI = jnp.cross(omega_wLI + omega_b, lever) + vel_h_prev
+    vleLI = vleLI.at[1].set(0.0)
+    del vleLI
+    norm_v = jnp.linalg.norm(vle)
+    denom = jnp.where(norm_v > 0.0, norm_v, 1.0)
+    dir_vle = jnp.where(norm_v > 0.0, vle / denom, jnp.zeros(3))
+    alpha = jnp.arctan2(jnp.abs(dir_vle[0]), jnp.abs(dir_vle[2]))
+    return alpha, norm_v
+
+
 def aero_wing(
     omega_w: jax.Array,
     omega_b: jax.Array,
@@ -258,5 +287,28 @@ def aero_wing(
             rho=rho,
             dt=dt,
         )
+
+    return jax.vmap(strip)(span_fracs, chords)
+
+
+def aero_wing_diagnostics(
+    omega_w: jax.Array,
+    omega_b: jax.Array,
+    vel_h: jax.Array,
+    omega_w_d: jax.Array,
+    vel_h_prev: jax.Array,
+    *,
+    chords: jax.Array,
+    length: float,
+    num_blade: int,
+    dt: float,
+) -> tuple[jax.Array, jax.Array]:
+    """Per-strip folded AoA and relative speed."""
+    span_fracs = (jnp.arange(num_blade, dtype=chords.dtype) + 0.5) / num_blade
+
+    def strip(span_fraction, chord):
+        return aero_strip_diagnostics(
+            omega_w, omega_b, vel_h, omega_w_d, vel_h_prev, span_fraction, chord,
+            length=length, dt=dt)
 
     return jax.vmap(strip)(span_fracs, chords)

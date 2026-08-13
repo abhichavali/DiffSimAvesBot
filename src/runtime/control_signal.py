@@ -59,6 +59,18 @@ def load_control(path: Path) -> FourierControl:
     )
 
 
+def ramp_factor(t: float, t0: float, ramp_seconds: float) -> float:
+    """Linear 0->1 drive ramp over ``ramp_seconds`` from ``t0`` (1.0 after, or if ramp<=0).
+
+    The motors are velocity servos: commanding full a0 onto the near-zero-inertia
+    crank disks from rest is a step input that spikes qacc ~6e5 and can diverge the
+    0.13 ms step. Ramping the command over the warmup kills that startup transient.
+    """
+    if ramp_seconds <= 0:
+        return 1.0
+    return min(1.0, max(0.0, (t - t0) / ramp_seconds))
+
+
 def eval_control(control: FourierControl, t: float) -> float:
     phase = control.omega * t
     value = control.a0

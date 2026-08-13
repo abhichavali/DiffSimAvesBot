@@ -1,0 +1,19 @@
+# fundamental_frequency is the phase/cycle reference for the plots, not the drive
+# (a0 is the velocity command). Hand-tuned: a0 63 -> 67 rad/s buys back lift lost
+# to the softened structural tendons (shoulder.tg) at ~+1 mNm peak torque; the
+# disk settles at ~10.65 Hz under load. Harmonics stay zero: every tested 1st/2nd
+# harmonic phase raised peak torque and/or torque swing (the velocity servo pays
+# inertial torque to modulate the crank within the cycle).
+harmonics = 5
+fundamental_frequency = 10.65 Hz
+a0 = 67
+a_1 = 0
+b_1 = 0
+a_2 = 0
+b_2 = 0
+a_3 = 0
+b_3 = 0
+a_4 = 0
+b_4 = 0
+a_5 = 0
+b_5 = 0

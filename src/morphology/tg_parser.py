@@ -45,6 +45,7 @@ _EDGE_RE = re.compile(
     r"^([MF])\[(\d+)([AB])\]\s*--\s*([MF])\[(\d+)([AB])\]"
     r"(?:\s*\{([^}]*)\})?\s*$"
 )
+_TENDON_OVERRIDE_RE = re.compile(r"^([LR]_[A-Za-z0-9_]+_to_[A-Za-z0-9_]+)\s*\{([^}]*)\}\s*$")
 _DRIVE_RE = re.compile(r"^drive\s+M\[(\d+)\]\s+and\s+M\[(\d+)\]\s*$", re.I)
 _ASSIGN_RE = re.compile(r"^(\w+)\s*=\s*(.+)$")
 _BOOL = {"on": True, "off": False, "true": True, "false": False}
@@ -204,6 +205,7 @@ class _TgParser:
         self.tendon_defaults: Dict[str, Any] = {}
         self.generators: List[TendonGenerator] = []
         self.edge_overrides: Dict[str, TendonMaterial] = {}
+        self.individual_overrides: Dict[str, TendonMaterial] = {}
         self.disk: Dict[str, Any] = {}
         self.motor_feet: Tuple[int, int] = (1, 4)
         self.attach_along_edge = 1.2
@@ -354,6 +356,14 @@ class _TgParser:
                     self.edge_overrides[edge_id] = material
                 else:
                     self.generators.append(gen)
+                continue
+
+            tendon_override = _TENDON_OVERRIDE_RE.match(line)
+            if tendon_override and in_overrides:
+                name, mat_text = tendon_override.groups()
+                self.individual_overrides[name] = _parse_material_dict(
+                    _parse_brace_dict("{" + mat_text + "}")
+                )
                 continue
 
             raise ValueError(f"Unrecognized tendon line: {line}")
@@ -553,6 +563,7 @@ class _TgParser:
                 ),
                 generators=tuple(self.generators),
                 edge_overrides=dict(self.edge_overrides),
+                individual_overrides=dict(self.individual_overrides),
             ),
             motors=Motors(
                 disk=DiskSpec(

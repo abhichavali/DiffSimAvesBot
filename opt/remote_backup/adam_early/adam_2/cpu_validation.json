@@ -1,0 +1,52 @@
+{
+  "baseline": {
+    "cpu_euler_lift_N": 0.3797713439548359,
+    "cpu_euler_peak_Nm": 0.21568507332619902,
+    "cpu_robust_peak_Nm": 0.21606680699488834
+  },
+  "mjx_best": {
+    "mjx": {
+      "tau_hat": 0.16854004561901093,
+      "swing": 0.04087202996015549,
+      "Lbar": 0.39760008454322815
+    },
+    "cpu": {
+      "euler": {
+        "mean_lift_N": 0.39810379578123667,
+        "peak_torque_Nm": 0.19733114255917883,
+        "supplied_power_W": 23.649766344379586
+      },
+      "implicitfast": {
+        "mean_lift_N": 0.396847603326962,
+        "peak_torque_Nm": 0.19262115914713718,
+        "supplied_power_W": 23.852182246064928
+      },
+      "rk4": {
+        "mean_lift_N": 0.39887905551391967,
+        "peak_torque_Nm": 0.20486970106956903,
+        "supplied_power_W": 23.537659438380967
+      }
+    }
+  },
+  "cpu_best": {
+    "robust_peak_Nm": 0.21606680699488834,
+    "cpu_gap": 0.01910343313734785,
+    "cpu": {
+      "euler": {
+        "mean_lift_N": 0.3817315635833851,
+        "peak_torque_Nm": 0.21568507332619902,
+        "supplied_power_W": 23.010609602113625
+      },
+      "implicitfast": {
+        "mean_lift_N": 0.3797713439548359,
+        "peak_torque_Nm": 0.21273471712906655,
+        "supplied_power_W": 22.967253303003663
+      },
+      "rk4": {
+        "mean_lift_N": 0.38256503416831905,
+        "peak_torque_Nm": 0.21606680699488834,
+        "supplied_power_W": 23.004309334056146
+      }
+    }
+  }
+}

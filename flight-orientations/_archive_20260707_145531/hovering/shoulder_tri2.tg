@@ -1,0 +1,106 @@
+name = bi-shoulder
+
+world:
+    gravity    = [0, 0, -9.81]
+    # Stable timestep scales as scale^1.5 (spring-mass freq ~1/scale^1.5 as rod
+    # mass drops with scale^3). 0.50 ms holds at scale 1.0; at scale 0.4 that needs
+    # 0.50 * 0.4^1.5 ~ 0.13 ms or the full-size wing's aero diverges the rig.
+    timestep   = 0.13 ms
+    integrator = Euler
+    scale      = 0.4
+    meshdir    = assets
+
+archetype strut C:
+    shape    = arc
+    radius   = 48.23931363603964 mm
+    stations = [5.8, 68.7, 111.3, 174.2] deg
+    width    = 6.0 mm
+    arc_rod  = { radius: 4.0 mm, mass: 10 g }
+    rung_rod = { radius: 2.0 mm, mass: 5 g }
+    symmetry sigma = reflect(stations: 1<->4, 2<->3 ; faces: A<->B)
+
+strut F = C { role: fixed,  plane: YZ }
+strut M = C { role: mobile, plane: XZ }
+
+arrange M relative_to F:
+    gap            = 30 mm
+    angle          = 0 deg
+    mobile_dx      = 5 mm
+    inplane_offset = 4.649 mm
+
+placement:
+    mount_height   = 258 mm
+    lateral_offset = 31 mm
+
+tendons:
+    defaults { stiffness: 200 N/m, damping: 0.5, pretension: 0.827, width: 0.75 mm }
+    length = derived
+    generators under sigma:
+        M[1A] -- F[4B]
+        M[1A] -- F[3B]
+        M[1B] -- F[2B]
+        M[1B] -- F[1B]
+        M[2A] -- F[4B]
+        M[2B] -- F[1B]
+    overrides:
+        L_t1_to_t1_2 { stiffness: 241.4780 N/m, pretension: 0.715917 }
+        L_t4_2_to_t1 { stiffness: 212.9248 N/m, pretension: 0.549523 }
+        L_t1_to_t2_2 { stiffness: 380.8792 N/m, pretension: 0.556835 }
+        L_t4_2_to_t2 { stiffness: 444.0652 N/m, pretension: 0.815251 }
+        L_t1_2_to_t3_2 { stiffness: 171.7014 N/m, pretension: 0.598118 }
+        L_t4_to_t3 { stiffness: 132.7447 N/m, pretension: 1.128582 }
+        L_t1_2_to_t4_2 { stiffness: 296.9884 N/m, pretension: 0.746062 }
+        L_t4_to_t4 { stiffness: 125.8026 N/m, pretension: 0.747777 }
+        L_t2_to_t1_2 { stiffness: 108.9696 N/m, pretension: 0.765636 }
+        L_t3_2_to_t1 { stiffness: 486.7779 N/m, pretension: 0.604839 }
+        L_t2_2_to_t4_2 { stiffness: 133.1300 N/m, pretension: 1.032279 }
+        L_t3_to_t4 { stiffness: 161.1344 N/m, pretension: 1.378653 }
+        R_t1_to_t1_2 { stiffness: 558.8268 N/m, pretension: 0.738948 }
+        R_t4_2_to_t1 { stiffness: 206.1235 N/m, pretension: 0.604536 }
+        R_t1_to_t2_2 { stiffness: 111.0385 N/m, pretension: 1.103610 }
+        R_t4_2_to_t2 { stiffness: 463.4370 N/m, pretension: 0.616933 }
+        R_t1_2_to_t3_2 { stiffness: 155.8358 N/m, pretension: 0.568206 }
+        R_t4_to_t3 { stiffness: 196.6702 N/m, pretension: 1.125048 }
+        R_t1_2_to_t4_2 { stiffness: 227.1969 N/m, pretension: 1.149522 }
+        R_t4_to_t4 { stiffness: 149.2784 N/m, pretension: 0.548798 }
+        R_t2_to_t1_2 { stiffness: 441.8669 N/m, pretension: 0.740764 }
+        R_t3_2_to_t1 { stiffness: 203.7513 N/m, pretension: 0.862880 }
+        R_t2_2_to_t4_2 { stiffness: 380.1273 N/m, pretension: 1.007231 }
+        R_t3_to_t4 { stiffness: 533.7324 N/m, pretension: 1.349421 }
+
+motors:
+    # HOVERING: mild forward inclination of the stroke plane (pitch 20 deg) with a
+    # small down/up asymmetry from a 12 deg crank phase lag and a slightly longer t4
+    # throw (26 vs 23 mm).
+    disk { radius: 18.0 mm, crank_throw: 23 mm, tilt: 0.0 rad, pitch: 20 deg, kv: 1.0, ctrl: [-120, 120],
+           solref: [0.02857142857142857, 1.0],
+           outboard: 30.625 mm,
+           foot_outset: 0.25 mm,
+           disk_dx: 0 mm, disk_dy: -20 mm }
+    drive M[1] and M[4]
+    attach_along_edge = 0.0 rad
+    attach_radius = 1.0
+    crank_phase_lag = 12 deg
+    crank_throw_t4 = 26 mm
+    tendon_rest_length = 53.4222 mm
+    tendon_stiffness  = 1006.9991 N/m
+    tendon_damping    = 1.0
+    control = control_tri2.tg
+    motor_direction = 1
+
+wing on M.midpoint:
+    rod_length = 18.0 mm
+    mount_arm  = 55.0 mm
+    mesh       = wing.stl
+    pitch:
+        free_angle = 10 deg
+        stiffness  = 0.05
+        damping    = 1e-5
+        initial    = 0.0 rad
+        range      = [-0.7, 0.7] rad
+        armature   = 1e-6
+    aero:
+        blades      = 4
+        force_scale = 1e6
+        body_torque = off
+        cop         = derived

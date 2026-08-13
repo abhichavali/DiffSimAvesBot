@@ -11,8 +11,8 @@ R = wL*PhiL(Lbar) - wtau*Ptau(tau_hat) - wK*Ckin - ws*S - w_lc*C_lc   (maximized
 - **PhiL** — smooth lift **floor** (default `185 mN`, `--lift-floor`): softplus hinge
   penalty below the floor, none above (keeps lift margin). Optional `--lift-cap` adds
   an upper penalty. `--lift-smooth` sets the hinge softness.
-- **Ptau** — peak motor torque over budget; `tau_hat` = soft-max (LSE, beta=100)
-  of `|actuator_force|` across the 4 crank actuators.
+- **Ptau** — peak motor torque over budget; `tau_hat` = exact recorded max of
+  `|actuator_force|` across the 4 crank actuators, matching CPU validation.
 - **Ckin** — stroke-amplitude band; `A*` is bootstrapped from the design signal's
   wing-tip z-excursion so the optimizer can't collapse the flap to dodge torque.
 - **S** — smoothness, `sum n^2 (a_n^2 + b_n^2)`.
@@ -70,7 +70,7 @@ Drop `--freeze-control` to refine control jointly. Output: `tendon_optimized.jso
 ## Outputs (`opt/runs/`)
 
 - `control_optimized.tg` — best coefficients, design frame. Use it:
-  `MORPHOLOGY_PATH=... uv run python run_mjx_fixed_frequency.py` after pointing
+  `MORPHOLOGY_PATH=... uv run python src/run_mjx_fixed_frequency.py` after pointing
   `design/shoulder.tg`'s `control_file` at it (or copy over `design/control.tg`).
 - `theta_best.json` — raw params (actuator frame) + omega.
 - `log.json` — per-iteration loss / Lbar / tau_hat / A_stroke / S.

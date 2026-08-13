@@ -10,18 +10,15 @@ from utils.aero.wing_geometry import load_default_wing_geometry
 
 RHO_AIR = 1.1839
 
-# The unsteady (added-mass) aero force is proportional to the wing's
-# finite-differenced acceleration. Applied explicitly each step, it is an
-# explicit added-mass coupling: a tiny FD window (dt down to 0.25 ms) turns
-# step-to-step velocity noise into a huge force that pumps energy and diverges
-# (peaks ~1e9 rad/s^2, ~37 N on ~10 g bodies). Capping the FD acceleration to a
-# few x the real flapping peak (measured ~1.9e4 rad/s^2, ~160 m/s^2 in stable
-# operation) kills the runaway while leaving real dynamics untouched.
-# ponytail: heuristic explicit-stability clamp; the real fix is implicit
-# added-mass treatment (or a dedicated unsteady-aero state), do that if these
-# caps ever distort the lift.
-OMEGA_DOT_CAP = 5.0e4   # rad/s^2  (~2.6x measured stable max)
-LIN_ACC_CAP = 1.0e3     # m/s^2    (~6x measured stable max)
+# The unsteady (added-mass) aero force is proportional to finite-differenced
+# acceleration. In this explicit runtime it is noisy enough to inflate lift by
+# 2x+ and does not transfer cleanly between CPU and MJX. Keep the default model
+# quasi-steady; opt/optimize_control.set_unsteady_aero(True) opts into the old
+# capped hack for diagnostics.
+# ponytail: explicit added mass stays opt-in; use an implicit added-mass state if
+# this needs to become production physics.
+OMEGA_DOT_CAP = 0.0     # rad/s^2
+LIN_ACC_CAP = 0.0       # m/s^2
 
 
 @dataclass
@@ -38,13 +35,13 @@ class WingAeroState:
 
 
 class AeroBladeRuntime:
-    def __init__(self, model, config_path=None):
+    def __init__(self, model, config_path=None, *, substep=None):
         config = load_runtime_config(config_path) or {}
         aero_cfg = config.get("aero", {})
         num_blades = int(aero_cfg.get("num_blades", 10))
         # Recompute aero forces every `substep` physics steps; reapply the
         # cached force between recomputes. 1 = compute every step.
-        self.substep = max(1, int(aero_cfg.get("substep", 1)))
+        self.substep = max(1, int(aero_cfg.get("substep", 1) if substep is None else substep))
         # Compute only the left wing and reflect its forces to the right (the
         # wings are exact mirror images). Falls back to per-wing compute if off
         # or if there isn't exactly the L,R pair to mirror.

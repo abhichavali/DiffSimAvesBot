@@ -8,10 +8,10 @@ signal.
 
 ```bash
 uv sync
-uv run python compile_tg.py
-uv run python run_fixed_frequency.py --periods 5
-uv run python run_mjx_fixed_frequency.py --periods 5
-mjpython view_fixed_frequency.py
+uv run python src/compile_tg.py
+uv run python src/run_fixed_frequency.py --periods 5
+uv run python src/run_mjx_fixed_frequency.py --periods 5
+mjpython src/view_fixed_frequency.py
 ```
 
 The default design is `design/shoulder.tg`; it points at `design/control.tg` for
