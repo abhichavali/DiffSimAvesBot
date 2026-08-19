@@ -93,9 +93,10 @@ wing on M.midpoint:
         # mount that maximises flap elevation while keeping the fore-aft sweep
         # small and the wing plane level at mid-stroke.
         mount       = [-14.14, 18.34, 5.50] deg
+        # Ratios from the reference plate, humerus : ulna : manus ~ 1 : 1.12 : 0.98.
         humerus     = 50 mm
         ulna        = 55 mm
-        manus       = 35 mm
+        manus       = 49 mm
         primary     = 95 mm
         chord       = 70 mm
         mass        = 0.12 g

@@ -51,7 +51,12 @@ def drive_cranks(model, data, morph, control: FourierControl, t0: float, ramp: f
         data.ctrl[aid] = cmd
 
 
-HARMONICS = 6
+# Harmonics in the roll fit, trading levelling against how fast the twist servo
+# has to move. Measured on design/eagle.tg (residual roll peak-to-peak / peak
+# twist rate): 2 -> 19.7 deg / 535 deg-s, 3 -> 10.4 / 785, 4 -> 5.2 / 921,
+# 6 -> 2.5 / 1066. Past 4 the extra flatness is bought with high-frequency
+# content that reads on screen as the wing snapping rather than feathering.
+HARMONICS = 4
 
 
 _MIRROR_Y = np.diag([1.0, -1.0, 1.0])

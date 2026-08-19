@@ -557,8 +557,11 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
     )
     # Primaries: long, separated, raked progressively forward toward the tip —
     # the eagle's fingered wingtip. The outermost one carries the wingtip marker.
+    # rake1 stays well off the span: at 16 deg the outermost primary carried only
+    # 33 mm of chord and the hand converged to a spike. An eagle's is blunt and
+    # deeply slotted, so the outer feather keeps ~40 mm of chord on it.
     tip = feathers(manus, "primary", 8, 0.05 * b.manus, b.manus,
-                   0.72 * b.primary, 1.0 * b.primary, math.radians(70), math.radians(16),
+                   0.72 * b.primary, 1.0 * b.primary, math.radians(72), math.radians(24),
                    0.20 * b.chord, FEATHER_RGBA[1])
     # Wingtip marker: the reference point every kinematic check measures.
     ET.SubElement(
