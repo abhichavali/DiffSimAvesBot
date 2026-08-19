@@ -1,12 +1,13 @@
-"""View (or record) the AvesEagle three-linkage wing flapping.
+"""View (or record) the AvesEagle three-linkage wing stroking.
 
     mjpython src/view_eagle.py
     uv run python src/view_eagle.py --gif out/eagle.gif
 
-The tensegrity shoulder flaps the humerus exactly as it flaps the hummingbird's
-plate wing; `runtime.eagle_drive` adds the elbow/wrist fold and the feathering
-twist, both phase-locked to the crank and both calibrated against this scene
-before the run starts.
+The tensegrity shoulder swings the humerus exactly as it swings the hummingbird's
+plate wing — a wide side-to-side sweep in a near-horizontal stroke plane.
+`runtime.eagle_drive` adds the elbow/wrist fold and the wing flip, both
+phase-locked to the crank and both calibrated against this scene before the run
+starts.
 """
 
 from __future__ import annotations
@@ -54,9 +55,12 @@ def build(args):
         level=args.level,
         lead=math.radians(args.lead),
     )
+    calib = drive.calib
     print(
-        f"stroke phase (top of upstroke) {math.degrees(drive.calib.top_phase) % 360:.1f} deg; "
-        f"flap {control.fundamental_frequency_hz:.3g} Hz; wing half-span "
+        f"stroke: {calib.axis} — {calib.sweep_deg:.0f} deg of sweep against "
+        f"{calib.elevation_deg:.0f} deg of elevation, reversing at crank "
+        f"{math.degrees(calib.reversal_phase) % 360:.0f} deg; "
+        f"{control.fundamental_frequency_hz:.3g} Hz; wing half-span "
         f"{morph.wing.bones.span * 1000:.0f} mm",
         flush=True,
     )
@@ -114,9 +118,9 @@ def main() -> None:
     p.add_argument("--tg", type=Path, default=ROOT / "design" / "eagle.tg")
     p.add_argument("--scene", type=Path, default=ROOT / "eagle_scene.xml")
     p.add_argument("--speed", type=float, default=1.0, help="Viewer realtime factor")
-    p.add_argument("--fold", type=float, default=0.60, help="Elbow/wrist flexion, 0..1 of range")
-    p.add_argument("--twist", type=float, default=14.0, help="Peak pronation (deg)")
-    p.add_argument("--lead", type=float, default=35.0, help="Fold lead ahead of the flap (deg)")
+    p.add_argument("--fold", type=float, default=0.35, help="Elbow/wrist flexion at the stroke reversals, 0..1 of range")
+    p.add_argument("--twist", type=float, default=30.0, help="Peak wing flip between half-strokes (deg)")
+    p.add_argument("--lead", type=float, default=35.0, help="Fold lead ahead of the stroke (deg)")
     p.add_argument("--level", type=float, default=1.0, help="Roll cancellation, 0..1")
     p.add_argument("--gif", type=Path, default=None, help="Record to this GIF instead of viewing")
     p.add_argument("--gif-cycles", type=float, default=3.0)

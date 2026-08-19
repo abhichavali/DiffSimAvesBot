@@ -1,20 +1,21 @@
 """Fold and feathering schedules for the three-linkage avian wing.
 
-The tensegrity shoulder does the flapping — the humerus is rigid on the mobile
+The tensegrity shoulder does the stroking — the humerus is rigid on the mobile
 strut, so the tendon network swings it exactly as it swings the hummingbird's
-plate wing. What this module adds is everything distal to that: an eagle extends
-its wing through the downstroke and flexes the elbow and wrist on the upstroke,
-and pronates the wing into the downstroke and supinates it on the way up. Those
-are the three position servos ``emit_mjcf`` puts on ``elbow``, ``wrist`` and
-``humerus_twist``, and all three are written here as functions of one clock: the
-crank angle.
+plate wing, and the stroke is the hummingbird's: a wide sweep in a near-horizontal
+stroke plane, not an eagle's up-and-down flap. What this module adds is everything
+distal to that: the wing flexes slightly through each reversal and extends across
+the sweep, and it pronates into one half-stroke and supinates into the other, the
+way a hummingbird flips its wing at each end of the row. Those are the three
+position servos ``emit_mjcf`` puts on ``elbow``, ``wrist`` and ``humerus_twist``,
+and all three are written here as functions of one clock: the crank angle.
 
-The clock's offset is *measured*, not baked in. Where in the crank cycle the wing
-actually tops out depends on ``crank_phase_lag``, the disk pitch and the humerus
-mount — retune any of those in the ``.tg`` and a hard-coded phase would silently
-desync the fold from the flap. ``calibrate_stroke`` runs a short scratch rollout
-and reads the answer off the wing itself, along with the roll the tendon network
-imposes on the wing plane, which the twist servo then cancels.
+The clock's offset is *measured*, not baked in. Where in the crank cycle the
+stroke reaches its extreme depends on ``crank_phase_lag``, the disk pitch and the
+humerus mount — retune any of those in the ``.tg`` and a hard-coded phase would
+silently desync the fold from the sweep. ``calibrate_stroke`` runs a short scratch
+rollout and reads the answer off the wing itself, along with the roll the tendon
+network imposes on the wing plane, which the twist servo then cancels.
 """
 
 from __future__ import annotations
@@ -193,17 +194,27 @@ def wing_plane_roll(rot: np.ndarray, side: str = "L") -> float:
 class StrokeCalibration:
     """What the shoulder does on its own, measured once per scene.
 
-    ``top_phase`` is the crank angle at the top of the upstroke — the clock every
-    schedule is written against. ``bank_coeffs`` is a Fourier fit of the roll the
-    tensegrity imposes on the wing plane over a cycle; the twist servo subtracts
-    it so the wing stays a wing instead of turning edge-on twice a beat.
+    ``reversal_phase`` is the crank angle at one end of the stroke — the clock
+    every schedule is written against. Which end depends on the design: the
+    shoulder sweeps the wing in azimuth *and* elevation, and the axis that swings
+    furthest is the stroke. On the hummingbird settings this design uses that is
+    azimuth (118 deg of sweep against 38 of elevation), so the reference is the
+    forward-most point of the sweep; on a vertical-flap tuning it would be the top
+    of the upstroke instead. ``axis`` records which was picked.
+
+    ``bank_coeffs`` is a Fourier fit of the roll the tensegrity imposes on the
+    wing plane over a cycle; the twist servo subtracts it so the wing stays a
+    wing instead of turning edge-on twice a beat.
     """
 
-    top_phase: float
+    reversal_phase: float
     bank_coeffs: tuple[float, ...]
+    axis: str = "azimuth"
+    sweep_deg: float = 0.0
+    elevation_deg: float = 0.0
 
     def bank_at(self, theta: float) -> float:
-        phase = theta - self.top_phase
+        phase = theta - self.reversal_phase
         value = self.bank_coeffs[0]
         for n in range(1, HARMONICS + 1):
             value += self.bank_coeffs[2 * n - 1] * math.cos(n * phase)
@@ -220,10 +231,11 @@ def calibrate_stroke(
 ) -> StrokeCalibration:
     """Measure the shoulder's own stroke on a scratch rollout (caller state untouched).
 
-    Everything downstream depends on where in the crank cycle the wing tops out
-    and how much the tendon network rolls it on the way. Both shift when the .tg
-    changes ``crank_phase_lag``, the disk pitch or the humerus mount, so both are
-    measured here rather than written down.
+    Everything downstream depends on where in the crank cycle the stroke reverses
+    and how much the tendon network rolls the wing on the way. Both shift when the
+    .tg changes ``crank_phase_lag``, the disk pitch or the humerus mount, so both
+    are measured here rather than written down — including *which* axis the stroke
+    runs along, so the same code serves a horizontal sweep and a vertical flap.
 
     Pass a ``drive`` to re-measure with the fold and feathering already running:
     flexing the wing moves its mass inboard, which changes what the strut does,
@@ -233,17 +245,17 @@ def calibrate_stroke(
 
     data = mujoco.MjData(model)
     # Explicit lag: sync_crank_disks_at_rest otherwise re-reads MORPHOLOGY_PATH,
-    # and a stale one (eagle scene, hummingbird env var) mis-phases the whole
-    # calibration without a word — eagle.tg lags 160 deg, shoulder.tg 12.
+    # and a stale one mis-phases the whole calibration without a word.
     sync_crank_disks_at_rest(model, data, lag_rad=morph.motors.crank_phase_lag_rad)
     _, qadr, bid = _ids(model)
     period = crank_period(control)
     settle_steps = round(max(2.0, cycles - 2.0) * period / model.opt.timestep)
     total_steps = round(cycles * period / model.opt.timestep)
     cranks = CrankDrive(model, morph, control)
-    best_elev, top = -2.0, 0.0
     thetas: list[float] = []
     banks: list[float] = []
+    azims: list[float] = []
+    elevs: list[float] = []
     for step in range(total_steps):
         data.ctrl[:] = 0.0
         cranks.apply(data)
@@ -254,9 +266,9 @@ def calibrate_stroke(
         if step < settle_steps:
             continue
         rot = np.asarray(data.xmat[bid]).reshape(3, 3)
-        elev = float(rot[2, 2])  # z of the span axis
-        if elev > best_elev:
-            best_elev, top = elev, float(data.qpos[qadr])
+        span = rot[:, 2]
+        elevs.append(math.degrees(math.asin(float(np.clip(span[2], -1.0, 1.0)))))
+        azims.append(math.degrees(math.atan2(float(span[0]), float(span[1]))))
         thetas.append(float(data.qpos[qadr]))
         # With a drive already running, what is left to cancel is the residual on
         # top of what it is commanding, so fold its own twist target back in.
@@ -264,21 +276,37 @@ def calibrate_stroke(
         if drive is not None:
             residual -= drive.twist_target(float(data.qpos[qadr]))
         banks.append(residual)
-    phase = np.asarray(thetas) - top
+
+    theta = np.asarray(thetas)
+    azim, elev = np.asarray(azims), np.asarray(elevs)
+    sweep, rise = float(np.ptp(azim)), float(np.ptp(elev))
+    # The stroke is whichever axis swings furthest; reference the clock to that
+    # axis' maximum. A horizontal sweep and a vertical flap then both get a phase
+    # zero at a real stroke reversal instead of at whichever wobble happens to be
+    # measured, and every schedule below stays meaningful across a retune.
+    axis = "azimuth" if sweep >= rise else "elevation"
+    reversal = float(theta[int(np.argmax(azim if axis == "azimuth" else elev))])
+
+    phase = theta - reversal
     basis = [np.ones_like(phase)]
     for n in range(1, HARMONICS + 1):
         basis += [np.cos(n * phase), np.sin(n * phase)]
     coeffs, *_ = np.linalg.lstsq(np.stack(basis, 1), np.asarray(banks), rcond=None)
-    return StrokeCalibration(top_phase=top, bank_coeffs=tuple(float(c) for c in coeffs))
+    return StrokeCalibration(
+        reversal_phase=reversal,
+        bank_coeffs=tuple(float(c) for c in coeffs),
+        axis=axis,
+        sweep_deg=sweep,
+        elevation_deg=rise,
+    )
 
 
 def calibrated_drive(model, morph, control: FourierControl, passes: int = 2, **kwargs):
     """Build an :class:`EagleWingDrive` whose roll cancellation has converged.
 
     Pass 1 measures the bare shoulder; each later pass re-measures with the drive
-    running and folds the leftover roll into the correction. Two is enough: on
-    design/eagle.tg the residual roll goes 7.2 -> 2.5 deg peak-to-peak, and a
-    third pass only reaches 2.2 (a fourth is back at 2.3, i.e. noise).
+    running and folds the leftover roll into the correction. Two is enough in
+    practice — a third moves the residual by well under a degree.
     """
     calib = calibrate_stroke(model, morph, control)
     drive = EagleWingDrive(model, calib=calib, **kwargs)
@@ -293,9 +321,10 @@ class EagleWingDrive:
 
     ``fold`` is a 0..1 fraction of each joint's compiled range, so the amplitude
     stays inside the limits the ``.tg`` declared; every target is clipped to the
-    servo's ctrlrange regardless. ``lead`` advances the fold ahead of the flap:
-    real wings start extending before the downstroke begins, and a servo with
-    finite bandwidth needs the head start anyway.
+    servo's ctrlrange regardless. Keep it modest: a hummingbird's wing is nearly
+    rigid across the sweep, and past ~0.5 the wing visibly shortens at each end
+    instead of rowing. ``lead`` advances the fold ahead of the stroke, because a
+    servo with finite bandwidth needs the head start.
 
     Both wings take the *same* twist command. The R side's hinge axis is mirrored
     (-z vs +z) and its bank is the negative of L's, and the two sign flips cancel
@@ -304,9 +333,9 @@ class EagleWingDrive:
 
     model: object
     calib: StrokeCalibration
-    fold: float = 0.60  # fraction of the elbow range used at full flexion
+    fold: float = 0.35  # fraction of the elbow range used at full flexion
     wrist_fold: float = 1.0  # scales `fold` at the wrist
-    twist: float = math.radians(14.0)  # peak deliberate pronation (rad; negate to flip sense)
+    twist: float = math.radians(30.0)  # peak wing flip (rad; negate to reverse the sense)
     level: float = 1.0  # how much of the measured roll to cancel (1 = fully level)
     lead: float = math.radians(35.0)  # fold leads the flap by this crank angle
 
@@ -329,18 +358,23 @@ class EagleWingDrive:
     def schedule(self, theta: float) -> tuple[float, float]:
         """(twist target in rad, flexion in 0..1) at crank angle ``theta``.
 
-        Phase 0 is the top of the upstroke and pi the bottom of the downstroke.
-        Flexion peaks at the top and vanishes at the bottom. The twist target is
-        two terms: cancel the roll the tensegrity imposes (which otherwise turns
-        the wing edge-on twice a beat), then add back a deliberate pronation that
-        leads the downstroke by a quarter cycle — nose-down through the fastest
-        descent, nose-up on the recovery, the way a bird feathers.
+        Phase 0 is one end of the stroke and pi the other. Flexion peaks at the
+        ends and vanishes in the middle, so the wing tucks slightly through each
+        reversal and is fully spread across the fast part of the sweep — which is
+        what a hummingbird does, and the opposite of folding once per beat.
+
+        The twist target is two terms: cancel the roll the tensegrity imposes
+        (which otherwise turns the wing edge-on twice a beat), then add a
+        deliberate pronation that leads by a quarter cycle, so the wing is
+        nose-down through one half-stroke and nose-up through the other — the flip
+        a hummingbird makes at each end of the row.
         """
-        phase = theta - self.calib.top_phase
+        phase = theta - self.calib.reversal_phase
         # A positive twist angle carries the trailing edge down, i.e. nose-UP, so
         # pronation is the negative direction.
         twist = -self.level * self.calib.bank_at(theta) - self.twist * math.sin(phase)
-        return twist, 0.5 * (1.0 + math.cos(phase + self.lead))
+        # cos(2*phase) so the tuck happens at BOTH reversals, once per half-stroke.
+        return twist, 0.5 * (1.0 + math.cos(2.0 * phase + self.lead))
 
     def twist_target(self, theta: float) -> float:
         """The twist the servo is actually asked for, clipped as ``apply`` clips it.

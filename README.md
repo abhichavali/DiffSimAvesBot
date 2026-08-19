@@ -16,7 +16,7 @@ mjpython src/view_fixed_frequency.py
 
 `design/eagle.tg` is the AvesEagle spinoff: the same tensegrity shoulder
 carrying a three-linkage avian wing (humerus / ulna / manus) instead of the flat
-plate.
+plate, stroking side to side the way the plate wing does.
 
 ```bash
 mjpython src/view_eagle.py

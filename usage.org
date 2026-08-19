@@ -120,9 +120,11 @@ MUJOCO_GL=egl PYTHONPATH=src uv run python -m runtime.mjx.live_viewer \
 * AvesEagle
 
 A three-linkage avian wing (humerus / ulna / manus) on the same tensegrity
-shoulder. The humerus is a rigid child of the mobile strut, so the tendon
-network is its shoulder joint exactly as it is the plate wing's; only the elbow
-and wrist are ordinary hinges.
+shoulder, stroking the way the plate wing does: a wide side-to-side sweep in a
+near-horizontal stroke plane (118 deg of sweep against 38 deg of elevation).
+The humerus is a rigid child of the mobile strut, so the tendon network is its
+shoulder joint exactly as it is the plate wing's; only the elbow and wrist are
+ordinary hinges.
 
 View it:
 
@@ -139,16 +141,17 @@ uv run python src/view_eagle.py --gif out/eagle.gif --gif-cycles 3
 Useful flags:
 
 #+begin_src sh
-# --fold  elbow/wrist flexion on the upstroke, 0..1 of the .tg range
-# --twist peak pronation, degrees
-# --lead  how far the fold leads the flap, degrees of crank angle
+# --fold  elbow/wrist tuck at each stroke reversal, 0..1 of the .tg range
+# --twist peak wing flip between half-strokes, degrees
+# --lead  how far the tuck leads the stroke, degrees of crank angle
 # --level cancel the roll the tendon network imposes (0 = leave it in)
-uv run python src/view_eagle.py --fold 0.6 --twist 14 --lead 35 --level 1.0
+uv run python src/view_eagle.py --fold 0.35 --twist 30 --lead 35 --level 1.0
 #+end_src
 
 Design knobs live in =design/eagle.tg= (bone lengths, joint ranges, servo
-stiffness, and the humerus mount) and =design/eagle_control.tg= (=a0= is the
-crank velocity command, so flap Hz = a0 / 2pi).
+stiffness, and the humerus mount — the mount is what orients the wing on the
+sweep and is load-bearing) and =design/eagle_control.tg= (=a0= is the crank
+velocity command, so stroke Hz = a0 / 2pi; the sweep holds to 15 Hz).
 
 Check it:
 

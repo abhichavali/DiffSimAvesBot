@@ -1,7 +1,8 @@
 name = aves-eagle
 
 # AvesEagle: the hummingbird tensegrity shoulder carrying a three-linkage avian
-# wing (humerus / ulna / manus) instead of the flat plate. Bone proportions and
+# wing (humerus / ulna / manus) instead of the flat plate, stroking side to side
+# the way the hummingbird plate wing does. Bone proportions and
 # the fold topology follow the Passeri wing-skeleton figure on Wikimedia Commons
 # (Bird wing skeleton. Passeri.svg): humerus, then the ulna+radius forearm, then
 # the carpometacarpus + phalanges of the manus, with the primaries raked off the
@@ -11,19 +12,24 @@ name = aves-eagle
 # mobile strut, so the tendon network IS its glenohumeral joint, exactly as the
 # plate wing is mounted. Only the elbow and wrist are ordinary hinges.
 #
-# Three knobs turn the hummingbird's stroke into an eagle's. `crank_phase_lag`
-# 160 deg (vs the hovering design's 12) flips which compliant mode of the tendon
-# network the two counter-rotating cranks excite: near 0 deg lag the strut whirls
-# fore-aft — a hovering hummingbird's horizontal stroke plane — and near 180 deg
-# it rocks up and down. Disk `pitch` 30 deg and `bones.mount` then orient the
-# wing on that rock. Measured together: flap elevation -30..+30 deg against
-# 36 deg of fore-aft sweep, an eagle's stroke rather than a hummingbird's.
+# The stroke is the hummingbird's, unchanged: the hovering design's disk pitch
+# 20 deg, 12 deg crank phase lag and 23/26 mm throws, which sweep the wing through
+# a wide arc in a near-horizontal stroke plane. Measured with this wing on it:
+# 118 deg of fore-aft sweep against only 38 deg of elevation.
 #
-# What the shoulder will NOT do on its own is hold the wing plane flat — the rock
-# is a compound whirl that rolls the wing ~50 deg peak-to-peak, turning it edge-on
-# twice a beat. runtime/eagle_drive.py measures that roll per scene and cancels it
-# with the humerus twist servo, which is also what carries the deliberate
-# pronation. Retune anything above and the correction re-measures itself.
+# `bones.mount` is what orients the eagle wing on that sweep, and it is
+# load-bearing. The strut's motion is a compound whirl, and only a narrow band of
+# mount orientations turns it into a clean lateral sweep with the span staying
+# near level; most of SO(3) either points the wing at the sky (where azimuth is
+# meaningless and the search will happily collect 290 deg of wrap) or trades the
+# sweep for an up-and-down flap. Found by recording the strut's rotation over a
+# cycle and searching, gated on the span staying horizontal and lateral.
+#
+# What the shoulder will NOT do on its own is hold the wing plane flat — the whirl
+# rolls the wing ~41 deg peak-to-peak, turning it edge-on twice a beat.
+# runtime/eagle_drive.py measures that roll per scene and cancels it with the
+# humerus twist servo, which is also what carries the deliberate pronation.
+# Retune anything above and the correction re-measures itself.
 
 world:
     # Timestep is set by tendon stiffness, not drive rate, so the hummingbird's
@@ -72,7 +78,7 @@ tendons:
         M[2B] -- F[1B]
 
 motors:
-    disk { radius: 18.0 mm, crank_throw: 18 mm, tilt: 0.0 rad, pitch: 30 deg, kv: 1.0, ctrl: [-120, 120],
+    disk { radius: 18.0 mm, crank_throw: 23 mm, tilt: 0.0 rad, pitch: 20 deg, kv: 1.0, ctrl: [-120, 120],
            solref: [0.02857142857142857, 1.0],
            outboard: 30.625 mm,
            foot_outset: 0.25 mm,
@@ -80,9 +86,10 @@ motors:
     drive M[1] and M[4]
     attach_along_edge = 0.0 rad
     attach_radius = 1.0
-    # 160 deg, not the hovering design's 12: this is the eagle knob. See header.
-    crank_phase_lag = 160 deg
-    crank_throw_t4 = 18 mm
+    # Straight from the hovering design: this is what makes the stroke a
+    # hummingbird's horizontal sweep rather than an up-and-down flap.
+    crank_phase_lag = 12 deg
+    crank_throw_t4 = 26 mm
     tendon_rest_length = 53 mm
     tendon_stiffness  = 1000 N/m
     tendon_damping    = 1.0
@@ -91,11 +98,8 @@ motors:
 
 wing on M.midpoint:
     bones:
-        # Humerus frame on the mobile strut (intrinsic x-y-z Euler). Found by
-        # recording the strut's rotation over a cycle and searching SO(3) for the
-        # mount that maximises flap elevation while keeping the fore-aft sweep
-        # small and the wing plane level at mid-stroke.
-        mount       = [-14.14, 18.34, 5.50] deg
+        # Humerus frame on the mobile strut (intrinsic x-y-z Euler). See header.
+        mount       = [-11.41, 8.07, -1.00] deg
         # Ratios from the reference plate, humerus : ulna : manus ~ 1 : 1.12 : 0.98.
         humerus     = 50 mm
         ulna        = 55 mm
@@ -103,11 +107,15 @@ wing on M.midpoint:
         primary     = 95 mm
         chord       = 70 mm
         mass        = 0.12 g
-        # Eagles flex, they do not tuck: the wing extends through the downstroke
-        # and folds only partway on the upstroke.
+        # The wing spreads across the sweep and tucks a little through each
+        # reversal, so the range only has to cover a shallow flex. A hummingbird's
+        # wing is near-rigid: the drive uses ~0.35 of this, and past ~0.5 the wing
+        # visibly shortens at each end instead of rowing.
         elbow_range = [-70, 4] deg
         wrist_range = [-65, 4] deg
-        twist_range = [-50, 50] deg
+        # Wide: the twist servo carries both the roll cancellation (~41 deg of it)
+        # and the wing flip at each end of the stroke.
+        twist_range = [-70, 70] deg
         # Stiff: a critically damped servo at kp 0.1 lagged the 2.5 Hz stroke by
         # ~25 deg, which showed up as the wing failing to level in time.
         servo       = 6.0

@@ -1,7 +1,13 @@
-# Eagle cruise flap. a0 is the crank velocity command (rad/s); the disks are
-# velocity servos, so flap frequency = a0 / 2pi. 15.7 rad/s -> 2.5 Hz, the
-# cruise beat of a golden eagle. fundamental_frequency is the phase reference
-# used by the runners and plots and must track the achieved rate.
+# Stroke rate. a0 is the crank velocity command (rad/s); the disks are velocity
+# servos, so stroke frequency = a0 / 2pi. fundamental_frequency is the phase
+# reference the runners and plots use and must track it.
+#
+# 2.5 Hz, not the hummingbird design's 10: this wing is eagle-sized (249 mm
+# half-span), and at 10 Hz it reads as a blur rather than a stroke. The rig does
+# take the higher rates if you want them — measured sweep / elevation / peak
+# twist-servo lag at a0 = 15.7 / 31.4 / 62.8 / 94.2 rad/s: 118/38/2.3 deg,
+# 120/39/4.4, 108/45/11.0, 118/49/19.2. Nothing diverges up to 15 Hz; only the
+# servo tracking degrades. Change both numbers together.
 harmonics = 1
 fundamental_frequency = 2.5 Hz
 a0 = 15.708

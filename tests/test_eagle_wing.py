@@ -1,9 +1,10 @@
-"""The AvesEagle wing actually flaps like an eagle, and the plate wing still works.
+"""The AvesEagle wing strokes like the hummingbird, and the plate wing still works.
 
 One rollout of `design/eagle.tg` covers the whole chain: the .tg parses, the
 compiler emits the three-linkage wing, the drive's calibration converges, and the
-resulting motion is a bird's — dominated by elevation, mirror-symmetric, folded on
-the upstroke, plane held level, and stable for the whole run.
+resulting motion is the hummingbird's — a wide side-to-side sweep in a
+near-horizontal stroke plane, mirror-symmetric, tucking a little at each reversal,
+flipping between half-strokes, plane held level, stable for the whole run.
 
     uv run pytest -q tests/test_eagle_wing.py
 """
@@ -64,7 +65,8 @@ def stroke(tmp_path_factory):
     wrist = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "L_wrist")]
 
     out = {k: [] for k in
-           ("elev_L", "elev_R", "azim_L", "roll_L", "roll_R", "tip_L", "tip_R", "elbow", "wrist", "camber")}
+           ("elev_L", "elev_R", "azim_L", "roll_L", "roll_R", "tip_L", "tip_R",
+            "elbow", "wrist", "camber")}
     # Step-counted: MuJoCo rewinds data.time when it resets a diverged model, so
     # a `while data.time < end` loop spins forever instead of failing.
     total = round(CYCLES * control.period / model.opt.timestep)
@@ -121,28 +123,37 @@ def test_topology_is_humerus_ulna_manus(tmp_path):
     assert model.body_jntnum[hid] == 1
 
 
-def test_flap_is_eagle_like(stroke):
-    rec, morph = stroke
-    elev = rec["elev_L"]
-    amplitude = elev.max() - elev.min()
-    # A golden eagle's cruise stroke spans roughly -30..+40 deg of elevation.
-    assert 45.0 <= amplitude <= 110.0, f"flap amplitude {amplitude:.1f} deg is not eagle-like"
-    assert abs(0.5 * (elev.max() + elev.min())) < 15.0, "stroke is not centred near level"
-    # Elevation must dominate the fore-aft sweep, or it is the hummingbird's
-    # horizontal stroke plane wearing feathers.
-    sweep = rec["azim_L"].max() - rec["azim_L"].min()
-    assert amplitude > 1.4 * sweep, f"sweep {sweep:.1f} deg rivals the flap {amplitude:.1f} deg"
-
-
-def test_wing_folds_on_the_upstroke(stroke):
+def test_stroke_is_a_hummingbird_sweep(stroke):
+    """Side to side in a near-horizontal stroke plane, not an up-and-down flap."""
     rec, _ = stroke
-    fold = rec["elbow"].max() - rec["elbow"].min()
-    assert fold > 25.0, f"elbow barely moves ({fold:.1f} deg) — the wing is not folding"
-    assert rec["wrist"].max() - rec["wrist"].min() > 25.0, "wrist is not folding"
-    # Folded at the top of the upstroke, extended at the bottom: the elbow angle
-    # and the wing's elevation must run together, not independently.
-    corr = float(np.corrcoef(rec["elbow"], rec["elev_L"])[0, 1])
-    assert corr < -0.5, f"fold is not phase-locked to the flap (corr {corr:+.2f})"
+    azim, elev = rec["azim_L"], rec["elev_L"]
+    sweep = azim.max() - azim.min()
+    rise = elev.max() - elev.min()
+    assert 80.0 <= sweep <= 160.0, f"sweep {sweep:.1f} deg is not a hummingbird stroke"
+    assert sweep > 2.0 * rise, f"elevation {rise:.1f} deg rivals the sweep {sweep:.1f} deg"
+    # Centred: the wing rows about the lateral direction and stays near level,
+    # rather than sweeping only forward or riding high on one side.
+    assert abs(0.5 * (azim.max() + azim.min())) < 20.0, "sweep is not centred on lateral"
+    assert abs(0.5 * (elev.max() + elev.min())) < 15.0, "stroke plane is not near level"
+    # And the tip must actually travel further fore-aft than up-down.
+    travel = rec["tip_L"].max(axis=0) - rec["tip_L"].min(axis=0)
+    assert travel[0] > 2.0 * travel[2], f"wingtip travel {travel * 1000} mm is not a sweep"
+
+
+def test_wing_tucks_at_each_reversal(stroke):
+    """Spread across the sweep, tucked a little at both ends — twice a cycle.
+
+    A hummingbird's wing is nearly rigid, so the joints only take up a shallow
+    flex, but it has to be phase-locked to the stroke: most flexed where the sweep
+    turns around, most extended where it is fastest.
+    """
+    rec, _ = stroke
+    for joint in ("elbow", "wrist"):
+        travel = rec[joint].max() - rec[joint].min()
+        assert 8.0 < travel < 45.0, f"{joint} moves {travel:.1f} deg — not a shallow tuck"
+    # Flexion (elbow toward its low stop) must track distance from mid-sweep.
+    corr = float(np.corrcoef(rec["elbow"], np.abs(rec["azim_L"]))[0, 1])
+    assert corr < -0.5, f"tuck is not phase-locked to the stroke (corr {corr:+.2f})"
 
 
 def test_fold_is_a_zigzag_not_a_spiral(tmp_path):
@@ -177,37 +188,69 @@ def test_fold_is_a_zigzag_not_a_spiral(tmp_path):
     assert folded[0] > -0.5 * spread[2], f"tip swings {-folded[0] * 1000:.0f} mm past the leading edge"
 
 
-def test_wing_plane_stays_level(stroke):
+def test_wing_plane_stays_level(tmp_path):
     """The twist servo cancels the roll the tendon network imposes.
 
-    Uncancelled it is ~50 deg peak-to-peak and the wing turns edge-on twice a
-    beat; what is left should be the deliberate pronation and little else.
+    Uncancelled that roll is ~41 deg peak-to-peak and the wing turns edge-on twice
+    a beat. Measured with the deliberate flip switched off, so what is left is
+    purely what the cancellation failed to remove.
+    """
+    scene = tmp_path / "level.xml"
+    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
+    compile_tg(EAGLE_TG, scene)
+    morph = load_morphology(EAGLE_TG)
+    control = load_control_for_morphology(EAGLE_TG)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    humerus = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_humerus")
+
+    def roll_range(**kwargs):
+        data = mujoco.MjData(model)
+        sync_crank_disks_at_rest(model, data, lag_rad=morph.motors.crank_phase_lag_rad)
+        cranks = CrankDrive(model, morph, control)
+        drive = calibrated_drive(model, morph, control, twist=0.0, **kwargs)
+        rolls = []
+        settle = round(SETTLE * control.period / model.opt.timestep)
+        for step in range(round(CYCLES * control.period / model.opt.timestep)):
+            data.ctrl[:] = 0.0
+            cranks.apply(data)
+            drive.apply(data)
+            mujoco.mj_step(model, data)
+            check_stable(model, data, "levelling rollout")
+            if step >= settle:
+                rot = np.asarray(data.xmat[humerus]).reshape(3, 3)
+                rolls.append(math.degrees(wing_plane_roll(rot, "L")))
+        return float(np.ptp(np.asarray(rolls)))
+
+    uncancelled = roll_range(level=0.0)
+    residual = roll_range(level=1.0)
+    assert uncancelled > 25.0, "nothing to cancel — has the stroke changed?"
+    assert residual < 0.4 * uncancelled, (
+        f"levelling only got {uncancelled:.1f} deg down to {residual:.1f}"
+    )
+    assert residual < 15.0, f"wing plane still rolls {residual:.1f} deg"
+
+
+def test_wing_flips_between_half_strokes(stroke):
+    """Pronated one way going forward, the other going back — the hummingbird flip.
+
+    A positive twist angle carries the trailing edge *down*, so the sign of this
+    term is easy to get backwards and nothing else in the model notices —
+    design/eagle.tg declares no aero.
     """
     rec, _ = stroke
-    for side in "LR":
-        roll = rec[f"roll_{side}"].max() - rec[f"roll_{side}"].min()
-        assert roll < 40.0, f"{side} wing plane rolls {roll:.1f} deg — leveling is not holding"
-    # Side-correct metric: mirrored wings must report the same roll, not opposite
-    # or 180 deg apart.
-    assert np.abs(rec["roll_L"] - rec["roll_R"]).max() < 0.5
-
-
-def test_pronates_into_the_downstroke(stroke):
-    """Nose-down through the descent, nose-up on the recovery, the way a bird feathers.
-
-    A positive twist angle carries the trailing edge *down*, so the sign of the
-    pronation term is easy to get backwards and nothing else in the model
-    notices — design/eagle.tg declares no aero.
-    """
-    rec, _ = stroke
-    descending = np.gradient(rec["elev_L"]) < 0
-    assert rec["camber"][descending].mean() > 0.002, "wing supinates through the downstroke"
-    assert rec["camber"][~descending].mean() < -0.002, "wing does not supinate on the upstroke"
+    forward = np.gradient(rec["azim_L"]) > 0
+    assert forward.any() and (~forward).any()
+    a, b = rec["camber"][forward].mean(), rec["camber"][~forward].mean()
+    assert a * b < 0, f"wing does not flip between half-strokes ({a * 1000:+.1f} / {b * 1000:+.1f} mm)"
+    assert min(abs(a), abs(b)) > 0.002, "the flip is too shallow to read"
 
 
 def test_left_and_right_mirror(stroke):
     rec, _ = stroke
     assert np.abs(rec["elev_L"] - rec["elev_R"]).max() < 0.5
+    # Side-correct roll metric: mirrored wings must report the same number, not
+    # opposite or 180 deg apart.
+    assert np.abs(rec["roll_L"] - rec["roll_R"]).max() < 0.5
     mirror = np.abs(rec["tip_L"] - rec["tip_R"] * np.array([1.0, -1.0, 1.0])).max()
     assert mirror < 1e-4, f"wingtips are {mirror * 1000:.2f} mm from mirrored"
 
@@ -274,8 +317,8 @@ def test_wingtip_clears_the_floor(stroke):
 @pytest.mark.parametrize(
     "old,new",
     [
-        ("mount       = [-14.14, 18.34, 5.50] deg", "mount       = [-14.14, 18.34] deg"),
-        ("mount       = [-14.14, 18.34, 5.50] deg", "mount       = 30 deg"),
+        ("mount       = [-11.41, 8.07, -1.00] deg", "mount       = [-11.41, 8.07] deg"),
+        ("mount       = [-11.41, 8.07, -1.00] deg", "mount       = 30 deg"),
         ("humerus     = 50 mm", "humerous    = 50 mm"),
         ("elbow_range = [-70, 4] deg", "elbow_range = [-70, 4, 9] deg"),
     ],
@@ -343,9 +386,10 @@ def test_divergence_raises_instead_of_hanging(tmp_path):
 def test_calibration_does_not_read_the_environment(tmp_path, monkeypatch):
     """`calibrate_stroke` is handed a morphology; it must use that one.
 
-    The crank sync underneath re-reads MORPHOLOGY_PATH, which falls back to the
-    hummingbird design. Leaking through it applied a 12 deg crank lag instead of
-    160 and turned the eagle scene back into a horizontal hummingbird sweep.
+    The crank sync underneath re-reads MORPHOLOGY_PATH, which falls back to
+    design/shoulder.tg. Leaking through it applies that file's crank lag instead
+    of this one's, which silently moves the clock every schedule is written
+    against.
     """
     scene = tmp_path / "noenv.xml"
     monkeypatch.setenv("MORPHOLOGY_PATH", str(EAGLE_TG))
@@ -357,7 +401,8 @@ def test_calibration_does_not_read_the_environment(tmp_path, monkeypatch):
     calib = calibrate_stroke(model, morph, control)
     monkeypatch.setenv("MORPHOLOGY_PATH", str(EAGLE_TG))
     reference = calibrate_stroke(model, morph, control)
-    assert abs(calib.top_phase - reference.top_phase) < 1e-9
+    assert abs(calib.reversal_phase - reference.reversal_phase) < 1e-9
+    assert calib.axis == reference.axis
     assert np.allclose(calib.bank_coeffs, reference.bank_coeffs)
 
 
