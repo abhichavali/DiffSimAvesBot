@@ -99,7 +99,9 @@ motors:
 wing on M.midpoint:
     bones:
         # Humerus frame on the mobile strut (intrinsic x-y-z Euler). See header.
-        mount       = [-11.41, 8.07, -1.00] deg
+        # The third angle is a roll about the span: 89 deg stands the wing on edge so
+        # it paddles the sweep. At ~0 the wing lies flat and slices through it.
+        mount       = [-11.41, 8.07, 89.00] deg
         # Ratios from the reference plate, humerus : ulna : manus ~ 1 : 1.12 : 0.98.
         humerus     = 50 mm
         ulna        = 55 mm

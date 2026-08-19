@@ -301,6 +301,21 @@ def calibrate_stroke(
     )
 
 
+def mount_roll_at_rest(model) -> float:
+    """Wing-plane roll the mount was built with, at the compiled rest pose (rad).
+
+    This is the attitude the twist servo should HOLD, not cancel. Levelling to
+    zero is only right for a wing meant to lie flat; roll the mount up on edge so
+    it paddles the sweep instead of slicing it, and zero would be the servo
+    fighting the design back down. Reading it off the model keeps the setpoint and
+    the mount from drifting apart — rotate ``bones.mount`` and this follows.
+    """
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    _, _, bid = _ids(model)
+    return wing_plane_roll(np.asarray(data.xmat[bid]).reshape(3, 3), "L")
+
+
 def calibrated_drive(model, morph, control: FourierControl, passes: int = 2, **kwargs):
     """Build an :class:`EagleWingDrive` whose roll cancellation has converged.
 
@@ -308,6 +323,7 @@ def calibrated_drive(model, morph, control: FourierControl, passes: int = 2, **k
     running and folds the leftover roll into the correction. Two is enough in
     practice — a third moves the residual by well under a degree.
     """
+    kwargs.setdefault("attack", mount_roll_at_rest(model))
     calib = calibrate_stroke(model, morph, control)
     drive = EagleWingDrive(model, calib=calib, **kwargs)
     for _ in range(max(0, passes - 1)):
@@ -336,7 +352,11 @@ class EagleWingDrive:
     fold: float = 0.35  # fraction of the elbow range used at full flexion
     wrist_fold: float = 1.0  # scales `fold` at the wrist
     twist: float = math.radians(30.0)  # peak wing flip (rad; negate to reverse the sense)
-    level: float = 1.0  # how much of the measured roll to cancel (1 = fully level)
+    level: float = 1.0  # how much of the measured roll deviation to cancel
+    # Wing-plane roll the servo holds (rad). 0 lays the wing flat, which slices
+    # through a horizontal sweep; ~90 deg stands it on edge so it paddles.
+    # calibrated_drive defaults this to the mount's own built-in roll.
+    attack: float = 0.0
     lead: float = math.radians(35.0)  # fold leads the flap by this crank angle
 
     def __post_init__(self) -> None:
@@ -363,16 +383,16 @@ class EagleWingDrive:
         reversal and is fully spread across the fast part of the sweep — which is
         what a hummingbird does, and the opposite of folding once per beat.
 
-        The twist target is two terms: cancel the roll the tensegrity imposes
-        (which otherwise turns the wing edge-on twice a beat), then add a
-        deliberate pronation that leads by a quarter cycle, so the wing is
-        nose-down through one half-stroke and nose-up through the other — the flip
-        a hummingbird makes at each end of the row.
+        The twist target is two terms: hold the wing plane at ``attack`` against
+        the roll the tensegrity imposes (which otherwise swings the plane through
+        ~41 deg twice a beat), then add a deliberate flip that leads by a quarter
+        cycle, so the wing leans one way through the forward half-stroke and the
+        other way coming back — what a hummingbird does at each end of the row.
         """
         phase = theta - self.calib.reversal_phase
         # A positive twist angle carries the trailing edge down, i.e. nose-UP, so
         # pronation is the negative direction.
-        twist = -self.level * self.calib.bank_at(theta) - self.twist * math.sin(phase)
+        twist = -self.level * (self.calib.bank_at(theta) - self.attack) - self.twist * math.sin(phase)
         # cos(2*phase) so the tuck happens at BOTH reversals, once per half-stroke.
         return twist, 0.5 * (1.0 + math.cos(2.0 * phase + self.lead))
 

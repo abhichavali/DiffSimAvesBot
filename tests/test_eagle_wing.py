@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -94,7 +95,7 @@ def stroke(tmp_path_factory):
                 out["camber"].append(float(edge[1][2] - edge[0][2]))
         out["elbow"].append(math.degrees(float(data.qpos[elbow])))
         out["wrist"].append(math.degrees(float(data.qpos[wrist])))
-    return {k: np.asarray(v) for k, v in out.items()}, morph
+    return {k: np.asarray(v) for k, v in out.items()}, morph, drive
 
 
 def test_topology_is_humerus_ulna_manus(tmp_path):
@@ -125,7 +126,7 @@ def test_topology_is_humerus_ulna_manus(tmp_path):
 
 def test_stroke_is_a_hummingbird_sweep(stroke):
     """Side to side in a near-horizontal stroke plane, not an up-and-down flap."""
-    rec, _ = stroke
+    rec, _, drive = stroke
     azim, elev = rec["azim_L"], rec["elev_L"]
     sweep = azim.max() - azim.min()
     rise = elev.max() - elev.min()
@@ -147,7 +148,7 @@ def test_wing_tucks_at_each_reversal(stroke):
     flex, but it has to be phase-locked to the stroke: most flexed where the sweep
     turns around, most extended where it is fastest.
     """
-    rec, _ = stroke
+    rec, _, drive = stroke
     for joint in ("elbow", "wrist"):
         travel = rec[joint].max() - rec[joint].min()
         assert 8.0 < travel < 45.0, f"{joint} moves {travel:.1f} deg — not a shallow tuck"
@@ -230,23 +231,37 @@ def test_wing_plane_stays_level(tmp_path):
     assert residual < 15.0, f"wing plane still rolls {residual:.1f} deg"
 
 
-def test_wing_flips_between_half_strokes(stroke):
-    """Pronated one way going forward, the other going back — the hummingbird flip.
+def test_wing_paddles_rather_than_slices(stroke):
+    """The wing plane stands on edge, near-perpendicular to the sweep.
 
-    A positive twist angle carries the trailing edge *down*, so the sign of this
-    term is easy to get backwards and nothing else in the model notices —
-    design/eagle.tg declares no aero.
+    Flat (roll ~0) the wing slices through a horizontal stroke edge-first, which
+    is the wrong way round for a wing that is meant to push against the air. The
+    servo holds whatever roll the mount was built with; this asserts the whole
+    assembly really is rolled up, not laid down.
     """
-    rec, _ = stroke
+    rec, _, drive = stroke
+    held = abs(math.degrees(drive.attack))
+    assert 60.0 < held < 120.0, f"mount holds the wing at {held:.0f} deg — that is not on edge"
+    assert abs(np.abs(rec["roll_L"]).mean() - held) < 20.0, "the wing is not tracking its attack angle"
+
+
+def test_wing_flips_between_half_strokes(stroke):
+    """Leaning one way going forward, the other coming back — the hummingbird flip.
+
+    Measured as the wing plane's departure from the angle the servo holds, so it
+    reads the same whether the wing is laid flat or stood on edge.
+    """
+    rec, _, drive = stroke
+    deviation = rec["roll_L"] - math.degrees(drive.attack)
     forward = np.gradient(rec["azim_L"]) > 0
     assert forward.any() and (~forward).any()
-    a, b = rec["camber"][forward].mean(), rec["camber"][~forward].mean()
-    assert a * b < 0, f"wing does not flip between half-strokes ({a * 1000:+.1f} / {b * 1000:+.1f} mm)"
-    assert min(abs(a), abs(b)) > 0.002, "the flip is too shallow to read"
+    a, b = deviation[forward].mean(), deviation[~forward].mean()
+    assert a * b < 0, f"wing does not flip between half-strokes ({a:+.1f} / {b:+.1f} deg)"
+    assert min(abs(a), abs(b)) > 3.0, "the flip is too shallow to read"
 
 
 def test_left_and_right_mirror(stroke):
-    rec, _ = stroke
+    rec, _, drive = stroke
     assert np.abs(rec["elev_L"] - rec["elev_R"]).max() < 0.5
     # Side-correct roll metric: mirrored wings must report the same number, not
     # opposite or 180 deg apart.
@@ -310,26 +325,28 @@ def test_feathers_clear_the_rig_and_each_other(tmp_path):
 
 
 def test_wingtip_clears_the_floor(stroke):
-    rec, _ = stroke
+    rec, _, drive = stroke
     assert rec["tip_L"][:, 2].min() > 0.02, "wingtip sweeps through the floor"
 
 
 @pytest.mark.parametrize(
-    "old,new",
+    "pattern,replacement",
     [
-        ("mount       = [-11.41, 8.07, -1.00] deg", "mount       = [-11.41, 8.07] deg"),
-        ("mount       = [-11.41, 8.07, -1.00] deg", "mount       = 30 deg"),
-        ("humerus     = 50 mm", "humerous    = 50 mm"),
-        ("elbow_range = [-70, 4] deg", "elbow_range = [-70, 4, 9] deg"),
+        # Matched by shape, not by literal value: the mount is a searched number
+        # and pinning it here means this test breaks every time it is retuned.
+        (r"mount(\s*)= \[[^\]]*\] deg", r"mount\1= [-11.4, 8.1] deg"),
+        (r"mount(\s*)= \[[^\]]*\] deg", r"mount\1= 30 deg"),
+        (r"humerus(\s*)= ", r"humerous\1= "),
+        (r"elbow_range(\s*)= \[[^\]]*\] deg", r"elbow_range\1= [-70, 4, 9] deg"),
     ],
 )
-def test_malformed_bones_section_is_rejected(tmp_path, old, new):
+def test_malformed_bones_section_is_rejected(tmp_path, pattern, replacement):
     """A dropped mount component or a typo'd key is a different wing, not a rounder
     number — the parser must say so instead of substituting a default."""
-    text = EAGLE_TG.read_text()
-    assert old in text
+    text, count = re.subn(pattern, replacement, EAGLE_TG.read_text(), count=1)
+    assert count == 1, f"{pattern} no longer matches design/eagle.tg"
     tg = tmp_path / "bad.tg"
-    tg.write_text(text.replace(old, new))
+    tg.write_text(text)
     with pytest.raises(ValueError):
         load_morphology(tg)
 

@@ -121,7 +121,8 @@ MUJOCO_GL=egl PYTHONPATH=src uv run python -m runtime.mjx.live_viewer \
 
 A three-linkage avian wing (humerus / ulna / manus) on the same tensegrity
 shoulder, stroking the way the plate wing does: a wide side-to-side sweep in a
-near-horizontal stroke plane (118 deg of sweep against 38 deg of elevation).
+near-horizontal stroke plane (118 deg of sweep against 38 deg of elevation), with
+the wing standing on edge so it paddles the sweep instead of slicing it.
 The humerus is a rigid child of the mobile strut, so the tendon network is its
 shoulder joint exactly as it is the plate wing's; only the elbow and wrist are
 ordinary hinges.
@@ -144,7 +145,9 @@ Useful flags:
 # --fold  elbow/wrist tuck at each stroke reversal, 0..1 of the .tg range
 # --twist peak wing flip between half-strokes, degrees
 # --lead  how far the tuck leads the stroke, degrees of crank angle
-# --level cancel the roll the tendon network imposes (0 = leave it in)
+# --level authority holding that plane against the tendon network (0 = none)
+# --attack wing-plane roll to hold, degrees: 0 lies flat and slices the sweep,
+#          ~90 stands the wing on edge so it paddles (default: the mount's own)
 uv run python src/view_eagle.py --fold 0.35 --twist 30 --lead 35 --level 1.0
 #+end_src
 

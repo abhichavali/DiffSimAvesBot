@@ -46,6 +46,7 @@ def build(args):
     data = mujoco.MjData(model)
     sync_crank_disks_at_rest(model, data)
     cranks = CrankDrive(model, morph, control)
+    extra = {} if args.attack is None else {"attack": math.radians(args.attack)}
     drive = calibrated_drive(
         model,
         morph,
@@ -54,6 +55,7 @@ def build(args):
         twist=math.radians(args.twist),
         level=args.level,
         lead=math.radians(args.lead),
+        **extra,
     )
     calib = drive.calib
     print(
@@ -61,7 +63,8 @@ def build(args):
         f"{calib.elevation_deg:.0f} deg of elevation, reversing at crank "
         f"{math.degrees(calib.reversal_phase) % 360:.0f} deg; "
         f"{control.fundamental_frequency_hz:.3g} Hz; wing half-span "
-        f"{morph.wing.bones.span * 1000:.0f} mm",
+        f"{morph.wing.bones.span * 1000:.0f} mm; wing plane held at "
+        f"{math.degrees(drive.attack):.0f} deg (0 = flat, 90 = on edge)",
         flush=True,
     )
     return model, data, cranks, control, drive
@@ -121,7 +124,10 @@ def main() -> None:
     p.add_argument("--fold", type=float, default=0.35, help="Elbow/wrist flexion at the stroke reversals, 0..1 of range")
     p.add_argument("--twist", type=float, default=30.0, help="Peak wing flip between half-strokes (deg)")
     p.add_argument("--lead", type=float, default=35.0, help="Fold lead ahead of the stroke (deg)")
-    p.add_argument("--level", type=float, default=1.0, help="Roll cancellation, 0..1")
+    p.add_argument("--level", type=float, default=1.0, help="Roll-hold authority, 0..1")
+    p.add_argument("--attack", type=float, default=None,
+                   help="Wing-plane roll to hold (deg). 0 lies flat and slices the sweep, "
+                        "~90 stands the wing on edge so it paddles. Default: the mount's own roll")
     p.add_argument("--gif", type=Path, default=None, help="Record to this GIF instead of viewing")
     p.add_argument("--gif-cycles", type=float, default=3.0)
     p.add_argument("--fps", type=int, default=25)
