@@ -12,6 +12,7 @@ opt/sweep_scene.xml
 MUJOCO_LOG.TXT
 ff_scene.xml
 scene_*.xml
+eagle_scene.xml
 ltximg/
 .cursor/
 .gui_plot_cache/

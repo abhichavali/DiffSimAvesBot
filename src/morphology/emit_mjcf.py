@@ -11,7 +11,7 @@ import numpy as np
 from morphology.compiled import CompiledMorphology, CompiledShoulder
 from morphology.motor_tendons import MotorTendonRange
 from morphology.geometry import world_node
-from morphology.symmetry import resolve_material_props
+from morphology.symmetry import mirror_quat_wxyz, resolve_material_props
 from morphology.tendons import anchor_node_name, edge_topology_key, legacy_edge_name
 
 MATPLOTLIB_BLUE_RGBA = "0.12156862745098039 0.4666666666666667 0.7058823529411765 1"
@@ -116,8 +116,9 @@ def _add_assets(root: ET.Element, morph) -> None:
         texrepeat="5 5",
         reflectance="0.2",
     )
-    ET.SubElement(asset, "mesh", file=morph.wing.mesh_file)
-    ET.SubElement(asset, "material", name="wing_material", rgba="0.615686 0.811765 0.929412 1")
+    if morph.wing.bones is None:
+        ET.SubElement(asset, "mesh", file=morph.wing.mesh_file)
+        ET.SubElement(asset, "material", name="wing_material", rgba="0.615686 0.811765 0.929412 1")
 
 
 def _emit_scene_environment(worldbody: ET.Element) -> None:
@@ -170,7 +171,10 @@ def _emit_shoulder(
         shoulder.fixed_quat,
         joint="fixed",
     )
-    _emit_wing(mobile_el, shoulder, morph, compiled)
+    if morph.wing.bones is None:
+        _emit_wing(mobile_el, shoulder, morph, compiled)
+    else:
+        _emit_bone_wing(mobile_el, shoulder, morph)
     for disk_name, disk in shoulder.disks.items():
         _emit_crank_disk(worldbody, disk_name, disk, morph)
 
@@ -392,6 +396,176 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph, compiled: 
             rgba=f"{red:.3f} {green:.3f} {blue:.3f} 1",
             group="3",
         )
+
+
+BONE_RGBA = "0.93 0.90 0.82 1"
+FEATHER_RGBA = ("0.30 0.22 0.16 1", "0.20 0.15 0.11 1")  # coverts, flight feathers
+
+
+def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> None:
+    """Humerus / ulna / manus chain hanging off the mobile strut.
+
+    The humerus is a rigid child of the strut — the tensegrity network is its
+    shoulder joint, same as the plate wing — with one twist hinge about the span
+    for feathering. Elbow and wrist are plain hinges about the wing-plane normal,
+    so the wing folds inside its own plane the way a bird's does.
+
+    Bone-local frame: +z spans out to the tip, +x is chord (trailing edge), +y is
+    the wing normal. The R side is the exact y-mirror of L: every offset here is
+    y-free, so only the mount quaternion mirrors and the twist axis flips sign
+    (a_R = -M a_L; the same rule the plate wing's pitch hinge follows).
+    """
+    b = morph.wing.bones
+    prefix = shoulder.side
+    quat = b.mount_quat()
+    if prefix == "R":
+        quat = mirror_quat_wxyz(quat)
+    twist_axis = "0 0 1" if prefix == "L" else "0 0 -1"
+    # Critical damping on the servo'd hinges: overshoot here shakes the whole
+    # tendon network, and a folding wing has no reason to ring.
+    kv = 2.0 * math.sqrt(max(b.servo, 0.0) * max(b.armature, 1e-12))
+
+    def hinge(body, name, axis, rng):
+        ET.SubElement(
+            body,
+            "joint",
+            name=f"{prefix}_{name}",
+            type="hinge",
+            axis=axis,
+            limited="true",
+            range=_vec2(rng),
+            damping=str(b.damping),
+            armature=str(b.armature),
+            # The shoulder-joint class default frictionloss=0.1 N m is ~1000x the
+            # torque these gram-scale bones see; it would stiction-lock the fold.
+            frictionloss="0",
+        )
+
+    def bone(body, name, z0, z1, radius, mass, dx=0.0):
+        ET.SubElement(
+            body,
+            "geom",
+            name=f"{prefix}_{name}",
+            type="capsule",
+            fromto=f"{dx} 0 {z0} {dx} 0 {z1}",
+            size=str(radius),
+            mass=str(mass),
+            rgba=BONE_RGBA,
+            contype="0",
+            conaffinity="0",
+            group="2",
+        )
+
+    def feathers(body, tag, count, z0, z1, len0, len1, rake0, rake1, width, rgba):
+        """Fan ``count`` flat vanes off a bone, rooted at successive span stations.
+
+        ``rake`` is the angle of the shaft off the span axis toward the trailing
+        edge: ~15 deg on the outermost primary (it continues the wingtip) up to
+        ~90 deg on a secondary (straight aft). Sweeping the rake across the manus
+        is what gives an eagle its separated, fingered tip rather than one slab.
+        Each vane lies in the wing plane, thin along the wing normal.
+
+        Returns the world-frame (bone-local) tip of the last vane.
+        """
+        tip = (0.0, 0.0, z1)
+        for i in range(count):
+            t = 0.0 if count == 1 else i / (count - 1)
+            rake = rake0 + t * (rake1 - rake0)
+            length = len0 + t * (len1 - len0)
+            root_z = z0 + t * (z1 - z0)
+            # Rotating +z about +y by `rake` gives (sin, 0, cos): out along the
+            # span and aft. The vane's long axis is its own local z.
+            d = (math.sin(rake), 0.0, math.cos(rake))
+            ET.SubElement(
+                body,
+                "geom",
+                name=f"{prefix}_{tag}_{i + 1:02d}",
+                type="box",
+                pos=f"{0.5 * length * d[0]} 0 {root_z + 0.5 * length * d[2]}",
+                euler=f"0 {rake} 0",
+                size=f"{0.5 * width} 0.0004 {0.5 * length}",
+                mass=str(0.02 * b.mass),
+                rgba=rgba,
+                contype="0",
+                conaffinity="0",
+                group="2",
+            )
+            tip = (length * d[0], 0.0, root_z + length * d[2])
+        return tip
+
+    humerus = ET.SubElement(
+        parent,
+        "body",
+        name=f"{prefix}_humerus",
+        pos=_vec3(shoulder.mobile_geom.midpoint),
+        childclass="shoulder-joint",
+        quat=_vec4(quat),
+    )
+    hinge(humerus, "humerus_twist", twist_axis, b.twist_range_rad)
+    bone(humerus, "humerus", 0.0, b.humerus, 0.0030, 0.40 * b.mass)
+    ET.SubElement(
+        humerus,
+        "geom",
+        name=f"{prefix}_humerus_head",
+        type="sphere",
+        pos="0 0 0",
+        size="0.0042",
+        mass=str(0.05 * b.mass),
+        rgba=BONE_RGBA,
+        contype="0",
+        conaffinity="0",
+        group="2",
+    )
+    # Tertials: the innermost flight feathers, filling the gap in to the body.
+    feathers(humerus, "tertial", 3, 0.10 * b.humerus, 0.95 * b.humerus,
+             0.95 * b.chord, 1.0 * b.chord, math.radians(115), math.radians(98),
+             0.36 * b.chord, FEATHER_RGBA[0])
+
+    ulna = ET.SubElement(humerus, "body", name=f"{prefix}_ulna", pos=f"0 0 {b.humerus}")
+    hinge(ulna, "elbow", "0 1 0", b.elbow_range_rad)
+    bone(ulna, "ulna", 0.0, b.ulna, 0.0024, 0.35 * b.mass)
+    # The radius: the thin second forearm bone in the reference figure. Visual
+    # only, but it is what makes the forearm read as a forearm and not a stick.
+    bone(ulna, "radius", 0.0, b.ulna, 0.0013, 0.05 * b.mass, dx=-0.0052)
+    feathers(ulna, "secondary", 7, 0.06 * b.ulna, 0.96 * b.ulna,
+             1.0 * b.chord, 0.84 * b.chord, math.radians(95), math.radians(78),
+             0.30 * b.chord, FEATHER_RGBA[0])
+
+    manus = ET.SubElement(ulna, "body", name=f"{prefix}_manus", pos=f"0 0 {b.ulna}")
+    hinge(manus, "wrist", "0 1 0", b.wrist_range_rad)
+    bone(manus, "carpometacarpus", 0.0, 0.62 * b.manus, 0.0019, 0.14 * b.mass)
+    bone(manus, "phalanx", 0.62 * b.manus, b.manus, 0.0013, 0.06 * b.mass)
+    # Alula: the little thumb tuft on the leading edge of the wrist.
+    ET.SubElement(
+        manus,
+        "geom",
+        name=f"{prefix}_alula",
+        type="box",
+        pos=f"{-0.006} 0 {0.14 * b.manus}",
+        euler=f"0 {math.radians(-28)} 0",
+        size=f"{0.10 * b.chord} 0.0004 0.011",
+        mass=str(0.02 * b.mass),
+        rgba=FEATHER_RGBA[0],
+        contype="0",
+        conaffinity="0",
+        group="2",
+    )
+    # Primaries: long, separated, raked progressively forward toward the tip —
+    # the eagle's fingered wingtip. The outermost one carries the wingtip marker.
+    tip = feathers(manus, "primary", 8, 0.05 * b.manus, b.manus,
+                   0.72 * b.primary, 1.0 * b.primary, math.radians(70), math.radians(16),
+                   0.20 * b.chord, FEATHER_RGBA[1])
+    # Wingtip marker: the reference point every kinematic check measures.
+    ET.SubElement(
+        manus,
+        "site",
+        name=f"{prefix}_wingtip",
+        type="sphere",
+        pos=_vec3(tip),
+        size="0.004",
+        rgba="1 0.85 0.1 1",
+        group="3",
+    )
 
 
 def _capsule(parent, name, p1, p2, radius, mass):
@@ -647,6 +821,37 @@ def _add_actuators(root: ET.Element, compiled: CompiledMorphology) -> None:
             if gear != 1.0:
                 attrs["gear"] = f"{gear:.6g}"
             ET.SubElement(act, "velocity", **attrs)
+    _add_bone_actuators(act, compiled)
+
+
+def _add_bone_actuators(act: ET.Element, compiled: CompiledMorphology) -> None:
+    """Position servos for the avian wing's elbow, wrist and humerus twist.
+
+    The tensegrity shoulder supplies the flap; these three hold the fold and the
+    feathering against it. Servos rather than springs because the fold has to
+    track the stroke phase, and because a stiff, critically damped setpoint is
+    the cheapest way to keep a long wing from ringing the tendon network.
+    """
+    b = compiled.morph.wing.bones
+    if b is None:
+        return
+    kv = 2.0 * math.sqrt(max(b.servo, 0.0) * max(b.armature, 1e-12))
+    joints = (
+        ("humerus_twist", b.twist_range_rad),
+        ("elbow", b.elbow_range_rad),
+        ("wrist", b.wrist_range_rad),
+    )
+    for shoulder in compiled.shoulders:
+        for name, rng in joints:
+            ET.SubElement(
+                act,
+                "position",
+                name=f"{shoulder.side}_{name}_servo",
+                joint=f"{shoulder.side}_{name}",
+                kp=f"{b.servo:.6g}",
+                kv=f"{kv:.6g}",
+                ctrlrange=_vec2(rng),
+            )
 
 
 def _vec3(v) -> str:

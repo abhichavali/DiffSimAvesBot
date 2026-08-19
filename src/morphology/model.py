@@ -201,12 +201,73 @@ class WingAero:
 
 
 @dataclass
+class WingBones:
+    """Three-linkage avian wing (humerus / ulna / manus) in place of the flat plate.
+
+    Bone frame: +z = span (shoulder -> wingtip), +x = chord (toward the trailing
+    edge), +y = wing-plane normal. The humerus is a rigid child of the mobile
+    strut — the tensegrity shoulder IS its joint, exactly as for the plate wing —
+    plus one twist hinge about the span for feathering. The elbow and wrist are
+    ordinary hinges about the wing normal, so the wing folds in its own plane.
+
+    ``mount_euler_rad`` reorients that chain on the strut. It is load-bearing: the
+    strut's rocking is a compound whirl, and only a narrow band of mount
+    orientations turns it into a dominant up/down flap instead of the plate wing's
+    fore-aft hummingbird sweep. See ``design/eagle.tg`` for how the default was found.
+    """
+
+    mount_euler_rad: Tuple[float, float, float] = (
+        math.radians(175.0),
+        math.radians(143.0),
+        math.radians(-15.0),
+    )
+    humerus: float = 0.045
+    ulna: float = 0.060
+    manus: float = 0.075
+    chord: float = 0.055  # secondary-feather length (wing chord at the forearm)
+    primary: float = 0.062  # primary-feather length at the wingtip
+    mass: float = 1.0e-4  # per bone
+    elbow_range_rad: Tuple[float, float] = (-1.25, 0.09)
+    wrist_range_rad: Tuple[float, float] = (-1.20, 0.09)
+    twist_range_rad: Tuple[float, float] = (-0.60, 0.60)
+    # Position-servo stiffness for the three driven hinges. Damping is derived
+    # critical (2*sqrt(kp*armature)) so the fold can never ring the tensegrity.
+    servo: float = 0.1
+    damping: float = 2.0e-4
+    armature: float = 2.0e-5
+
+    @property
+    def span(self) -> float:
+        """Shoulder to wingtip, feathers included."""
+        return self.humerus + self.ulna + self.manus + self.primary
+
+    def mount_quat(self) -> Tuple[float, float, float, float]:
+        """Intrinsic x-y-z Euler (MJCF ``eulerseq`` default) as a w-first quaternion."""
+        half = [0.5 * a for a in self.mount_euler_rad]
+        q = (1.0, 0.0, 0.0, 0.0)
+        for axis, a in enumerate(half):
+            r = [math.cos(a), 0.0, 0.0, 0.0]
+            r[axis + 1] = math.sin(a)
+            w1, x1, y1, z1 = q
+            w2, x2, y2, z2 = r
+            q = (
+                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            )
+        return q
+
+
+@dataclass
 class Wing:
     rod_length: float = 0.018
     mount_arm: float = 0.055
     mesh_file: str = "wing.stl"
     pitch: WingPitch = field(default_factory=WingPitch)
     aero: WingAero = field(default_factory=WingAero)
+    # None -> the legacy flat plate + aero blade sites (hummingbird).
+    bones: Optional[WingBones] = None
 
 
 @dataclass

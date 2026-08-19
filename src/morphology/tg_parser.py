@@ -35,6 +35,7 @@ from morphology.model import (
     TendonNet,
     Wing,
     WingAero,
+    WingBones,
     WingPitch,
     World,
 )
@@ -222,6 +223,7 @@ class _TgParser:
         self.wing: Dict[str, Any] = {}
         self.wing_pitch: Dict[str, Any] = {}
         self.wing_aero: Dict[str, Any] = {}
+        self.wing_bones: Dict[str, Any] = {}
 
     def parse(self) -> Morphology:
         i = 0
@@ -462,6 +464,9 @@ class _TgParser:
             if line == "aero:":
                 section = "aero"
                 continue
+            if line == "bones:":
+                section = "bones"
+                continue
             if " = " in line:
                 key, val = line.split("=", 1)
                 key = key.strip()
@@ -470,6 +475,8 @@ class _TgParser:
                     bucket = self.wing_pitch
                 elif section == "aero":
                     bucket = self.wing_aero
+                elif section == "bones":
+                    bucket = self.wing_bones
                 parsed = _parse_scalar(val.strip())
                 # _parse_scalar keeps angle literals numeric; convert deg->rad here.
                 if (
@@ -478,6 +485,12 @@ class _TgParser:
                     and re.search(r"\bdeg\b", val, re.I)
                 ):
                     parsed = math.radians(float(parsed))
+                elif section == "bones" and re.search(r"\bdeg\b", val, re.I):
+                    parsed = (
+                        tuple(math.radians(float(v)) for v in parsed)
+                        if isinstance(parsed, tuple)
+                        else math.radians(float(parsed))
+                    )
                 bucket[key] = parsed
                 continue
             if indent >= 8 and ":" in line:
@@ -632,7 +645,30 @@ class _TgParser:
                     force_scale=float(self.wing_aero.get("force_scale", 1_000_000.0)),
                     include_body_torque=bool(self.wing_aero.get("body_torque", False)),
                 ),
+                bones=self._build_bones(),
             ),
+        )
+
+    def _build_bones(self) -> Optional[WingBones]:
+        b = self.wing_bones
+        if not b:
+            return None
+        d = WingBones()
+        pair = lambda k, dflt: tuple(float(x) for x in b.get(k, dflt))  # noqa: E731
+        return WingBones(
+            mount_euler_rad=pair("mount", d.mount_euler_rad),
+            humerus=float(b.get("humerus", d.humerus)),
+            ulna=float(b.get("ulna", d.ulna)),
+            manus=float(b.get("manus", d.manus)),
+            chord=float(b.get("chord", d.chord)),
+            primary=float(b.get("primary", d.primary)),
+            mass=float(b.get("mass", d.mass)),
+            elbow_range_rad=pair("elbow_range", d.elbow_range_rad),
+            wrist_range_rad=pair("wrist_range", d.wrist_range_rad),
+            twist_range_rad=pair("twist_range", d.twist_range_rad),
+            servo=float(b.get("servo", d.servo)),
+            damping=float(b.get("damping", d.damping)),
+            armature=float(b.get("armature", d.armature)),
         )
 
 

@@ -1,0 +1,111 @@
+name = aves-eagle
+
+# AvesEagle: the hummingbird tensegrity shoulder carrying a three-linkage avian
+# wing (humerus / ulna / manus) instead of the flat plate. Bone proportions and
+# the fold topology follow the Passeri wing-skeleton figure on Wikimedia Commons
+# (Bird wing skeleton. Passeri.svg): humerus, then the ulna+radius forearm, then
+# the carpometacarpus + phalanges of the manus, with the primaries raked off the
+# manus and the secondaries off the ulna.
+#
+# The shoulder is unchanged tensegrity: the humerus is a rigid child of the
+# mobile strut, so the tendon network IS its glenohumeral joint, exactly as the
+# plate wing is mounted. Only the elbow and wrist are ordinary hinges.
+#
+# Three knobs turn the hummingbird's stroke into an eagle's. `crank_phase_lag`
+# 160 deg (vs the hovering design's 12) flips which compliant mode of the tendon
+# network the two counter-rotating cranks excite: near 0 deg lag the strut whirls
+# fore-aft — a hovering hummingbird's horizontal stroke plane — and near 180 deg
+# it rocks up and down. Disk `pitch` 30 deg and `bones.mount` then orient the
+# wing on that rock. Measured together: flap elevation -30..+30 deg against
+# 36 deg of fore-aft sweep, an eagle's stroke rather than a hummingbird's.
+#
+# What the shoulder will NOT do on its own is hold the wing plane flat — the rock
+# is a compound whirl that rolls the wing ~50 deg peak-to-peak, turning it edge-on
+# twice a beat. runtime/eagle_drive.py measures that roll per scene and cancels it
+# with the humerus twist servo, which is also what carries the deliberate
+# pronation. Retune anything above and the correction re-measures itself.
+
+world:
+    # Timestep is set by tendon stiffness, not drive rate, so the hummingbird's
+    # 0.13 ms at scale 0.4 carries over unchanged even though the eagle flaps 4x
+    # slower.
+    gravity    = [0, 0, -9.81]
+    timestep   = 0.13 ms
+    integrator = Euler
+    scale      = 0.4
+    meshdir    = assets
+
+archetype strut C:
+    shape    = arc
+    radius   = 48.23931363603964 mm
+    stations = [5.8, 68.7, 111.3, 174.2] deg
+    width    = 6.0 mm
+    arc_rod  = { radius: 4.0 mm, mass: 10 g }
+    rung_rod = { radius: 2.0 mm, mass: 5 g }
+    symmetry sigma = reflect(stations: 1<->4, 2<->3 ; faces: A<->B)
+
+strut F = C { role: fixed,  plane: YZ }
+strut M = C { role: mobile, plane: XZ }
+
+arrange M relative_to F:
+    gap            = 30 mm
+    angle          = 0 deg
+    mobile_dx      = 5 mm
+    inplane_offset = 4.649 mm
+
+placement:
+    mount_height   = 258 mm
+    lateral_offset = 31 mm
+
+tendons:
+    defaults { stiffness: 200 N/m, damping: 0.5, pretension: 0.827, width: 0.75 mm }
+    length = derived
+    generators under sigma:
+        M[1A] -- F[4B]
+        M[1A] -- F[3B]
+        M[1B] -- F[2B]
+        M[1B] -- F[1B]
+        M[2A] -- F[4B]
+        M[2B] -- F[1B]
+
+motors:
+    disk { radius: 18.0 mm, crank_throw: 18 mm, tilt: 0.0 rad, pitch: 30 deg, kv: 1.0, ctrl: [-120, 120],
+           solref: [0.02857142857142857, 1.0],
+           outboard: 30.625 mm,
+           foot_outset: 0.25 mm,
+           disk_dx: 0 mm, disk_dy: -20 mm }
+    drive M[1] and M[4]
+    attach_along_edge = 0.0 rad
+    attach_radius = 1.0
+    # 160 deg, not the hovering design's 12: this is the eagle knob. See header.
+    crank_phase_lag = 160 deg
+    crank_throw_t4 = 18 mm
+    tendon_rest_length = 53 mm
+    tendon_stiffness  = 1000 N/m
+    tendon_damping    = 1.0
+    control = eagle_control.tg
+    motor_direction = 1
+
+wing on M.midpoint:
+    bones:
+        # Humerus frame on the mobile strut (intrinsic x-y-z Euler). Found by
+        # recording the strut's rotation over a cycle and searching SO(3) for the
+        # mount that maximises flap elevation while keeping the fore-aft sweep
+        # small and the wing plane level at mid-stroke.
+        mount       = [-14.14, 18.34, 5.50] deg
+        humerus     = 50 mm
+        ulna        = 55 mm
+        manus       = 35 mm
+        primary     = 95 mm
+        chord       = 70 mm
+        mass        = 0.12 g
+        # Eagles flex, they do not tuck: the wing extends through the downstroke
+        # and folds only partway on the upstroke.
+        elbow_range = [-70, 4] deg
+        wrist_range = [-65, 4] deg
+        twist_range = [-50, 50] deg
+        # Stiff: a critically damped servo at kp 0.1 lagged the 2.5 Hz stroke by
+        # ~25 deg, which showed up as the wing failing to level in time.
+        servo       = 6.0
+        damping     = 2e-4
+        armature    = 2e-5

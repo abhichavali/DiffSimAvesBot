@@ -1,0 +1,9 @@
+# Eagle cruise flap. a0 is the crank velocity command (rad/s); the disks are
+# velocity servos, so flap frequency = a0 / 2pi. 15.7 rad/s -> 2.5 Hz, the
+# cruise beat of a golden eagle. fundamental_frequency is the phase reference
+# used by the runners and plots and must track the achieved rate.
+harmonics = 1
+fundamental_frequency = 2.5 Hz
+a0 = 15.708
+a_1 = 0
+b_1 = 0
