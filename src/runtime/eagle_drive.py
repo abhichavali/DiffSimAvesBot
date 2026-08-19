@@ -54,7 +54,7 @@ def drive_cranks(model, data, morph, control: FourierControl, t0: float, ramp: f
 HARMONICS = 6
 
 
-def _bank(rot: np.ndarray) -> float:
+def wing_plane_roll(rot: np.ndarray) -> float:
     """Signed roll of the wing plane about the span axis (rad); 0 = plane level.
 
     ``h`` is the horizontal direction perpendicular to the span — where the chord
@@ -138,7 +138,7 @@ def calibrate_stroke(
         thetas.append(float(data.qpos[qadr]))
         # With a drive already running, what is left to cancel is the residual on
         # top of what it is commanding, so fold its own twist target back in.
-        residual = _bank(rot)
+        residual = wing_plane_roll(rot)
         if drive is not None:
             residual -= drive.schedule(float(data.qpos[qadr]))[0]
         banks.append(residual)

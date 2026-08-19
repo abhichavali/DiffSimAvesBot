@@ -29,7 +29,7 @@ from compile_tg import compile_tg  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.control_signal import load_control_for_morphology  # noqa: E402
 from runtime.crank_sync import sync_crank_disks_at_rest  # noqa: E402
-from runtime.eagle_drive import _bank, calibrated_drive, drive_cranks  # noqa: E402
+from runtime.eagle_drive import calibrated_drive, drive_cranks, wing_plane_roll  # noqa: E402
 
 EAGLE_TG = ROOT / "design" / "eagle.tg"
 CYCLES = 8.0
@@ -72,7 +72,7 @@ def stroke(tmp_path_factory):
             out[f"tip_{side}"].append(np.array(data.site_xpos[tip[side]]))
             if side == "L":
                 out["azim_L"].append(math.degrees(math.atan2(span[0], span[1])))
-                out["roll_L"].append(math.degrees(_bank(rot)))
+                out["roll_L"].append(math.degrees(wing_plane_roll(rot)))
         out["elbow"].append(math.degrees(float(data.qpos[elbow])))
         out["wrist"].append(math.degrees(float(data.qpos[wrist])))
     return {k: np.asarray(v) for k, v in out.items()}, morph
