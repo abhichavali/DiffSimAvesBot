@@ -154,8 +154,9 @@ def calibrated_drive(model, morph, control: FourierControl, passes: int = 2, **k
     """Build an :class:`EagleWingDrive` whose roll cancellation has converged.
 
     Pass 1 measures the bare shoulder; each later pass re-measures with the drive
-    running and folds the leftover roll into the correction. Two passes is enough
-    in practice — the third moves the residual by under a degree.
+    running and folds the leftover roll into the correction. Two is enough: on
+    design/eagle.tg the residual roll goes 7.2 -> 2.5 deg peak-to-peak, and a
+    third pass only reaches 2.2 (a fourth is back at 2.3, i.e. noise).
     """
     calib = calibrate_stroke(model, morph, control)
     drive = EagleWingDrive(model, calib=calib, **kwargs)

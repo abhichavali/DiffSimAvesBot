@@ -421,9 +421,6 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
     if prefix == "R":
         quat = mirror_quat_wxyz(quat)
     twist_axis = "0 0 1" if prefix == "L" else "0 0 -1"
-    # Critical damping on the servo'd hinges: overshoot here shakes the whole
-    # tendon network, and a folding wing has no reason to ring.
-    kv = 2.0 * math.sqrt(max(b.servo, 0.0) * max(b.armature, 1e-12))
 
     def hinge(body, name, axis, rng):
         ET.SubElement(
@@ -465,7 +462,7 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
         is what gives an eagle its separated, fingered tip rather than one slab.
         Each vane lies in the wing plane, thin along the wing normal.
 
-        Returns the world-frame (bone-local) tip of the last vane.
+        Returns the bone-local tip of the last vane.
         """
         tip = (0.0, 0.0, z1)
         for i in range(count):
@@ -835,6 +832,8 @@ def _add_bone_actuators(act: ET.Element, compiled: CompiledMorphology) -> None:
     b = compiled.morph.wing.bones
     if b is None:
         return
+    # Critically damped: overshoot on these hinges shakes the whole tendon
+    # network, and a folding wing has no reason to ring.
     kv = 2.0 * math.sqrt(max(b.servo, 0.0) * max(b.armature, 1e-12))
     joints = (
         ("humerus_twist", b.twist_range_rad),
