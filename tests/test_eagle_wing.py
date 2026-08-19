@@ -32,6 +32,7 @@ from runtime.crank_sync import sync_crank_disks_at_rest  # noqa: E402
 from runtime.eagle_drive import calibrated_drive, drive_cranks, wing_plane_roll  # noqa: E402
 
 EAGLE_TG = ROOT / "design" / "eagle.tg"
+
 CYCLES = 8.0
 SETTLE = 5.0
 
@@ -55,7 +56,8 @@ def stroke(tmp_path_factory):
     elbow = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "L_elbow")]
     wrist = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "L_wrist")]
 
-    out = {k: [] for k in ("elev_L", "elev_R", "azim_L", "roll_L", "tip_L", "tip_R", "elbow", "wrist")}
+    out = {k: [] for k in
+           ("elev_L", "elev_R", "azim_L", "roll_L", "roll_R", "tip_L", "tip_R", "elbow", "wrist", "camber")}
     end, settle = CYCLES * control.period, SETTLE * control.period
     while data.time < end:
         data.ctrl[:] = 0.0
@@ -70,9 +72,14 @@ def stroke(tmp_path_factory):
             span = rot[:, 2]
             out[f"elev_{side}"].append(math.degrees(math.asin(np.clip(span[2], -1, 1))))
             out[f"tip_{side}"].append(np.array(data.site_xpos[tip[side]]))
+            out[f"roll_{side}"].append(math.degrees(wing_plane_roll(rot, side)))
             if side == "L":
                 out["azim_L"].append(math.degrees(math.atan2(span[0], span[1])))
-                out["roll_L"].append(math.degrees(wing_plane_roll(rot)))
+                # World height of the trailing edge minus the leading edge (-x is
+                # cranial): positive is nose-down, i.e. pronated.
+                origin = np.array(data.xpos[body[side]])
+                edge = [origin + rot @ np.array([s * 0.035, 0.0, 0.11]) for s in (-1.0, 1.0)]
+                out["camber"].append(float(edge[1][2] - edge[0][2]))
         out["elbow"].append(math.degrees(float(data.qpos[elbow])))
         out["wrist"].append(math.degrees(float(data.qpos[wrist])))
     return {k: np.asarray(v) for k, v in out.items()}, morph
@@ -128,6 +135,38 @@ def test_wing_folds_on_the_upstroke(stroke):
     assert corr < -0.5, f"fold is not phase-locked to the flap (corr {corr:+.2f})"
 
 
+def test_fold_is_a_zigzag_not_a_spiral(tmp_path):
+    """Elbow and wrist must counter-rotate, the way the reference plate shows.
+
+    With both hinges on the same normal the chain spirals into a C: at full
+    flexion the wingtip ended up 160 mm AHEAD of the leading edge and inboard of
+    the shoulder. A bird's fold shortens the span and keeps the tip behind the
+    leading edge. Measured in the humerus frame, where -x is cranial.
+    """
+    scene = tmp_path / "fold.xml"
+    compile_tg(EAGLE_TG, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    data = mujoco.MjData(model)
+    humerus = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_humerus")
+    tip = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "L_wingtip")
+    joints = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"L_{n}") for n in ("elbow", "wrist")]
+
+    def tip_in_bone_frame(fold):
+        for jid in joints:
+            lo, hi = model.jnt_range[jid]
+            data.qpos[model.jnt_qposadr[jid]] = hi + (lo - hi) * fold
+        mujoco.mj_forward(model, data)
+        rot = np.asarray(data.xmat[humerus]).reshape(3, 3)
+        return rot.T @ (np.asarray(data.site_xpos[tip]) - np.asarray(data.xpos[humerus]))
+
+    spread, folded = tip_in_bone_frame(0.0), tip_in_bone_frame(1.0)
+    assert folded[2] < spread[2], "folding must shorten the span"
+    assert folded[2] > 0.6 * spread[2], "the wing collapses; an eagle flexes, it does not tuck"
+    # -x is cranial. The tip may creep forward of the humerus axis, but nowhere
+    # near the leading edge -- a spiral fold put it 160 mm out there.
+    assert folded[0] > -0.5 * spread[2], f"tip swings {-folded[0] * 1000:.0f} mm past the leading edge"
+
+
 def test_wing_plane_stays_level(stroke):
     """The twist servo cancels the roll the tendon network imposes.
 
@@ -135,8 +174,25 @@ def test_wing_plane_stays_level(stroke):
     beat; what is left should be the deliberate pronation and little else.
     """
     rec, _ = stroke
-    roll = rec["roll_L"].max() - rec["roll_L"].min()
-    assert roll < 40.0, f"wing plane rolls {roll:.1f} deg — leveling is not holding"
+    for side in "LR":
+        roll = rec[f"roll_{side}"].max() - rec[f"roll_{side}"].min()
+        assert roll < 40.0, f"{side} wing plane rolls {roll:.1f} deg — leveling is not holding"
+    # Side-correct metric: mirrored wings must report the same roll, not opposite
+    # or 180 deg apart.
+    assert np.abs(rec["roll_L"] - rec["roll_R"]).max() < 0.5
+
+
+def test_pronates_into_the_downstroke(stroke):
+    """Nose-down through the descent, nose-up on the recovery, the way a bird feathers.
+
+    A positive twist angle carries the trailing edge *down*, so the sign of the
+    pronation term is easy to get backwards and nothing else in the model
+    notices — design/eagle.tg declares no aero.
+    """
+    rec, _ = stroke
+    descending = np.gradient(rec["elev_L"]) < 0
+    assert rec["camber"][descending].mean() > 0.002, "wing supinates through the downstroke"
+    assert rec["camber"][~descending].mean() < -0.002, "wing does not supinate on the upstroke"
 
 
 def test_left_and_right_mirror(stroke):
@@ -149,6 +205,26 @@ def test_left_and_right_mirror(stroke):
 def test_wingtip_clears_the_floor(stroke):
     rec, _ = stroke
     assert rec["tip_L"][:, 2].min() > 0.02, "wingtip sweeps through the floor"
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("mount       = [-14.14, 18.34, 5.50] deg", "mount       = [-14.14, 18.34] deg"),
+        ("mount       = [-14.14, 18.34, 5.50] deg", "mount       = 30 deg"),
+        ("humerus     = 50 mm", "humerous    = 50 mm"),
+        ("elbow_range = [-70, 4] deg", "elbow_range = [-70, 4, 9] deg"),
+    ],
+)
+def test_malformed_bones_section_is_rejected(tmp_path, old, new):
+    """A dropped mount component or a typo'd key is a different wing, not a rounder
+    number — the parser must say so instead of substituting a default."""
+    text = EAGLE_TG.read_text()
+    assert old in text
+    tg = tmp_path / "bad.tg"
+    tg.write_text(text.replace(old, new))
+    with pytest.raises(ValueError):
+        load_morphology(tg)
 
 
 def test_plate_wing_still_compiles(tmp_path):

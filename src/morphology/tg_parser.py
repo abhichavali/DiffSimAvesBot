@@ -224,6 +224,7 @@ class _TgParser:
         self.wing_pitch: Dict[str, Any] = {}
         self.wing_aero: Dict[str, Any] = {}
         self.wing_bones: Dict[str, Any] = {}
+        self.wing_bones_declared = False
 
     def parse(self) -> Morphology:
         i = 0
@@ -466,6 +467,7 @@ class _TgParser:
                 continue
             if line == "bones:":
                 section = "bones"
+                self.wing_bones_declared = True
                 continue
             if " = " in line:
                 key, val = line.split("=", 1)
@@ -650,13 +652,36 @@ class _TgParser:
         )
 
     def _build_bones(self) -> Optional[WingBones]:
+        # Strict, unlike a plain dict.get chain: a typo'd key here silently
+        # substitutes a dataclass default, and the mount especially is a searched
+        # value where a dropped component is a different wing, not a rounder
+        # number. Fail on the .tg line instead.
         b = self.wing_bones
         if not b:
+            if self.wing_bones_declared:
+                raise ValueError("wing bones: section is empty — remove it, or give it keys")
             return None
         d = WingBones()
-        pair = lambda k, dflt: tuple(float(x) for x in b.get(k, dflt))  # noqa: E731
+        known = {
+            "mount", "humerus", "ulna", "manus", "chord", "primary", "mass",
+            "elbow_range", "wrist_range", "twist_range", "servo", "damping", "armature",
+        }
+        unknown = sorted(set(b) - known)
+        if unknown:
+            raise ValueError(
+                f"unknown wing bones key(s) {', '.join(unknown)}; expected one of "
+                + ", ".join(sorted(known))
+            )
+
+        def vec(key, default, want):
+            value = b.get(key, default)
+            if not isinstance(value, (tuple, list)) or len(value) != want:
+                raise ValueError(f"wing bones {key} must be {want} numbers, got {value!r}")
+            return tuple(float(x) for x in value)
+
+        pair = lambda k, dflt: vec(k, dflt, 2)  # noqa: E731
         return WingBones(
-            mount_euler_rad=pair("mount", d.mount_euler_rad),
+            mount_euler_rad=vec("mount", d.mount_euler_rad, 3),
             humerus=float(b.get("humerus", d.humerus)),
             ulna=float(b.get("ulna", d.ulna)),
             manus=float(b.get("manus", d.manus)),

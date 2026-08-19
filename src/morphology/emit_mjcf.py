@@ -410,10 +410,16 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
     for feathering. Elbow and wrist are plain hinges about the wing-plane normal,
     so the wing folds inside its own plane the way a bird's does.
 
-    Bone-local frame: +z spans out to the tip, +x is chord (trailing edge), +y is
-    the wing normal. The R side is the exact y-mirror of L: every offset here is
-    y-free, so only the mount quaternion mirrors and the twist axis flips sign
-    (a_R = -M a_L; the same rule the plate wing's pitch hinge follows).
+    Bone-local frame: +z spans out to the tip, +x is chord (toward the trailing
+    edge, so -x is cranial), +y is the wing normal. Elbow and wrist hinge about
+    opposite normals so they counter-rotate: in the reference plate the elbow is
+    the caudal apex and the wrist the cranial one, and same-sign hinges spiral
+    the chain into a C instead of folding it into the avian Z.
+
+    The R side is the exact y-mirror of L: every offset here is y-free, so only
+    the mount quaternion mirrors and the twist axis flips sign (a_R = -M a_L,
+    which leaves the two wing-normal hinges unchanged — the same rule the plate
+    wing's pitch hinge follows).
     """
     b = morph.wing.bones
     prefix = shoulder.side
@@ -514,8 +520,10 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
         group="2",
     )
     # Tertials: the innermost flight feathers, filling the gap in to the body.
-    feathers(humerus, "tertial", 3, 0.10 * b.humerus, 0.95 * b.humerus,
-             0.95 * b.chord, 1.0 * b.chord, math.radians(115), math.radians(98),
+    # Rake stays under 90 deg — past it the vane points back inboard, and the
+    # root one then reaches through the strut and across the midline.
+    feathers(humerus, "tertial", 3, 0.46 * b.humerus, 0.98 * b.humerus,
+             0.95 * b.chord, 1.0 * b.chord, math.radians(88), math.radians(80),
              0.36 * b.chord, FEATHER_RGBA[0])
 
     ulna = ET.SubElement(humerus, "body", name=f"{prefix}_ulna", pos=f"0 0 {b.humerus}")
@@ -529,7 +537,7 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
              0.30 * b.chord, FEATHER_RGBA[0])
 
     manus = ET.SubElement(ulna, "body", name=f"{prefix}_manus", pos=f"0 0 {b.ulna}")
-    hinge(manus, "wrist", "0 1 0", b.wrist_range_rad)
+    hinge(manus, "wrist", "0 -1 0", b.wrist_range_rad)
     bone(manus, "carpometacarpus", 0.0, 0.62 * b.manus, 0.0019, 0.14 * b.mass)
     bone(manus, "phalanx", 0.62 * b.manus, b.manus, 0.0013, 0.06 * b.mass)
     # Alula: the little thumb tuft on the leading edge of the wrist.

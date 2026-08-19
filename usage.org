@@ -139,11 +139,11 @@ uv run python src/view_eagle.py --gif out/eagle.gif --gif-cycles 3
 Useful flags:
 
 #+begin_src sh
-uv run python src/view_eagle.py \
-  --fold 0.6 \      # elbow/wrist flexion on the upstroke, 0..1 of the .tg range
-  --twist 14 \      # peak pronation, degrees
-  --lead 35 \       # how far the fold leads the flap, degrees of crank angle
-  --level 1.0        # cancel the roll the tendon network imposes (0 = leave it)
+# --fold  elbow/wrist flexion on the upstroke, 0..1 of the .tg range
+# --twist peak pronation, degrees
+# --lead  how far the fold leads the flap, degrees of crank angle
+# --level cancel the roll the tendon network imposes (0 = leave it in)
+uv run python src/view_eagle.py --fold 0.6 --twist 14 --lead 35 --level 1.0
 #+end_src
 
 Design knobs live in =design/eagle.tg= (bone lengths, joint ranges, servo

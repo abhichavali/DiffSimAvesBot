@@ -54,13 +54,25 @@ def drive_cranks(model, data, morph, control: FourierControl, t0: float, ramp: f
 HARMONICS = 6
 
 
-def wing_plane_roll(rot: np.ndarray) -> float:
+_MIRROR_Y = np.diag([1.0, -1.0, 1.0])
+
+
+def wing_plane_roll(rot: np.ndarray, side: str = "L") -> float:
     """Signed roll of the wing plane about the span axis (rad); 0 = plane level.
 
     ``h`` is the horizontal direction perpendicular to the span — where the chord
     would point on a perfectly level wing — so the angle from ``h`` to the actual
-    chord, measured about the span, is the bank.
+    chord, measured about the span, is the roll. On a left wing that equals the
+    twist joint's own angle, which is why the servo can cancel it directly.
+
+    The reference ``h`` picks out the chord on a left wing (span +y) and its
+    opposite on a right one (span -y), so a right wing must be mirrored into the
+    left convention first or it reads 180 deg off and wraps every cycle. Pass
+    ``side="R"`` for the right humerus; both then report the same number for a
+    mirror-symmetric pose.
     """
+    if side == "R":
+        rot = _MIRROR_Y @ rot @ _MIRROR_Y
     span, chord = rot[:, 2], rot[:, 0]
     h = np.cross(span, np.array([0.0, 0.0, 1.0]))
     n = float(np.linalg.norm(h))
@@ -113,7 +125,10 @@ def calibrate_stroke(
     from runtime.crank_sync import sync_crank_disks_at_rest
 
     data = mujoco.MjData(model)
-    sync_crank_disks_at_rest(model, data)
+    # Explicit lag: sync_crank_disks_at_rest otherwise re-reads MORPHOLOGY_PATH,
+    # and a stale one (eagle scene, hummingbird env var) mis-phases the whole
+    # calibration without a word — eagle.tg lags 160 deg, shoulder.tg 12.
+    sync_crank_disks_at_rest(model, data, lag_rad=morph.motors.crank_phase_lag_rad)
     _, qadr, bid = _ids(model)
     period = control.period
     settle = max(2.0, cycles - 2.0) * period
@@ -213,7 +228,9 @@ class EagleWingDrive:
         descent, nose-up on the recovery, the way a bird feathers.
         """
         phase = theta - self.calib.top_phase
-        twist = -self.level * self.calib.bank_at(theta) + self.twist * math.sin(phase)
+        # A positive twist angle carries the trailing edge down, i.e. nose-UP, so
+        # pronation is the negative direction.
+        twist = -self.level * self.calib.bank_at(theta) - self.twist * math.sin(phase)
         return twist, 0.5 * (1.0 + math.cos(phase + self.lead))
 
     def apply(self, data) -> None:
