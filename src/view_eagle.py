@@ -29,7 +29,7 @@ from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
-from runtime.eagle_drive import calibrated_drive, drive_cranks
+from runtime.eagle_drive import CrankDrive, calibrated_drive, check_stable
 from runtime.viewer_runtime import RealtimeSync
 
 
@@ -44,6 +44,7 @@ def build(args):
     model = mujoco.MjModel.from_xml_path(str(args.scene))
     data = mujoco.MjData(model)
     sync_crank_disks_at_rest(model, data)
+    cranks = CrankDrive(model, morph, control)
     drive = calibrated_drive(
         model,
         morph,
@@ -59,16 +60,16 @@ def build(args):
         f"{morph.wing.bones.span * 1000:.0f} mm",
         flush=True,
     )
-    return model, data, morph, control, drive
+    return model, data, cranks, control, drive
 
 
-def step(model, data, morph, control, drive) -> None:
+def step(model, data, cranks, drive) -> None:
     data.ctrl[:] = 0.0
-    drive_cranks(model, data, morph, control, 0.0, 2.0 * control.period)
+    cranks.apply(data)
     drive.apply(data)
 
 
-def record_gif(args, model, data, morph, control, drive) -> None:
+def record_gif(args, model, data, cranks, control, drive) -> None:
     from PIL import Image
 
     cam = mujoco.MjvCamera()
@@ -77,14 +78,20 @@ def record_gif(args, model, data, morph, control, drive) -> None:
     opt = mujoco.MjvOption()
     opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = True
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
-    period = control.period
-    start = args.settle * period
+    period = 1.0 / control.fundamental_frequency_hz
     frames, taken = [], 0
     total = int(args.gif_cycles * args.fps / control.fundamental_frequency_hz)
+    # Step-counted, not clock-counted: MuJoCo rewinds data.time when it resets a
+    # diverged model, and a clock-driven loop then never finishes.
+    start_step = round(args.settle * period / model.opt.timestep)
+    every = max(1, round(1.0 / (args.fps * model.opt.timestep)))
+    stepped = 0
     while taken < total:
-        step(model, data, morph, control, drive)
+        step(model, data, cranks, drive)
         mujoco.mj_step(model, data)
-        if data.time >= start + taken / args.fps:
+        check_stable(model, data, "gif recording")
+        stepped += 1
+        if stepped >= start_step and (stepped - start_step) % every == 0:
             renderer.update_scene(data, camera=cam, scene_option=opt)
             frames.append(Image.fromarray(renderer.render()))
             taken += 1
@@ -120,9 +127,9 @@ def main() -> None:
     p.add_argument("--lookat", default="0.03,0,0.24")
     args = p.parse_args()
 
-    model, data, morph, control, drive = build(args)
+    model, data, cranks, control, drive = build(args)
     if args.gif is not None:
-        record_gif(args, model, data, morph, control, drive)
+        record_gif(args, model, data, cranks, control, drive)
         return
 
     import mujoco.viewer
@@ -135,7 +142,7 @@ def main() -> None:
                 model,
                 data,
                 viewer,
-                pre_mj_step_hook=lambda m, d: step(m, d, morph, control, drive),
+                pre_mj_step_hook=lambda m, d: step(m, d, cranks, drive),
             )
             if time.time() >= next_log:
                 elapsed = time.time() - sync.wall_start

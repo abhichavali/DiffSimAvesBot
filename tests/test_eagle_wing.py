@@ -29,7 +29,13 @@ from compile_tg import compile_tg  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.control_signal import load_control_for_morphology  # noqa: E402
 from runtime.crank_sync import sync_crank_disks_at_rest  # noqa: E402
-from runtime.eagle_drive import calibrated_drive, drive_cranks, wing_plane_roll  # noqa: E402
+from runtime.eagle_drive import (  # noqa: E402
+    CrankDrive,
+    calibrate_stroke,
+    calibrated_drive,
+    check_stable,
+    wing_plane_roll,
+)  # noqa: E402
 
 EAGLE_TG = ROOT / "design" / "eagle.tg"
 
@@ -49,6 +55,7 @@ def stroke(tmp_path_factory):
     model = mujoco.MjModel.from_xml_path(str(scene))
     data = mujoco.MjData(model)
     sync_crank_disks_at_rest(model, data)
+    cranks = CrankDrive(model, morph, control)
     drive = calibrated_drive(model, morph, control)
 
     body = {s: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{s}_humerus") for s in "LR"}
@@ -58,14 +65,17 @@ def stroke(tmp_path_factory):
 
     out = {k: [] for k in
            ("elev_L", "elev_R", "azim_L", "roll_L", "roll_R", "tip_L", "tip_R", "elbow", "wrist", "camber")}
-    end, settle = CYCLES * control.period, SETTLE * control.period
-    while data.time < end:
+    # Step-counted: MuJoCo rewinds data.time when it resets a diverged model, so
+    # a `while data.time < end` loop spins forever instead of failing.
+    total = round(CYCLES * control.period / model.opt.timestep)
+    settle = round(SETTLE * control.period / model.opt.timestep)
+    for step in range(total):
         data.ctrl[:] = 0.0
-        drive_cranks(model, data, morph, control, 0.0, 2.0 * control.period)
+        cranks.apply(data)
         drive.apply(data)
         mujoco.mj_step(model, data)
-        assert np.isfinite(data.qpos).all(), f"simulation diverged at t={data.time:.3f}s"
-        if data.time < settle:
+        check_stable(model, data, "eagle rollout")
+        if step < settle:
             continue
         for side in "LR":
             rot = np.asarray(data.xmat[body[side]]).reshape(3, 3)
@@ -225,6 +235,76 @@ def test_malformed_bones_section_is_rejected(tmp_path, old, new):
     tg.write_text(text.replace(old, new))
     with pytest.raises(ValueError):
         load_morphology(tg)
+
+
+def test_crank_lag_holds_over_a_long_run(tmp_path):
+    """The lag that selects the flap mode must not walk off.
+
+    The two crank disks are velocity servos at different points of the tendon
+    load cycle, so their achieved rates differ ~0.1% and the offset drifted
+    -0.31 deg/beat: the stroke left the eagle regime by about cycle 200. The pair
+    counter-rotates, so q_t1 + q_t4 is the invariant that exposes it.
+    """
+    scene = tmp_path / "lag.xml"
+    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
+    compile_tg(EAGLE_TG, scene)
+    morph = load_morphology(EAGLE_TG)
+    control = load_control_for_morphology(EAGLE_TG)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    data = mujoco.MjData(model)
+    sync_crank_disks_at_rest(model, data, lag_rad=morph.motors.crank_phase_lag_rad)
+    cranks = CrankDrive(model, morph, control)
+
+    cycles = 25
+    for _ in range(round(cycles * control.period / model.opt.timestep)):
+        data.ctrl[:] = 0.0
+        cranks.apply(data)
+        mujoco.mj_step(model, data)
+        check_stable(model, data, "crank lag run")
+    drift = math.degrees(cranks.lag_error(data))
+    # Unlocked this is ~0.31 deg/cycle, i.e. ~8 deg over this window.
+    assert abs(drift) < 2.0, f"crank lag drifted {drift:+.2f} deg over {cycles} cycles"
+
+
+def test_divergence_raises_instead_of_hanging(tmp_path):
+    """MuJoCo resets MjData on a bad qacc, which rewinds data.time — so a
+    clock-bounded loop restarts forever and the finite check never runs. The
+    warning counter is the only thing that remembers."""
+    tg = tmp_path / "toobig.tg"
+    tg.write_text(
+        EAGLE_TG.read_text()
+        .replace("timestep   = 0.13 ms", "timestep   = 0.40 ms")
+        .replace("meshdir    = assets", f"meshdir    = {ROOT / 'assets'}")
+        .replace("control = eagle_control.tg", f"control = {ROOT / 'design' / 'eagle_control.tg'}")
+    )
+    scene = tmp_path / "toobig.xml"
+    os.environ["MORPHOLOGY_PATH"] = str(tg)
+    compile_tg(tg, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    with pytest.raises(RuntimeError, match="diverged"):
+        calibrated_drive(model, load_morphology(tg), load_control_for_morphology(tg))
+    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
+
+
+def test_calibration_does_not_read_the_environment(tmp_path, monkeypatch):
+    """`calibrate_stroke` is handed a morphology; it must use that one.
+
+    The crank sync underneath re-reads MORPHOLOGY_PATH, which falls back to the
+    hummingbird design. Leaking through it applied a 12 deg crank lag instead of
+    160 and turned the eagle scene back into a horizontal hummingbird sweep.
+    """
+    scene = tmp_path / "noenv.xml"
+    monkeypatch.setenv("MORPHOLOGY_PATH", str(EAGLE_TG))
+    compile_tg(EAGLE_TG, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    morph = load_morphology(EAGLE_TG)
+    control = load_control_for_morphology(EAGLE_TG)
+    monkeypatch.delenv("MORPHOLOGY_PATH")
+    calib = calibrate_stroke(model, morph, control)
+    monkeypatch.setenv("MORPHOLOGY_PATH", str(EAGLE_TG))
+    reference = calibrate_stroke(model, morph, control)
+    assert abs(calib.top_phase - reference.top_phase) < 1e-9
+    assert np.allclose(calib.bank_coeffs, reference.bank_coeffs)
 
 
 def test_plate_wing_still_compiles(tmp_path):

@@ -28,7 +28,10 @@ name = aves-eagle
 world:
     # Timestep is set by tendon stiffness, not drive rate, so the hummingbird's
     # 0.13 ms at scale 0.4 carries over unchanged even though the eagle flaps 4x
-    # slower.
+    # slower. Measured cliff: stable to 0.20 ms, diverges at 0.22 and above,
+    # within the first 10-14 ms and not rescuable by a gentler drive ramp. So
+    # 0.13 buys 1.55x, not a comfortable margin — and the stroke is identical at
+    # 0.05 ms, so the resolution buys margin only.
     gravity    = [0, 0, -9.81]
     timestep   = 0.13 ms
     integrator = Euler
