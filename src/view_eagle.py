@@ -45,6 +45,17 @@ def build(args):
     model = mujoco.MjModel.from_xml_path(str(args.scene))
     data = mujoco.MjData(model)
     sync_crank_disks_at_rest(model, data)
+    if args.paused:
+        # Nothing is driven and nothing is stepped, so skip the calibration
+        # rollouts too — they exist to schedule motion there is none of. This is
+        # the compiled design exactly as the .tg describes it.
+        mujoco.mj_forward(model, data)
+        print(
+            f"paused at the compiled rest pose; wing half-span "
+            f"{morph.wing.bones.span * 1000:.0f} mm",
+            flush=True,
+        )
+        return model, data, None, control, None
     cranks = CrankDrive(model, morph, control)
     extra = {} if args.attack is None else {"attack": math.radians(args.attack)}
     drive = calibrated_drive(
@@ -71,6 +82,9 @@ def build(args):
 
 
 def step(model, data, cranks, drive) -> None:
+    """Command one physics step. ``cranks is None`` means paused — do nothing."""
+    if cranks is None:
+        return
     # check_stable here too, not just on the recording path: MuJoCo auto-resets a
     # diverged model and rewinds the clock, so without it an interactive session
     # on a marginal timestep silently restarts instead of saying anything.
@@ -89,6 +103,12 @@ def record_gif(args, model, data, cranks, control, drive) -> None:
     opt = mujoco.MjvOption()
     opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = True
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
+    if cranks is None:  # paused: one still frame, no settling and no stepping
+        renderer.update_scene(data, camera=cam, scene_option=opt)
+        args.gif.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(renderer.render()).save(args.gif)
+        print(f"wrote {args.gif} (1 still frame, {args.width}x{args.height})")
+        return
     period = 1.0 / control.fundamental_frequency_hz
     frames, taken = [], 0
     total = int(args.gif_cycles * args.fps / control.fundamental_frequency_hz)
@@ -128,6 +148,8 @@ def main() -> None:
     p.add_argument("--attack", type=float, default=None,
                    help="Wing-plane roll to hold (deg). 0 lies flat and slices the sweep, "
                         "~90 stands the wing on edge so it paddles. Default: the mount's own roll")
+    p.add_argument("--paused", action="store_true",
+                   help="Freeze at the compiled rest pose: nothing driven, no physics stepped")
     p.add_argument("--gif", type=Path, default=None, help="Record to this GIF instead of viewing")
     p.add_argument("--gif-cycles", type=float, default=3.0)
     p.add_argument("--fps", type=int, default=25)
@@ -151,6 +173,10 @@ def main() -> None:
         sync = RealtimeSync(data, realtime_factor=args.speed)
         next_log = time.time() + 2.0
         while viewer.is_running():
+            if cranks is None:
+                viewer.sync()
+                time.sleep(1.0 / 60.0)
+                continue
             sync.step_and_sync(
                 model,
                 data,
