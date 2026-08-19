@@ -398,6 +398,9 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph, compiled: 
         )
 
 
+#: Spacing between successive feather vanes along the wing normal (m).
+_SHINGLE = 0.0005
+
 BONE_RGBA = "0.93 0.90 0.82 1"
 FEATHER_RGBA = ("0.30 0.22 0.16 1", "0.20 0.15 0.11 1")  # coverts, flight feathers
 
@@ -427,6 +430,9 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
     if prefix == "R":
         quat = mirror_quat_wxyz(quat)
     twist_axis = "0 0 1" if prefix == "L" else "0 0 -1"
+    # Feather vanes are the one thing here with an offset off the y=0 plane, so
+    # they are also the one thing that has to mirror explicitly (p_R = M p_L).
+    y_sign = 1.0 if prefix == "L" else -1.0
 
     def hinge(body, name, axis, rng):
         ET.SubElement(
@@ -459,23 +465,34 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
             group="2",
         )
 
-    def feathers(body, tag, count, z0, z1, len0, len1, rake0, rake1, width, rgba):
+    def feathers(body, tag, count, z0, z1, len0, len1, rake0, rake1, width, rgba, group=0):
         """Fan ``count`` flat vanes off a bone, rooted at successive span stations.
 
         ``rake`` is the angle of the shaft off the span axis toward the trailing
-        edge: ~15 deg on the outermost primary (it continues the wingtip) up to
-        ~90 deg on a secondary (straight aft). Sweeping the rake across the manus
+        edge: ~24 deg on the outermost primary (it continues the wingtip) up to
+        ~95 deg on a secondary (straight aft). Sweeping the rake across the manus
         is what gives an eagle its separated, fingered tip rather than one slab.
-        Each vane lies in the wing plane, thin along the wing normal.
+        Keep it under 90: past that the vane's own axis points back inboard, and
+        the root feather reaches through the strut and across the midline.
+
+        Vanes are shingled along the wing normal by ``_SHINGLE`` per index, the
+        outer lying over the next one in, as a bird's do. Emitting them all at
+        y=0 makes them exactly coplanar, which z-fights into streaks and a
+        staircased trailing edge — the whole fan is only 0.8 mm thick.
 
         Returns the bone-local tip of the last vane.
         """
-        tip = (0.0, 0.0, z1)
+        # Each fan restarts its shingle, so offset the groups by a third of a step
+        # to keep every vane on its own plane -- two vanes at the same y anywhere
+        # on the wing z-fight wherever they overlap.
+        base = _SHINGLE * group / 3.0
+        tip = (0.0, y_sign * (base + _SHINGLE * max(count - 1, 0)), z1)
         for i in range(count):
             t = 0.0 if count == 1 else i / (count - 1)
             rake = rake0 + t * (rake1 - rake0)
             length = len0 + t * (len1 - len0)
             root_z = z0 + t * (z1 - z0)
+            lift = y_sign * (base + _SHINGLE * i)
             # Rotating +z about +y by `rake` gives (sin, 0, cos): out along the
             # span and aft. The vane's long axis is its own local z.
             d = (math.sin(rake), 0.0, math.cos(rake))
@@ -484,7 +501,7 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
                 "geom",
                 name=f"{prefix}_{tag}_{i + 1:02d}",
                 type="box",
-                pos=f"{0.5 * length * d[0]} 0 {root_z + 0.5 * length * d[2]}",
+                pos=f"{0.5 * length * d[0]} {lift} {root_z + 0.5 * length * d[2]}",
                 euler=f"0 {rake} 0",
                 size=f"{0.5 * width} 0.0004 {0.5 * length}",
                 mass=str(0.02 * b.mass),
@@ -493,7 +510,7 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
                 conaffinity="0",
                 group="2",
             )
-            tip = (length * d[0], 0.0, root_z + length * d[2])
+            tip = (length * d[0], lift, root_z + length * d[2])
         return tip
 
     humerus = ET.SubElement(
@@ -524,7 +541,7 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
     # root one then reaches through the strut and across the midline.
     feathers(humerus, "tertial", 3, 0.46 * b.humerus, 0.98 * b.humerus,
              0.95 * b.chord, 1.0 * b.chord, math.radians(88), math.radians(80),
-             0.36 * b.chord, FEATHER_RGBA[0])
+             0.36 * b.chord, FEATHER_RGBA[0], group=0)
 
     ulna = ET.SubElement(humerus, "body", name=f"{prefix}_ulna", pos=f"0 0 {b.humerus}")
     hinge(ulna, "elbow", "0 1 0", b.elbow_range_rad)
@@ -534,7 +551,7 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
     bone(ulna, "radius", 0.0, b.ulna, 0.0013, 0.05 * b.mass, dx=-0.0052)
     feathers(ulna, "secondary", 7, 0.06 * b.ulna, 0.96 * b.ulna,
              1.0 * b.chord, 0.84 * b.chord, math.radians(95), math.radians(78),
-             0.30 * b.chord, FEATHER_RGBA[0])
+             0.30 * b.chord, FEATHER_RGBA[0], group=1)
 
     manus = ET.SubElement(ulna, "body", name=f"{prefix}_manus", pos=f"0 0 {b.ulna}")
     hinge(manus, "wrist", "0 -1 0", b.wrist_range_rad)
@@ -546,7 +563,7 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
         "geom",
         name=f"{prefix}_alula",
         type="box",
-        pos=f"{-0.006} 0 {0.14 * b.manus}",
+        pos=f"{-0.006} {y_sign * -_SHINGLE} {0.14 * b.manus}",
         euler=f"0 {math.radians(-28)} 0",
         size=f"{0.10 * b.chord} 0.0004 0.011",
         mass=str(0.02 * b.mass),
@@ -562,7 +579,7 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
     # deeply slotted, so the outer feather keeps ~40 mm of chord on it.
     tip = feathers(manus, "primary", 8, 0.05 * b.manus, b.manus,
                    0.72 * b.primary, 1.0 * b.primary, math.radians(72), math.radians(24),
-                   0.20 * b.chord, FEATHER_RGBA[1])
+                   0.20 * b.chord, FEATHER_RGBA[1], group=2)
     # Wingtip marker: the reference point every kinematic check measures.
     ET.SubElement(
         manus,

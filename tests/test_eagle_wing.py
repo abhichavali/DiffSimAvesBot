@@ -212,6 +212,60 @@ def test_left_and_right_mirror(stroke):
     assert mirror < 1e-4, f"wingtips are {mirror * 1000:.2f} mm from mirrored"
 
 
+def test_feathers_clear_the_rig_and_each_other(tmp_path):
+    """No vane may reach inboard through the strut, across the midline, or lie
+    exactly on top of a neighbour.
+
+    A tertial raked past 90 deg points back inboard: the root one used to pass
+    through the strut rod and into the other wing's tertials. And every vane
+    emitted at bone-frame y=0 is exactly coplanar with its neighbours, which
+    z-fights into streaks. Both are unguarded constants otherwise.
+    """
+    scene = tmp_path / "clearance.xml"
+    compile_tg(EAGLE_TG, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    data = mujoco.MjData(model)
+
+    def gid(name):
+        return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+
+    names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) for i in range(model.ngeom)]
+    vanes = {s: [n for n in names if n and n.startswith(f"{s}_") and
+                 any(k in n for k in ("tertial", "secondary", "primary"))] for s in "LR"}
+    assert len(vanes["L"]) == len(vanes["R"]) > 12
+    rods = [n for n in names if n and n.startswith("L_part_1_rod")]
+
+    joints = {n: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"L_{n}")
+              for n in ("elbow", "wrist", "humerus_twist")}
+    mirrored = {n: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"R_{n}")
+                for n in ("elbow", "wrist", "humerus_twist")}
+    worst_rig = worst_cross = 1e9
+    for fold in (0.0, 0.5, 1.0):
+        for twist in (-1.0, 0.0, 1.0):
+            for side_joints in (joints, mirrored):
+                for name, jid in side_joints.items():
+                    lo, hi = model.jnt_range[jid]
+                    frac = twist * 0.5 + 0.5 if name == "humerus_twist" else fold
+                    data.qpos[model.jnt_qposadr[jid]] = hi + (lo - hi) * frac
+            mujoco.mj_forward(model, data)
+            for vane in vanes["L"]:
+                for rod in rods:
+                    worst_rig = min(worst_rig,
+                                    mujoco.mj_geomDistance(model, data, gid(vane), gid(rod), 0.05, None))
+                for other in vanes["R"]:
+                    worst_cross = min(worst_cross,
+                                      mujoco.mj_geomDistance(model, data, gid(vane), gid(other), 0.2, None))
+    assert worst_rig > 0.0, f"a feather passes through the strut ({worst_rig * 1000:.1f} mm)"
+    assert worst_cross > 0.0, f"the wings' feathers pass through each other ({worst_cross * 1000:.1f} mm)"
+
+    # Shingled, not coplanar: no two vanes anywhere on the wing may share an
+    # offset along the wing normal, or they z-fight wherever they overlap.
+    ys = {round(float(model.geom_pos[gid(n)][1]), 7) for n in vanes["L"]}
+    assert len(ys) == len(vanes["L"]), f"vanes are coplanar ({len(ys)} planes for {len(vanes['L'])})"
+    # ...but the whole fan stays thin: this is a wing, not a venetian blind.
+    assert max(ys) - min(ys) < 0.012
+
+
 def test_wingtip_clears_the_floor(stroke):
     rec, _ = stroke
     assert rec["tip_L"][:, 2].min() > 0.02, "wingtip sweeps through the floor"

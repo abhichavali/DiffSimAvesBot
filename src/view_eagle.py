@@ -64,6 +64,10 @@ def build(args):
 
 
 def step(model, data, cranks, drive) -> None:
+    # check_stable here too, not just on the recording path: MuJoCo auto-resets a
+    # diverged model and rewinds the clock, so without it an interactive session
+    # on a marginal timestep silently restarts instead of saying anything.
+    check_stable(model, data, "viewer")
     data.ctrl[:] = 0.0
     cranks.apply(data)
     drive.apply(data)
@@ -89,7 +93,6 @@ def record_gif(args, model, data, cranks, control, drive) -> None:
     while taken < total:
         step(model, data, cranks, drive)
         mujoco.mj_step(model, data)
-        check_stable(model, data, "gif recording")
         stepped += 1
         if stepped >= start_step and (stepped - start_step) % every == 0:
             renderer.update_scene(data, camera=cam, scene_option=opt)
