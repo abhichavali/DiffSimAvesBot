@@ -183,14 +183,12 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
 
     # Canonical placement, mirroring compute_body_poses: the two struts are
     # separated along +y, distal (mobile) inboard of proximal (fixed) by `gap`.
-    canon_offset = np.array([0.0, -w.gap, 0.0], dtype=float)
     # Carry the canonical frame onto the ulna's span: canonical +y becomes the
     # ulna's -z, so the distal strut lands OUTBOARD of the proximal one.
     carry = quat_from_axis_angle(np.array([1.0, 0.0, 0.0]), -math.pi / 2.0)
 
     prox_quat = quat_mul(carry, fixed_body_orientation())
     dist_quat_rel = quat_mul(carry, mobile_body_orientation())
-    dist_pos_rel = quat_rotate(carry, canon_offset)
 
     # Forward kinematics to the ulna's distal end at qpos = 0.
     hum_pos, hum_quat = compose(mobile_pos, mobile_quat,
@@ -200,27 +198,19 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
     tip_pos, tip_quat = compose(ulna_pos, ulna_quat,
                                 np.array([0.0, 0.0, bones.ulna]), _IDENTITY_QUAT)
 
-    # Centre the PAIR on the bone line, as one unit. Centring each strut on its
-    # own arc instead pulls them apart: the shoulder's two struts arc in
-    # perpendicular planes and nest into each other (centres 5.3 mm apart, each
-    # cage 16 mm deep), and re-centring each one destroys that interleaving and
-    # leaves two cages facing each other across a gap. An arc's body origin does
-    # sit off to one side of the arc, which is the thing that needed fixing — so
-    # offset by the pair's combined centroid, which corrects the hang without
-    # touching how the two struts sit relative to each other.
-    prox_cloud = np.array([quat_rotate(prox_quat, n) for n in proximal_geom.nodes.values()])
-    dist_cloud = np.array([dist_pos_rel + quat_rotate(dist_quat_rel, n)
-                           for n in distal_geom.nodes.values()])
-    pair_centroid = np.concatenate([prox_cloud, dist_cloud]).mean(axis=0)
-    prox_body = -pair_centroid
-    dist_body = dist_pos_rel - pair_centroid
-    # The ulna's strut sits AT the ulna's tip. Centring the pair as one unit is
-    # what stops the cage hanging off the bone line, but it also carries the
-    # proximal strut out past the forearm's end and over the hand — so take its
-    # spanwise placement from its own centroid instead of the pair's, and leave
-    # the free strut where the pair centring put it. `proximal_inset` shifts it
-    # further inboard from there.
-    prox_body[2] = -prox_cloud.mean(axis=0)[2] - w.proximal_inset
+    # One strut on each bone, both centred on the bone line, `gap` apart along the
+    # span. Each is placed by its OWN centroid: an arc's body origin sits off to
+    # one side of the arc it describes, so placing by origin leaves the cage
+    # hanging below the bones. Centring the pair as a unit instead keeps the
+    # shoulder's interleaving, but it puts both cages in the same place along the
+    # span — which is not what a wrist is. The ulna's strut sits on the ulna's
+    # tip; the manus' strut sits one gap outboard, where the hand starts.
+    prox_centroid = np.array([quat_rotate(prox_quat, n)
+                              for n in proximal_geom.nodes.values()]).mean(axis=0)
+    dist_centroid = np.array([quat_rotate(dist_quat_rel, n)
+                              for n in distal_geom.nodes.values()]).mean(axis=0)
+    prox_body = -prox_centroid
+    dist_body = np.array([0.0, 0.0, w.gap]) - dist_centroid
 
     proximal_pos_world, proximal_quat_world = compose(tip_pos, tip_quat,
                                                       prox_body, prox_quat)
@@ -251,7 +241,7 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
     manus_quat = quat_mul(inv_distal, tip_quat)
 
     return CompiledWrist(
-        # In the ULNA's frame: placed so the arc's midpoint lands on the tip.
+        # In the ULNA's frame: placed so the arc's centre lands on the tip.
         proximal_pos=np.array([0.0, 0.0, bones.ulna]) + prox_body,
         proximal_quat=prox_quat,
         distal_pos=distal_pos_world,

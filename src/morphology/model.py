@@ -223,10 +223,10 @@ class WristTensegrity:
 
     scale: float = 0.42
     stations_deg: Tuple[float, float, float, float] = (28.0, 74.0, 106.0, 152.0)
-    gap: float = 0.014  # m between the two struts along the span
-    #: Extra inboard shift of the ulna-mounted strut along the span (m). Zero
-    #: sits it on the forearm's tip, which is where it belongs.
-    proximal_inset: float = 0.0
+    #: Distance between the two struts' centres along the span (m). The ulna's
+    #: strut sits on the forearm's tip and the manus' one this far outboard,
+    #: where the hand's bone begins — so this is the whole joint's length.
+    gap: float = 0.014
     width: float = 0.0026  # A<->B face separation (m)
     stiffness: float = 400.0
     damping: float = 0.6

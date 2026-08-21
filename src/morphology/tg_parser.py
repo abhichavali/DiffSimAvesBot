@@ -769,8 +769,8 @@ class _TgParser:
                 raise ValueError("wing wrist: section is empty — remove it, or give it keys")
             return None
         d = WristTensegrity()
-        known = {"scale", "stations", "gap", "proximal_inset", "width", "stiffness",
-                 "damping", "pretension", "tendon_width", "arc_rod", "rung_rod"}
+        known = {"scale", "stations", "gap", "width", "stiffness", "damping",
+                 "pretension", "tendon_width", "arc_rod", "rung_rod"}
         unknown = sorted(set(w) - known)
         if unknown:
             raise ValueError(
@@ -794,7 +794,6 @@ class _TgParser:
             scale=float(w.get("scale", d.scale)),
             stations_deg=tuple(float(x) for x in stations),
             gap=float(w.get("gap", d.gap)),
-            proximal_inset=float(w.get("proximal_inset", d.proximal_inset)),
             width=float(w.get("width", d.width)),
             stiffness=float(w.get("stiffness", d.stiffness)),
             damping=float(w.get("damping", d.damping)),

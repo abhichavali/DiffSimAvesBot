@@ -132,10 +132,10 @@ wing on M.midpoint:
         # Shallower arc than the shoulder's 5.8..174.2: a wrist wants less range
         # and more stiffness out of the wing plane.
         stations    = [28, 74, 106, 152] deg
-        # The shoulder's two struts arc in perpendicular planes and nest into
-        # each other — centres 5.3 mm apart against 16 mm cages. Sized to sit the
-        # same way: at 14 mm the wrist's cages faced each other across a 14 mm
-        # clear gap and read as two separate things rather than one joint.
+        # Centre-to-centre along the span: the ulna's strut sits on the forearm's
+        # tip and the manus' one this far outboard, where the hand's bone begins.
+        # So this is the joint's whole length, and the knob for how far apart the
+        # two bones sit. At 14 mm they read as two separate cages, not one joint.
         gap         = 8 mm
         width       = 2.6 mm
         # Both numbers are set by the stability cliff, not by feel: the wrist rods
