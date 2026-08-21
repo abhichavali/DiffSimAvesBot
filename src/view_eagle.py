@@ -59,6 +59,37 @@ def _tension_cables(model, morph, args) -> None:
           + ("; elbow servo released" if args.cable_only else ""), flush=True)
 
 
+def elbow_targets(model, fraction: float) -> dict[int, float]:
+    """Servo commands holding both elbows at ``fraction`` of their range.
+
+    0 is the extended stop and 1 the flexed one, so --elbow 1 is the wing's one
+    remaining hinge at full contraction.
+    """
+    out: dict[int, float] = {}
+    for side in ("L", "R"):
+        aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{side}_elbow_servo")
+        if aid < 0:
+            continue
+        lo, hi = (float(v) for v in model.actuator_ctrlrange[aid])
+        out[aid] = hi + (lo - hi) * fraction
+    return out
+
+
+def settle_elbow(model, data, targets, control, cycles: float = 2.0) -> None:
+    """Step the wing to rest at a held elbow angle, with the shoulder quiet.
+
+    Not a matter of setting qpos: with a tensegrity wrist the hand is a free body,
+    so posing the forearm and calling mj_forward leaves the hand where it was. The
+    only way to see the pose is to let the model reach it.
+    """
+    for _ in range(round(cycles * control.period / model.opt.timestep)):
+        data.ctrl[:] = 0.0
+        for aid, target in targets.items():
+            data.ctrl[aid] = target
+        mujoco.mj_step(model, data)
+        check_stable(model, data, "elbow settle")
+
+
 def build(args):
     os.environ["MORPHOLOGY_PATH"] = str(args.tg)
     os.environ["MUJOCO_XML_PATH"] = str(args.scene)
@@ -71,6 +102,16 @@ def build(args):
     _tension_cables(model, morph, args)
     data = mujoco.MjData(model)
     sync_crank_disks_at_rest(model, data)
+    held = elbow_targets(model, args.elbow) if args.elbow is not None else {}
+    if held:
+        settle_elbow(model, data, held, control)
+        lo, hi = (float(v) for v in model.actuator_ctrlrange[next(iter(held))])
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "L_elbow")
+        print(f"elbow held at {args.elbow:.2f} of range = "
+              f"{math.degrees(float(data.qpos[model.jnt_qposadr[jid]])):.1f} deg "
+              f"(0 = extended {math.degrees(hi):.0f}, 1 = flexed {math.degrees(lo):.0f})",
+              flush=True)
+
     if args.paused:
         # Nothing is driven and nothing is stepped, so skip the calibration
         # rollouts too — they exist to schedule motion there is none of. This is
@@ -81,7 +122,7 @@ def build(args):
             f"{morph.wing.bones.span * 1000:.0f} mm",
             flush=True,
         )
-        return model, data, None, control, None
+        return model, data, None, control, None, held
     cranks = CrankDrive(model, morph, control)
     extra = {} if args.attack is None else {"attack": math.radians(args.attack)}
     drive = calibrated_drive(
@@ -104,10 +145,10 @@ def build(args):
         f"{math.degrees(drive.attack):.0f} deg (0 = flat, 90 = on edge)",
         flush=True,
     )
-    return model, data, cranks, control, drive
+    return model, data, cranks, control, drive, held
 
 
-def step(model, data, cranks, drive) -> None:
+def step(model, data, cranks, drive, held=None) -> None:
     """Command one physics step. ``cranks is None`` means paused — do nothing."""
     if cranks is None:
         return
@@ -118,9 +159,13 @@ def step(model, data, cranks, drive) -> None:
     data.ctrl[:] = 0.0
     cranks.apply(data)
     drive.apply(data)
+    # --elbow overrides the fold schedule: the point is to watch the one hinge,
+    # not to watch the stroke move it.
+    for aid, target in (held or {}).items():
+        data.ctrl[aid] = target
 
 
-def record_gif(args, model, data, cranks, control, drive) -> None:
+def record_gif(args, model, data, cranks, control, drive, held=None) -> None:
     from PIL import Image
 
     cam = mujoco.MjvCamera()
@@ -144,7 +189,7 @@ def record_gif(args, model, data, cranks, control, drive) -> None:
     every = max(1, round(1.0 / (args.fps * model.opt.timestep)))
     stepped = 0
     while taken < total:
-        step(model, data, cranks, drive)
+        step(model, data, cranks, drive, held)
         mujoco.mj_step(model, data)
         stepped += 1
         if stepped >= start_step and (stepped - start_step) % every == 0:
@@ -178,6 +223,9 @@ def main() -> None:
                    help="Wing-cable tension preset from the .tg (default: slack)")
     p.add_argument("--cable-only", action="store_true",
                    help="Release the elbow servo so the cables alone hold the wing's pose")
+    p.add_argument("--elbow", type=float, default=None, metavar="FRAC",
+                   help="Hold the elbow at FRAC of its range and show it: 0 extended, "
+                        "1 fully contracted. Overrides the fold schedule")
     p.add_argument("--paused", action="store_true",
                    help="Freeze at the compiled rest pose: nothing driven, no physics stepped")
     p.add_argument("--gif", type=Path, default=None, help="Record to this GIF instead of viewing")
@@ -192,9 +240,9 @@ def main() -> None:
     p.add_argument("--lookat", default="0.03,0,0.24")
     args = p.parse_args()
 
-    model, data, cranks, control, drive = build(args)
+    model, data, cranks, control, drive, held = build(args)
     if args.gif is not None:
-        record_gif(args, model, data, cranks, control, drive)
+        record_gif(args, model, data, cranks, control, drive, held)
         return
 
     import mujoco.viewer
@@ -211,7 +259,7 @@ def main() -> None:
                 model,
                 data,
                 viewer,
-                pre_mj_step_hook=lambda m, d: step(m, d, cranks, drive),
+                pre_mj_step_hook=lambda m, d: step(m, d, cranks, drive, held),
             )
             if time.time() >= next_log:
                 elapsed = time.time() - sync.wall_start

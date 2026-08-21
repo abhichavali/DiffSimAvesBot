@@ -214,6 +214,13 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
     pair_centroid = np.concatenate([prox_cloud, dist_cloud]).mean(axis=0)
     prox_body = -pair_centroid
     dist_body = dist_pos_rel - pair_centroid
+    # The ulna's strut sits AT the ulna's tip. Centring the pair as one unit is
+    # what stops the cage hanging off the bone line, but it also carries the
+    # proximal strut out past the forearm's end and over the hand — so take its
+    # spanwise placement from its own centroid instead of the pair's, and leave
+    # the free strut where the pair centring put it. `proximal_inset` shifts it
+    # further inboard from there.
+    prox_body[2] = -prox_cloud.mean(axis=0)[2] - w.proximal_inset
 
     proximal_pos_world, proximal_quat_world = compose(tip_pos, tip_quat,
                                                       prox_body, prox_quat)
