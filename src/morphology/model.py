@@ -235,31 +235,33 @@ class WristTensegrity:
 
 @dataclass
 class WingCables:
-    """Cables spanning humerus -> ulna -> manus, making the wing itself a tensegrity.
+    """Cables from each wing bone down to a crank disk — the wing as a tensegrity.
 
-    Two antagonists per wing, each a single spatial tendon threaded through an
-    anchor on all three bones: one routed cranial (ahead of the bones, the
-    propatagial side) and one caudal. Because each crosses both the elbow and the
-    wrist, tensioning one drives the whole chain — which is how a bird extends and
-    folds its wing without a muscle at the carpus, and the thing a passive
-    tensegrity wrist otherwise cannot do.
+    One cable per bone: an anchor on the humerus, the ulna and the manus, each
+    running in to a pin on a crank disk. The pin is off the disk's hinge axis, so
+    the cable's length is a function of crank angle and the motors drive the
+    wing's shape directly, the same way they already drive the shoulder. Nothing
+    routes bone-to-bone; every cable ends on a motor.
 
-    Anchors are given as a chordwise stand-off from the bone and a fraction along
-    its span, so the same numbers describe the routing at any bone length.
-    ``extend`` and ``contract`` are (cranial, caudal) rest-length fractions: below
-    1 the cable is pretensioned and pulls.
+    ``disks`` names which disk each of the three cables goes to, in bone order.
+    ``pin_radius`` and ``pin_phase`` place the pin on that disk — radius zero puts
+    it on the hinge axis, where the cable no longer changes length and the wing
+    stops being driven at all.
     """
 
-    cranial_offset: float = 0.020  # m ahead of the bone line
-    caudal_offset: float = 0.020  # m behind it
     humerus_frac: float = 0.55  # fraction along each bone, from its proximal end
     ulna_frac: float = 0.50
-    manus_frac: float = 0.60
+    manus_frac: float = 0.45
+    offset: float = 0.0  # chordwise stand-off of the bone anchor (m)
+    disks: Tuple[str, str, str] = ("t1", "t4", "t4")
+    pin_radius: float = 0.012  # m from the disk hinge axis
+    pin_phase: float = math.radians(180.0)
     stiffness: float = 120.0
     damping: float = 0.4
     width: float = 0.0005
-    extend: Tuple[float, float] = (1.0, 0.90)
-    contract: Tuple[float, float] = (0.90, 1.0)
+    #: Rest-length fractions of each cable's compiled length, in bone order.
+    extend: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+    contract: Tuple[float, float, float] = (0.92, 0.92, 0.92)
 
 
 @dataclass

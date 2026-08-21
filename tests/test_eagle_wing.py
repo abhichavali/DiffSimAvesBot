@@ -172,15 +172,36 @@ def test_wrist_is_a_tensegrity_joint(tmp_path):
     names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, i) for i in range(model.ntendon)]
     assert sum(1 for n in names if n and n.startswith("L_wrist_")) == 12
 
-    # Scaled down, not a second shoulder: the wrist arc is a fraction of the
-    # shoulder's, and the hand still starts where the hinge wrist left it.
+    # It has to sit ON the joint and bridge it: forearm ends, tensegrity, hand
+    # begins. Centred on the bone line, straddling the ulna's tip, with the manus
+    # starting at the far strut. Placed by body origin instead of by arc midpoint
+    # it hangs below the bones and reads as a cage lying on the feathers; started
+    # at the ulna's tip instead of the far strut it is buried inside the hand.
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
-    ulna = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_ulna")
-    rot = np.asarray(data.xmat[ulna]).reshape(3, 3)
-    tip = np.asarray(data.xpos[ulna]) + rot @ np.array([0.0, 0.0, morph.wing.bones.ulna])
-    manus = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_manus")
-    assert np.linalg.norm(np.asarray(data.xpos[manus]) - tip) < 1e-6, "the hand moved"
+    bones = morph.wing.bones
+    humerus = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_humerus")
+    rot = np.asarray(data.xmat[humerus]).reshape(3, 3)
+    origin = np.asarray(data.xpos[humerus])
+
+    def in_wing_frame(point):
+        return rot.T @ (np.asarray(point) - origin)
+
+    joint = bones.humerus + bones.ulna
+    cage = np.array([
+        in_wing_frame(data.site_xpos[i])
+        for i in range(model.nsite)
+        if (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_SITE, i) or "").startswith("L_wrist")
+    ])
+    assert cage[:, 2].min() < joint < cage[:, 2].max(), "the joint does not straddle the ulna's tip"
+    # Centred on the bones, not hanging off one side of them.
+    assert abs(cage[:, 0].mean()) < 0.002 and abs(cage[:, 1].mean()) < 0.002
+
+    manus = in_wing_frame(data.xpos[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_manus")])
+    assert manus[2] > joint + 0.5 * bones.wrist.gap, "the hand starts inside the joint"
+    assert abs(manus[0]) < 0.002 and abs(manus[1]) < 0.002, "the hand is off the bone line"
+    # Scaled down, not a second shoulder.
+    assert (cage[:, 2].max() - cage[:, 2].min()) < 0.5 * bones.ulna
 
 
 def test_stroke_is_a_hummingbird_sweep(stroke):

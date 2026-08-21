@@ -22,7 +22,7 @@ from typing import Dict, Sequence
 import mujoco
 import numpy as np
 
-CABLE_TAGS = ("cranial", "caudal")
+CABLE_TAGS = ("humerus", "ulna", "manus")
 
 
 def cable_names(model) -> list[str]:
@@ -47,7 +47,7 @@ def measure_extended_lengths(model) -> Dict[str, float]:
 def apply_tension(model, fractions: Sequence[float], extended: Dict[str, float] | None = None) -> None:
     """Set both cables' rest lengths to ``fractions`` of their extended span.
 
-    ``fractions`` is (cranial, caudal). Mutates the model in place — the same
+    ``fractions`` is (humerus, ulna, manus). Mutates the model in place — the same
     tensioning every runner and the search share, so a pose found by the search
     is reproduced exactly by the viewer.
     """

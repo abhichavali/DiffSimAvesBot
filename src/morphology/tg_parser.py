@@ -727,8 +727,9 @@ class _TgParser:
                 raise ValueError("wing cables: section is empty — remove it, or give it keys")
             return None
         d = WingCables()
-        known = {"cranial_offset", "caudal_offset", "humerus_frac", "ulna_frac",
-                 "manus_frac", "stiffness", "damping", "width", "extend", "contract"}
+        known = {"humerus_frac", "ulna_frac", "manus_frac", "offset", "disks",
+                 "pin_radius", "pin_phase", "stiffness", "damping", "width",
+                 "extend", "contract"}
         unknown = sorted(set(c) - known)
         if unknown:
             raise ValueError(
@@ -736,23 +737,29 @@ class _TgParser:
                 + ", ".join(sorted(known))
             )
 
-        def pair(key, default):
+        def triple(key, default):
             v = c.get(key, default)
-            if not isinstance(v, (tuple, list)) or len(v) != 2:
-                raise ValueError(f"wing cables {key} must be (cranial, caudal), got {v!r}")
-            return tuple(float(x) for x in v)
+            if not isinstance(v, (tuple, list)) or len(v) != 3:
+                raise ValueError(f"wing cables {key} must be 3 values (humerus, ulna, manus), got {v!r}")
+            return v
 
+        disks = tuple(str(x).strip() for x in triple("disks", d.disks))
+        for name in disks:
+            if name not in ("t1", "t4"):
+                raise ValueError(f"wing cables disks must each be t1 or t4, got {name!r}")
         return WingCables(
-            cranial_offset=float(c.get("cranial_offset", d.cranial_offset)),
-            caudal_offset=float(c.get("caudal_offset", d.caudal_offset)),
             humerus_frac=float(c.get("humerus_frac", d.humerus_frac)),
             ulna_frac=float(c.get("ulna_frac", d.ulna_frac)),
             manus_frac=float(c.get("manus_frac", d.manus_frac)),
+            offset=float(c.get("offset", d.offset)),
+            disks=disks,
+            pin_radius=float(c.get("pin_radius", d.pin_radius)),
+            pin_phase=float(c.get("pin_phase", d.pin_phase)),
             stiffness=float(c.get("stiffness", d.stiffness)),
             damping=float(c.get("damping", d.damping)),
             width=float(c.get("width", d.width)),
-            extend=pair("extend", d.extend),
-            contract=pair("contract", d.contract),
+            extend=tuple(float(x) for x in triple("extend", d.extend)),
+            contract=tuple(float(x) for x in triple("contract", d.contract)),
         )
 
     def _build_wrist(self) -> Optional[WristTensegrity]:

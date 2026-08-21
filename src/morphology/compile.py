@@ -200,10 +200,18 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
     tip_pos, tip_quat = compose(ulna_pos, ulna_quat,
                                 np.array([0.0, 0.0, bones.ulna]), _IDENTITY_QUAT)
 
+    # Centre each strut's ARC on the bone line, not its body origin. An arc's
+    # origin sits off to one side of the arc it describes, so placing bodies
+    # directly leaves the cage hanging below the bones instead of straddling
+    # them — the joint then reads as something lying on the wing rather than
+    # holding it together.
+    prox_body = np.zeros(3) - quat_rotate(prox_quat, proximal_geom.midpoint)
+    dist_body = dist_pos_rel - quat_rotate(dist_quat_rel, distal_geom.midpoint)
+
     proximal_pos_world, proximal_quat_world = compose(tip_pos, tip_quat,
-                                                      np.zeros(3), prox_quat)
+                                                      prox_body, prox_quat)
     distal_pos_world, distal_quat_world = compose(tip_pos, tip_quat,
-                                                  dist_pos_rel, dist_quat_rel)
+                                                  dist_body, dist_quat_rel)
 
     edges = expand_sigma_tendons(morph.tendons)
     lengths: Dict[str, float] = {}
@@ -214,16 +222,18 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
             proximal_pos_world, proximal_quat_world,
         )
 
-    # The manus keeps the pose the hinge wrist gave it — straight on from the
-    # ulna, starting at the forearm's tip — so swapping the joint does not also
-    # move the hand and change the planform.
+    # The hand starts AT the distal strut, so the joint bridges a real gap: ulna
+    # ends, tensegrity, hand begins. Hanging the manus back at the forearm's tip
+    # instead (which keeps the planform identical) buries the strut pair inside
+    # the hand, and then the joint reads as a cage lying on the feathers rather
+    # than as the thing holding them on.
     inv_distal = np.array([distal_quat_world[0], *(-distal_quat_world[1:])])
-    manus_pos = quat_rotate(inv_distal, tip_pos - distal_pos_world)
+    manus_pos = np.array(distal_geom.midpoint, dtype=float)
     manus_quat = quat_mul(inv_distal, tip_quat)
 
     return CompiledWrist(
-        # In the ULNA's frame: the forearm's distal tip.
-        proximal_pos=np.array([0.0, 0.0, bones.ulna]),
+        # In the ULNA's frame: placed so the arc's midpoint lands on the tip.
+        proximal_pos=np.array([0.0, 0.0, bones.ulna]) + prox_body,
         proximal_quat=prox_quat,
         distal_pos=distal_pos_world,
         distal_quat=distal_quat_world,

@@ -31,7 +31,7 @@ from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.eagle_drive import CrankDrive, calibrated_drive, check_stable
-from runtime.wing_cables import apply_tension, cable_names, release_fold_servos
+from runtime.wing_cables import CABLE_TAGS, apply_tension, cable_names, release_fold_servos
 from runtime.viewer_runtime import RealtimeSync
 
 
@@ -48,7 +48,8 @@ def _tension_cables(model, morph, args) -> None:
         if args.cables not in ("slack", "extend"):
             raise SystemExit(f"{args.tg} declares no `cables:` section, so --cables has nothing to set")
         return
-    fractions = {"extend": cables.extend, "contract": cables.contract, "slack": (1.0, 1.0)}[args.cables]
+    slack = tuple(1.0 for _ in CABLE_TAGS)
+    fractions = {"extend": cables.extend, "contract": cables.contract, "slack": slack}[args.cables]
     apply_tension(model, fractions)
     if args.cable_only:
         # Let the cables alone hold the wing: a stiff position servo on the elbow
