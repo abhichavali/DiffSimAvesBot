@@ -174,7 +174,7 @@ def _emit_shoulder(
     if morph.wing.bones is None:
         _emit_wing(mobile_el, shoulder, morph, compiled)
     else:
-        _emit_bone_wing(mobile_el, shoulder, morph)
+        _emit_bone_wing(mobile_el, shoulder, morph, worldbody)
     for disk_name, disk in shoulder.disks.items():
         _emit_crank_disk(worldbody, disk_name, disk, morph)
 
@@ -405,7 +405,38 @@ BONE_RGBA = "0.93 0.90 0.82 1"
 FEATHER_RGBA = ("0.30 0.22 0.16 1", "0.20 0.15 0.11 1")  # coverts, flight feathers
 
 
-def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> None:
+def _emit_wrist_tensegrity(worldbody, ulna, shoulder: CompiledShoulder, morph):
+    """Emit the wrist's strut pair and return the body the manus should hang on.
+
+    Proximal strut is rigid on the ulna. Distal strut is a worldbody child with a
+    free joint — MuJoCo permits those only at the top level, which is precisely
+    why this is a tensegrity joint and not a compliant hinge: nothing structural
+    reaches the hand, only tendons.
+    """
+    wrist = shoulder.wrist
+    prefix = shoulder.side
+    proximal = _emit_strut_body(
+        ulna,
+        f"{prefix}_wrist_proximal",
+        wrist.proximal_geom,
+        wrist.proximal_pos,
+        wrist.proximal_quat,
+        joint="fixed",
+    )
+    distal = _emit_strut_body(
+        worldbody,
+        f"{prefix}_wrist_distal",
+        wrist.distal_geom,
+        wrist.distal_pos,
+        wrist.distal_quat,
+        joint="free",
+    )
+    del proximal
+    return distal
+
+
+def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph,
+                    worldbody: ET.Element | None = None) -> None:
     """Humerus / ulna / manus chain hanging off the mobile strut.
 
     The humerus is a rigid child of the strut — the tensegrity network is its
@@ -426,6 +457,8 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
     """
     b = morph.wing.bones
     prefix = shoulder.side
+    b_wrist_manus_pos = shoulder.wrist.manus_pos if shoulder.wrist else None
+    b_wrist_manus_quat = shoulder.wrist.manus_quat if shoulder.wrist else None
     quat = b.mount_quat()
     if prefix == "R":
         quat = mirror_quat_wxyz(quat)
@@ -553,8 +586,28 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> No
              1.0 * b.chord, 0.84 * b.chord, math.radians(95), math.radians(78),
              0.30 * b.chord, FEATHER_RGBA[0], group=1)
 
-    manus = ET.SubElement(ulna, "body", name=f"{prefix}_manus", pos=f"0 0 {b.ulna}")
-    hinge(manus, "wrist", "0 -1 0", b.wrist_range_rad)
+    wrist_host = None
+    if b.wrist is not None:
+        if worldbody is None:
+            raise ValueError("a tensegrity wrist needs the worldbody to hang its free strut on")
+        wrist_host = _emit_wrist_tensegrity(worldbody, ulna, shoulder, morph)
+
+    if b.wrist is None:
+        manus = ET.SubElement(ulna, "body", name=f"{prefix}_manus", pos=f"0 0 {b.ulna}")
+        hinge(manus, "wrist", "0 -1 0", b.wrist_range_rad)
+    else:
+        # Tensegrity wrist: the hand leaves the kinematic chain. _emit_wrist put
+        # the proximal strut on the ulna and the free distal strut in the
+        # worldbody; the manus rides the latter, joined to the forearm by tendons
+        # alone. No wrist joint exists to hinge or to servo.
+        manus = ET.SubElement(
+            wrist_host,
+            "body",
+            name=f"{prefix}_manus",
+            pos=_vec3(b_wrist_manus_pos),
+            quat=_vec4(b_wrist_manus_quat),
+            childclass="shoulder-joint",
+        )
     bone(manus, "carpometacarpus", 0.0, 0.62 * b.manus, 0.0019, 0.14 * b.mass)
     bone(manus, "phalanx", 0.62 * b.manus, b.manus, 0.0013, 0.06 * b.mass)
     # Alula: the little thumb tuft on the leading edge of the wrist.
@@ -717,6 +770,39 @@ def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], m
     )
 
 
+def _add_wrist_tendons(tendon_el, shoulder: CompiledShoulder, morph,
+                       color_structural_tendons: bool) -> None:
+    """The wrist's own sigma-expanded net, same topology as the shoulder's.
+
+    Materials come from the ``wrist:`` block rather than the shoulder's tendon
+    defaults: this net is an order of magnitude smaller and holds the hand, not
+    the whole wing, so it wants its own stiffness and pretension.
+    """
+    w = morph.wing.bones.wrist
+    prefix = shoulder.side
+    wrist = shoulder.wrist
+    for index, edge in enumerate(wrist.structural_edges):
+        ma = edge.anchor_a if edge.anchor_a.side == "M" else edge.anchor_b
+        fa = edge.anchor_b if edge.anchor_a.side == "M" else edge.anchor_a
+        m_node = anchor_node_name(ma)
+        f_node = anchor_node_name(fa)
+        length = wrist.tendon_lengths[edge_topology_key(edge)]
+        attrs = {
+            "name": f"{prefix}_wrist_{m_node}_to_{f_node}",
+            "class": "string",
+            "range": f"0.0 {length}",
+            "stiffness": str(w.stiffness),
+            "damping": str(w.damping),
+            "springlength": str(length * w.pretension),
+            "width": str(w.tendon_width),
+            "rgba": (_hex_to_rgba(STRUCTURAL_TENDON_COLORS[index])
+                     if color_structural_tendons else "0.25 0.55 0.9 1"),
+        }
+        spatial = ET.SubElement(tendon_el, "spatial", **attrs)
+        ET.SubElement(spatial, "site", site=f"{prefix}_wrist_distal_{m_node}")
+        ET.SubElement(spatial, "site", site=f"{prefix}_wrist_proximal_{f_node}")
+
+
 def _add_tendons(
     root: ET.Element,
     compiled: CompiledMorphology,
@@ -758,6 +844,9 @@ def _add_tendons(
             spatial = ET.SubElement(tendon_el, "spatial", **attrs)
             ET.SubElement(spatial, "site", site=f"{shoulder.mobile_body}_{m_node}")
             ET.SubElement(spatial, "site", site=f"{shoulder.fixed_body}_{f_node}")
+
+        if shoulder.wrist is not None:
+            _add_wrist_tendons(tendon_el, shoulder, morph, color_structural_tendons)
 
         for foot in morph.motors.feet:
             st = foot.station
@@ -863,11 +952,13 @@ def _add_bone_actuators(act: ET.Element, compiled: CompiledMorphology) -> None:
     # Critically damped: overshoot on these hinges shakes the whole tendon
     # network, and a folding wing has no reason to ring.
     kv = 2.0 * math.sqrt(max(b.servo, 0.0) * max(b.armature, 1e-12))
-    joints = (
+    joints = [
         ("humerus_twist", b.twist_range_rad),
+        # 1 DOF, deliberately: the elbow is the one plain hinge left in the wing.
         ("elbow", b.elbow_range_rad),
-        ("wrist", b.wrist_range_rad),
-    )
+    ]
+    if b.wrist is None:
+        joints.append(("wrist", b.wrist_range_rad))
     for shoulder in compiled.shoulders:
         for name, rng in joints:
             ET.SubElement(

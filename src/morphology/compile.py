@@ -3,27 +3,34 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 from typing import Any, Dict, Tuple
 
 import numpy as np
 
-from morphology.compiled import CompiledMorphology, CompiledShoulder
+from morphology.compiled import CompiledMorphology, CompiledShoulder, CompiledWrist
 from morphology.geometry import (
     ArcPlane,
     apply_scale_to_strut,
     build_strut_geometry,
+    compose,
     compute_body_poses,
     derive_arc_center,
     derive_center_of_pressure,
     derive_disk_pillar_pos,
     derive_disk_rim_local,
     derive_fixed_width_axis_offset,
+    fixed_body_orientation,
+    mobile_body_orientation,
     motor_anchor_node,
+    quat_from_axis_angle,
+    quat_mul,
+    quat_rotate,
     scaled_rod,
     WingSpec,
     world_node,
 )
-from morphology.model import Face, Morphology, TendonGenerator
+from morphology.model import Arrange, Face, Morphology, TendonGenerator
 from morphology.symmetry import StructuralEdge, expand_sigma_tendons
 from morphology.tendons import (
     SHOULDER_GENERATORS,
@@ -101,6 +108,8 @@ def compile_morphology(morph: Morphology) -> CompiledMorphology:
 
     disks = _compile_disks(morph, mobile_geom, mobile_pos, mobile_quat)
 
+    wrist = _compile_wrist(morph, mobile_geom, mobile_pos, mobile_quat)
+
     left = CompiledShoulder(
         side="L",
         mobile_body="L_part_1",
@@ -115,6 +124,7 @@ def compile_morphology(morph: Morphology) -> CompiledMorphology:
         structural_edges=edges,
         tendon_lengths=tendon_lengths,
         disks=disks,
+        wrist=wrist,
     )
     right = _mirror_shoulder(left, morph)
     wing_cop = derive_center_of_pressure(
@@ -126,6 +136,107 @@ def compile_morphology(morph: Morphology) -> CompiledMorphology:
         shoulders=(left, right),
         wing_cop_local=wing_cop,
     )
+
+
+def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
+    """Build the wrist tensegrity pair, if the design declares one.
+
+    The pair is constructed in the shoulder's own canonical frame — same arc
+    builder, same six sigma generators, just a smaller radius — and then carried
+    onto the ulna's distal end as a rigid unit. That keeps the tendon net's shape
+    identical to the shoulder's, which is the whole point of "like the shoulder,
+    but smaller".
+
+    Getting there needs forward kinematics: the distal strut is a worldbody child
+    (free joints must be top level), so its rest pose has to be resolved all the
+    way out through strut -> humerus mount -> humerus -> ulna at qpos zero.
+    """
+    bones = morph.wing.bones
+    if bones is None or bones.wrist is None:
+        return None
+    w = bones.wrist
+    scale = morph.world.scale
+
+    radius = morph.arc.radius * w.scale
+    arrange = Arrange(
+        gap=w.gap / scale,  # apply_scale_to_strut shrinks the pair afterwards
+        angle_deg=0.0,
+        mobile_dx=0.0,
+        # Same proportion of the arc radius the shoulder uses, so the two struts
+        # nest the same way at any size.
+        inplane_offset=morph.arrange.inplane_offset * w.scale,
+    )
+    mob_center = derive_arc_center(radius, w.stations_deg, ArcPlane.XZ)
+    fix_center = derive_arc_center(radius, w.stations_deg, ArcPlane.YZ,
+                                   mobile_center_x=mob_center[0])
+    fix_x = derive_fixed_width_axis_offset(mob_center[0], arrange)
+
+    distal_geom = build_strut_geometry(radius, w.width, w.stations_deg, ArcPlane.XZ,
+                                       center=mob_center)
+    proximal_geom = build_strut_geometry(radius, w.width, w.stations_deg, ArcPlane.YZ,
+                                         center=fix_center, width_axis_offset=fix_x)
+    distal_geom = apply_scale_to_strut(distal_geom, scale)
+    proximal_geom = apply_scale_to_strut(proximal_geom, scale)
+    for geom in (distal_geom, proximal_geom):
+        geom.arc_rod = scaled_rod(w.arc_rod.radius, w.arc_rod.mass, scale)
+        geom.rung_rod = scaled_rod(w.rung_rod.radius, w.rung_rod.mass, scale)
+
+    # Canonical placement, mirroring compute_body_poses: the two struts are
+    # separated along +y, distal (mobile) inboard of proximal (fixed) by `gap`.
+    canon_offset = np.array([0.0, -w.gap, 0.0], dtype=float)
+    # Carry the canonical frame onto the ulna's span: canonical +y becomes the
+    # ulna's -z, so the distal strut lands OUTBOARD of the proximal one.
+    carry = quat_from_axis_angle(np.array([1.0, 0.0, 0.0]), -math.pi / 2.0)
+
+    prox_quat = quat_mul(carry, fixed_body_orientation())
+    dist_quat_rel = quat_mul(carry, mobile_body_orientation())
+    dist_pos_rel = quat_rotate(carry, canon_offset)
+
+    # Forward kinematics to the ulna's distal end at qpos = 0.
+    hum_pos, hum_quat = compose(mobile_pos, mobile_quat,
+                                mobile_geom.midpoint, np.array(bones.mount_quat()))
+    ulna_pos, ulna_quat = compose(hum_pos, hum_quat,
+                                  np.array([0.0, 0.0, bones.humerus]), _IDENTITY_QUAT)
+    tip_pos, tip_quat = compose(ulna_pos, ulna_quat,
+                                np.array([0.0, 0.0, bones.ulna]), _IDENTITY_QUAT)
+
+    proximal_pos_world, proximal_quat_world = compose(tip_pos, tip_quat,
+                                                      np.zeros(3), prox_quat)
+    distal_pos_world, distal_quat_world = compose(tip_pos, tip_quat,
+                                                  dist_pos_rel, dist_quat_rel)
+
+    edges = expand_sigma_tendons(morph.tendons)
+    lengths: Dict[str, float] = {}
+    for edge in edges:
+        lengths[edge_topology_key(edge)] = derive_tendon_length(
+            edge, distal_geom, proximal_geom,
+            distal_pos_world, distal_quat_world,
+            proximal_pos_world, proximal_quat_world,
+        )
+
+    # The manus keeps the pose the hinge wrist gave it — straight on from the
+    # ulna, starting at the forearm's tip — so swapping the joint does not also
+    # move the hand and change the planform.
+    inv_distal = np.array([distal_quat_world[0], *(-distal_quat_world[1:])])
+    manus_pos = quat_rotate(inv_distal, tip_pos - distal_pos_world)
+    manus_quat = quat_mul(inv_distal, tip_quat)
+
+    return CompiledWrist(
+        # In the ULNA's frame: the forearm's distal tip.
+        proximal_pos=np.array([0.0, 0.0, bones.ulna]),
+        proximal_quat=prox_quat,
+        distal_pos=distal_pos_world,
+        distal_quat=distal_quat_world,
+        proximal_geom=proximal_geom,
+        distal_geom=distal_geom,
+        structural_edges=edges,
+        tendon_lengths=lengths,
+        manus_pos=manus_pos,
+        manus_quat=manus_quat,
+    )
+
+
+_IDENTITY_QUAT = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
 
 
 def _compile_disks(
@@ -220,6 +331,34 @@ def _mirror_shoulder(left: CompiledShoulder, morph: Morphology) -> CompiledShoul
             "rim_rgba": "0.2 0.2 0.8 1",
         }
 
+    wrist = None
+    if left.wrist is not None:
+        lw = left.wrist
+        prox_r = copy.deepcopy(lw.proximal_geom)
+        dist_r = copy.deepcopy(lw.distal_geom)
+        prox_r.nodes = mirror_nodes(lw.proximal_geom.nodes)
+        dist_r.nodes = mirror_nodes(lw.distal_geom.nodes)
+        prox_r.midpoint = mirror_point(lw.proximal_geom.midpoint)
+        dist_r.midpoint = mirror_point(lw.distal_geom.midpoint)
+        prox_r.site_quats = {k: mirror_quat(v) for k, v in lw.proximal_geom.site_quats.items()}
+        dist_r.site_quats = {k: mirror_quat(v) for k, v in lw.distal_geom.site_quats.items()}
+        # A relative transform mirrors the same way a world one does: for
+        # world_R = M world_L M to hold at every link, each link's own rel must
+        # satisfy rel_R = M rel_L M. So both the ulna-local proximal pose and the
+        # distal-local manus pose mirror, not just the world-frame distal pose.
+        wrist = CompiledWrist(
+            proximal_pos=mirror_point(lw.proximal_pos),
+            proximal_quat=mirror_quat(lw.proximal_quat),
+            distal_pos=mirror_point(lw.distal_pos),
+            distal_quat=mirror_quat(lw.distal_quat),
+            proximal_geom=prox_r,
+            distal_geom=dist_r,
+            structural_edges=lw.structural_edges,
+            tendon_lengths=dict(lw.tendon_lengths),
+            manus_pos=mirror_point(lw.manus_pos),
+            manus_quat=mirror_quat(lw.manus_quat),
+        )
+
     return CompiledShoulder(
         side="R",
         mobile_body="R_part_1",
@@ -234,6 +373,7 @@ def _mirror_shoulder(left: CompiledShoulder, morph: Morphology) -> CompiledShoul
         structural_edges=edges,
         tendon_lengths=tendon_lengths,
         disks=disks,
+        wrist=wrist,
     )
 
 

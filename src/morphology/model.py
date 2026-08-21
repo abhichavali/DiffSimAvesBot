@@ -201,6 +201,39 @@ class WingAero:
 
 
 @dataclass
+class WristTensegrity:
+    """A second, smaller tensegrity joint in place of the wrist hinge.
+
+    Same topology as the shoulder — two arc struts held apart by the sigma-expanded
+    tendon net, reusing the shoulder's six generators — scaled down and given a
+    wrist's proportions. The proximal strut is rigid on the ulna; the distal one
+    carries the manus.
+
+    That distal strut has to be a *free* body, and MuJoCo only allows a free joint
+    at the top level, so it is emitted as a worldbody child and the manus leaves
+    the kinematic chain with it. Nothing but tendons then connects the hand to the
+    forearm — which is exactly what makes this a tensegrity joint rather than a
+    compliant hinge, and the same arrangement the humerus already has at the
+    shoulder.
+
+    ``scale`` is relative to the shoulder archetype's arc. ``stations_deg`` is a
+    shallower arc than the shoulder's: a wrist wants less range and more stiffness
+    out of the wing plane than a shoulder does.
+    """
+
+    scale: float = 0.42
+    stations_deg: Tuple[float, float, float, float] = (28.0, 74.0, 106.0, 152.0)
+    gap: float = 0.014  # m between the two struts along the span
+    width: float = 0.0026  # A<->B face separation (m)
+    stiffness: float = 400.0
+    damping: float = 0.6
+    pretension: float = 0.88
+    tendon_width: float = 0.0004
+    arc_rod: RodSpec = field(default_factory=lambda: RodSpec(0.0013, 2.0e-5))
+    rung_rod: RodSpec = field(default_factory=lambda: RodSpec(0.0009, 1.0e-5))
+
+
+@dataclass
 class WingBones:
     """Three-linkage avian wing (humerus / ulna / manus) in place of the flat plate.
 
@@ -235,6 +268,9 @@ class WingBones:
     servo: float = 0.1
     damping: float = 2.0e-4
     armature: float = 2.0e-5
+    # None -> the wrist is a plain hinge. Set -> a scaled-down tensegrity joint,
+    # and the wrist hinge and its servo disappear.
+    wrist: Optional[WristTensegrity] = None
 
     @property
     def span(self) -> float:

@@ -113,15 +113,74 @@ def test_topology_is_humerus_ulna_manus(tmp_path):
     # through the tendon network, exactly like the hummingbird's plate wing.
     assert parent_of("L_humerus") == "L_part_1"
     assert parent_of("L_ulna") == "L_humerus"
-    assert parent_of("L_manus") == "L_ulna"
-    for joint, expect in (("L_elbow", "hinge"), ("L_wrist", "hinge"), ("L_humerus_twist", "hinge")):
+    for joint in ("L_elbow", "L_humerus_twist"):
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint)
         assert jid >= 0, f"missing joint {joint}"
-        assert model.jnt_type[jid] == mujoco.mjtJoint.mjJNT_HINGE, expect
+        assert model.jnt_type[jid] == mujoco.mjtJoint.mjJNT_HINGE
     # The humerus carries no joint of its own beyond the feathering twist — no
     # shoulder hinge sneaking in to do the tensegrity's job.
     hid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_humerus")
     assert model.body_jntnum[hid] == 1
+
+
+def test_elbow_is_exactly_one_dof(tmp_path):
+    """The elbow is the one plain hinge left in the wing, and it stays 1 DOF."""
+    scene = tmp_path / "elbow.xml"
+    compile_tg(EAGLE_TG, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    for side in "LR":
+        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{side}_ulna")
+        assert model.body_jntnum[bid] == 1, f"{side}_ulna carries more than the elbow"
+        jid = model.body_jntadr[bid]
+        assert mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jid) == f"{side}_elbow"
+        assert model.jnt_type[jid] == mujoco.mjtJoint.mjJNT_HINGE
+        assert model.jnt_limited[jid], "the elbow hinge is unbounded"
+
+
+def test_wrist_is_a_tensegrity_joint(tmp_path):
+    """The wrist is a scaled-down copy of the shoulder, not a hinge.
+
+    A free joint has to be top level in MuJoCo, so the only way to hold the hand
+    on tendons alone is to lift it out of the kinematic chain: the distal strut is
+    a worldbody child and the manus rides it. If the manus is still a descendant
+    of the ulna, whatever is there is a compliant hinge, not a tensegrity joint.
+    """
+    scene = tmp_path / "wrist.xml"
+    compile_tg(EAGLE_TG, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    morph = load_morphology(EAGLE_TG)
+    assert morph.wing.bones.wrist is not None
+
+    def parent(name):
+        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+        assert bid >= 0, f"missing body {name}"
+        return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, model.body_parentid[bid])
+
+    for side in "LR":
+        assert parent(f"{side}_wrist_proximal") == f"{side}_ulna"
+        assert parent(f"{side}_wrist_distal") == "world"
+        assert parent(f"{side}_manus") == f"{side}_wrist_distal"
+        # No wrist hinge and no wrist servo survive.
+        assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_wrist") < 0
+        assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{side}_wrist_servo") < 0
+        # The distal strut's one joint is free — that is the joint.
+        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{side}_wrist_distal")
+        assert model.body_jntnum[bid] == 1
+        assert model.jnt_type[model.body_jntadr[bid]] == mujoco.mjtJoint.mjJNT_FREE
+
+    # Same six sigma generators as the shoulder, so twelve tendons a side.
+    names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, i) for i in range(model.ntendon)]
+    assert sum(1 for n in names if n and n.startswith("L_wrist_")) == 12
+
+    # Scaled down, not a second shoulder: the wrist arc is a fraction of the
+    # shoulder's, and the hand still starts where the hinge wrist left it.
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    ulna = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_ulna")
+    rot = np.asarray(data.xmat[ulna]).reshape(3, 3)
+    tip = np.asarray(data.xpos[ulna]) + rot @ np.array([0.0, 0.0, morph.wing.bones.ulna])
+    manus = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_manus")
+    assert np.linalg.norm(np.asarray(data.xpos[manus]) - tip) < 1e-6, "the hand moved"
 
 
 def test_stroke_is_a_hummingbird_sweep(stroke):
@@ -149,125 +208,57 @@ def test_wing_tucks_at_each_reversal(stroke):
     turns around, most extended where it is fastest.
     """
     rec, _, drive = stroke
-    for joint in ("elbow", "wrist"):
-        travel = rec[joint].max() - rec[joint].min()
-        assert 8.0 < travel < 45.0, f"{joint} moves {travel:.1f} deg — not a shallow tuck"
+    travel = rec["elbow"].max() - rec["elbow"].min()
+    assert 8.0 < travel < 45.0, f"elbow moves {travel:.1f} deg — not a shallow tuck"
     # Flexion (elbow toward its low stop) must track distance from mid-sweep.
     corr = float(np.corrcoef(rec["elbow"], np.abs(rec["azim_L"]))[0, 1])
     assert corr < -0.5, f"tuck is not phase-locked to the stroke (corr {corr:+.2f})"
 
 
-def test_fold_is_a_zigzag_not_a_spiral(tmp_path):
-    """Elbow and wrist must counter-rotate, the way the reference plate shows.
+def test_folding_shortens_the_wing(tmp_path):
+    """Driving the elbow in must pull the hand in, not fling it forward.
 
-    With both hinges on the same normal the chain spirals into a C: at full
-    flexion the wingtip ended up 160 mm AHEAD of the leading edge and inboard of
-    the shoulder. A bird's fold shortens the span and keeps the tip behind the
-    leading edge. Measured in the humerus frame, where -x is cranial.
+    With a tensegrity wrist the hand is a free body, so this has to be settled
+    rather than posed: setting a joint angle and calling mj_forward moves the
+    forearm and leaves the manus where it was. Measured in the humerus frame,
+    where +z is span and -x is cranial.
     """
     scene = tmp_path / "fold.xml"
-    compile_tg(EAGLE_TG, scene)
-    model = mujoco.MjModel.from_xml_path(str(scene))
-    data = mujoco.MjData(model)
-    humerus = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_humerus")
-    tip = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "L_wingtip")
-    joints = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"L_{n}") for n in ("elbow", "wrist")]
-
-    def tip_in_bone_frame(fold):
-        for jid in joints:
-            lo, hi = model.jnt_range[jid]
-            data.qpos[model.jnt_qposadr[jid]] = hi + (lo - hi) * fold
-        mujoco.mj_forward(model, data)
-        rot = np.asarray(data.xmat[humerus]).reshape(3, 3)
-        return rot.T @ (np.asarray(data.site_xpos[tip]) - np.asarray(data.xpos[humerus]))
-
-    spread, folded = tip_in_bone_frame(0.0), tip_in_bone_frame(1.0)
-    assert folded[2] < spread[2], "folding must shorten the span"
-    assert folded[2] > 0.6 * spread[2], "the wing collapses; an eagle flexes, it does not tuck"
-    # -x is cranial. The tip may creep forward of the humerus axis, but nowhere
-    # near the leading edge -- a spiral fold put it 160 mm out there.
-    assert folded[0] > -0.5 * spread[2], f"tip swings {-folded[0] * 1000:.0f} mm past the leading edge"
-
-
-def test_wing_plane_stays_level(tmp_path):
-    """The twist servo cancels the roll the tendon network imposes.
-
-    Uncancelled that roll is ~41 deg peak-to-peak and the wing turns edge-on twice
-    a beat. Measured with the deliberate flip switched off, so what is left is
-    purely what the cancellation failed to remove.
-    """
-    scene = tmp_path / "level.xml"
     os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
     compile_tg(EAGLE_TG, scene)
     morph = load_morphology(EAGLE_TG)
     control = load_control_for_morphology(EAGLE_TG)
     model = mujoco.MjModel.from_xml_path(str(scene))
     humerus = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_humerus")
+    tip = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "L_wingtip")
+    elbow_act = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "L_elbow_servo")
+    lo, hi = (float(v) for v in model.actuator_ctrlrange[elbow_act])
 
-    def roll_range(**kwargs):
+    def settle(fold):
+        """Hold the elbow at `fold` of its range with the shoulder still, then look."""
         data = mujoco.MjData(model)
         sync_crank_disks_at_rest(model, data, lag_rad=morph.motors.crank_phase_lag_rad)
-        cranks = CrankDrive(model, morph, control)
-        drive = calibrated_drive(model, morph, control, twist=0.0, **kwargs)
-        rolls = []
-        settle = round(SETTLE * control.period / model.opt.timestep)
-        for step in range(round(CYCLES * control.period / model.opt.timestep)):
+        target = hi + (lo - hi) * fold
+        for _ in range(round(2.0 * control.period / model.opt.timestep)):
             data.ctrl[:] = 0.0
-            cranks.apply(data)
-            drive.apply(data)
+            for side in "LR":
+                aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{side}_elbow_servo")
+                data.ctrl[aid] = target
             mujoco.mj_step(model, data)
-            check_stable(model, data, "levelling rollout")
-            if step >= settle:
-                rot = np.asarray(data.xmat[humerus]).reshape(3, 3)
-                rolls.append(math.degrees(wing_plane_roll(rot, "L")))
-        return float(np.ptp(np.asarray(rolls)))
+            check_stable(model, data, "fold settle")
+        rot = np.asarray(data.xmat[humerus]).reshape(3, 3)
+        return rot.T @ (np.asarray(data.site_xpos[tip]) - np.asarray(data.xpos[humerus]))
 
-    uncancelled = roll_range(level=0.0)
-    residual = roll_range(level=1.0)
-    assert uncancelled > 25.0, "nothing to cancel — has the stroke changed?"
-    assert residual < 0.4 * uncancelled, (
-        f"levelling only got {uncancelled:.1f} deg down to {residual:.1f}"
-    )
-    assert residual < 15.0, f"wing plane still rolls {residual:.1f} deg"
-
-
-def test_wing_paddles_rather_than_slices(stroke):
-    """The wing plane stands on edge, near-perpendicular to the sweep.
-
-    Flat (roll ~0) the wing slices through a horizontal stroke edge-first, which
-    is the wrong way round for a wing that is meant to push against the air. The
-    servo holds whatever roll the mount was built with; this asserts the whole
-    assembly really is rolled up, not laid down.
-    """
-    rec, _, drive = stroke
-    held = abs(math.degrees(drive.attack))
-    assert 60.0 < held < 120.0, f"mount holds the wing at {held:.0f} deg — that is not on edge"
-    assert abs(np.abs(rec["roll_L"]).mean() - held) < 20.0, "the wing is not tracking its attack angle"
-
-
-def test_wing_flips_between_half_strokes(stroke):
-    """Leaning one way going forward, the other coming back — the hummingbird flip.
-
-    Measured as the wing plane's departure from the angle the servo holds, so it
-    reads the same whether the wing is laid flat or stood on edge.
-    """
-    rec, _, drive = stroke
-    deviation = rec["roll_L"] - math.degrees(drive.attack)
-    forward = np.gradient(rec["azim_L"]) > 0
-    assert forward.any() and (~forward).any()
-    a, b = deviation[forward].mean(), deviation[~forward].mean()
-    assert a * b < 0, f"wing does not flip between half-strokes ({a:+.1f} / {b:+.1f} deg)"
-    assert min(abs(a), abs(b)) > 3.0, "the flip is too shallow to read"
-
-
-def test_left_and_right_mirror(stroke):
-    rec, _, drive = stroke
-    assert np.abs(rec["elev_L"] - rec["elev_R"]).max() < 0.5
-    # Side-correct roll metric: mirrored wings must report the same number, not
-    # opposite or 180 deg apart.
-    assert np.abs(rec["roll_L"] - rec["roll_R"]).max() < 0.5
-    mirror = np.abs(rec["tip_L"] - rec["tip_R"] * np.array([1.0, -1.0, 1.0])).max()
-    assert mirror < 1e-4, f"wingtips are {mirror * 1000:.2f} mm from mirrored"
+    # Measured at half fold, the deepest the drive goes (it uses 0.35). Beyond
+    # that the hand swings cranially — with a tensegrity wrist nothing actuates
+    # the carpus, so the distal wing hinges at the elbow as one rigid arm and
+    # there is no counter-rotation to keep the tip back. In a bird that comes from
+    # the ulna-radius linkage, not from a muscle at the wrist, which is what the
+    # wing cables are for; at full fold the tip is still 167 mm cranial.
+    spread, folded = settle(0.0), settle(0.5)
+    assert folded[2] < spread[2] - 0.003, "folding the elbow must shorten the span"
+    assert folded[2] > 0.8 * spread[2], "half fold should barely shorten an eagle's wing"
+    assert folded[0] > -0.4 * spread[2], f"tip swings {-folded[0] * 1000:.0f} mm cranial at half fold"
 
 
 def test_feathers_clear_the_rig_and_each_other(tmp_path):

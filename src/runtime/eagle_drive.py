@@ -368,6 +368,11 @@ class EagleWingDrive:
                     self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{side}_{name}_servo"
                 )
                 if aid < 0:
+                    # A tensegrity wrist has no wrist joint to servo — the hand is
+                    # held by its own tendon net and follows the forearm passively.
+                    # Anything else missing is a real error.
+                    if name == "wrist":
+                        continue
                     raise ValueError(f"missing servo {side}_{name}_servo")
                 lo, hi = (float(v) for v in self.model.actuator_ctrlrange[aid])
                 scale = self.wrist_fold if name == "wrist" else 1.0

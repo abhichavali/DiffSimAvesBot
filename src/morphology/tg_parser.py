@@ -36,6 +36,7 @@ from morphology.model import (
     Wing,
     WingAero,
     WingBones,
+    WristTensegrity,
     WingPitch,
     World,
 )
@@ -225,6 +226,8 @@ class _TgParser:
         self.wing_aero: Dict[str, Any] = {}
         self.wing_bones: Dict[str, Any] = {}
         self.wing_bones_declared = False
+        self.wing_wrist: Dict[str, Any] = {}
+        self.wing_wrist_declared = False
 
     def parse(self) -> Morphology:
         i = 0
@@ -469,6 +472,10 @@ class _TgParser:
                 section = "bones"
                 self.wing_bones_declared = True
                 continue
+            if line == "wrist:":
+                section = "wrist"
+                self.wing_wrist_declared = True
+                continue
             if " = " in line:
                 key, val = line.split("=", 1)
                 key = key.strip()
@@ -479,6 +486,8 @@ class _TgParser:
                     bucket = self.wing_aero
                 elif section == "bones":
                     bucket = self.wing_bones
+                elif section == "wrist":
+                    bucket = self.wing_wrist
                 parsed = _parse_scalar(val.strip())
                 # _parse_scalar keeps angle literals numeric; convert deg->rad here.
                 if (
@@ -487,7 +496,11 @@ class _TgParser:
                     and re.search(r"\bdeg\b", val, re.I)
                 ):
                     parsed = math.radians(float(parsed))
-                elif section == "bones" and re.search(r"\bdeg\b", val, re.I):
+                elif (
+                    section == "wrist"
+                    and key != "stations"  # stations stay in degrees, like archetype's
+                    and re.search(r"\bdeg\b", val, re.I)
+                ) or (section == "bones" and re.search(r"\bdeg\b", val, re.I)):
                     parsed = (
                         tuple(math.radians(float(v)) for v in parsed)
                         if isinstance(parsed, tuple)
@@ -694,6 +707,48 @@ class _TgParser:
             servo=float(b.get("servo", d.servo)),
             damping=float(b.get("damping", d.damping)),
             armature=float(b.get("armature", d.armature)),
+            wrist=self._build_wrist(),
+        )
+
+    def _build_wrist(self) -> Optional[WristTensegrity]:
+        w = self.wing_wrist
+        if not w:
+            if self.wing_wrist_declared:
+                raise ValueError("wing wrist: section is empty — remove it, or give it keys")
+            return None
+        d = WristTensegrity()
+        known = {"scale", "stations", "gap", "width", "stiffness", "damping",
+                 "pretension", "tendon_width", "arc_rod", "rung_rod"}
+        unknown = sorted(set(w) - known)
+        if unknown:
+            raise ValueError(
+                f"unknown wing wrist key(s) {', '.join(unknown)}; expected one of "
+                + ", ".join(sorted(known))
+            )
+        stations = w.get("stations", d.stations_deg)
+        if not isinstance(stations, (tuple, list)) or len(stations) != 4:
+            raise ValueError(f"wing wrist stations must be four angles, got {stations!r}")
+
+        def rod(key, default):
+            raw = w.get(key)
+            if raw is None:
+                return default
+            if not isinstance(raw, dict):
+                raise ValueError(f"wing wrist {key} must be a brace dict, got {raw!r}")
+            return RodSpec(float(raw.get("radius", default.radius)),
+                           float(raw.get("mass", default.mass)))
+
+        return WristTensegrity(
+            scale=float(w.get("scale", d.scale)),
+            stations_deg=tuple(float(x) for x in stations),
+            gap=float(w.get("gap", d.gap)),
+            width=float(w.get("width", d.width)),
+            stiffness=float(w.get("stiffness", d.stiffness)),
+            damping=float(w.get("damping", d.damping)),
+            pretension=float(w.get("pretension", d.pretension)),
+            tendon_width=float(w.get("tendon_width", d.tendon_width)),
+            arc_rod=rod("arc_rod", d.arc_rod),
+            rung_rod=rod("rung_rod", d.rung_rod),
         )
 
 

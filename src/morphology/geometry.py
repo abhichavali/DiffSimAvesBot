@@ -241,6 +241,31 @@ def fixed_body_orientation() -> np.ndarray:
     return mobile_body_orientation()
 
 
+def quat_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Hamilton product of two w-first quaternions."""
+    w1, x1, y1, z1 = a
+    w2, x2, y2, z2 = b
+    return np.array([
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    ], dtype=float)
+
+
+def quat_from_axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
+    axis = np.asarray(axis, dtype=float)
+    axis = axis / (np.linalg.norm(axis) + 1e-12)
+    half = 0.5 * angle
+    return np.concatenate([[math.cos(half)], math.sin(half) * axis])
+
+
+def compose(pos_a: np.ndarray, quat_a: np.ndarray,
+            pos_b: np.ndarray, quat_b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Frame B expressed in A's parent: A then B."""
+    return pos_a + quat_rotate(quat_a, pos_b), quat_mul(quat_a, quat_b)
+
+
 def quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     w, x, y, z = q
     rot = np.array(
