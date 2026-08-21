@@ -640,21 +640,6 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph,
         )
     bone(manus, "carpometacarpus", 0.0, 0.62 * b.manus, 0.0019, 0.14 * b.mass)
     bone(manus, "phalanx", 0.62 * b.manus, b.manus, 0.0013, 0.06 * b.mass)
-    # Alula: the little thumb tuft on the leading edge of the wrist.
-    ET.SubElement(
-        manus,
-        "geom",
-        name=f"{prefix}_alula",
-        type="box",
-        pos=f"{-0.006} {y_sign * -_SHINGLE} {0.14 * b.manus}",
-        euler=f"0 {math.radians(-28)} 0",
-        size=f"{0.10 * b.chord} 0.0004 0.011",
-        mass=str(0.02 * b.mass),
-        rgba=FEATHER_RGBA[0],
-        contype="0",
-        conaffinity="0",
-        group="2",
-    )
     # Primaries: long, separated, raked progressively forward toward the tip —
     # the eagle's fingered wingtip. The outermost one carries the wingtip marker.
     # rake1 stays well off the span: at 16 deg the outermost primary carried only

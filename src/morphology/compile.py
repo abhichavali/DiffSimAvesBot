@@ -200,13 +200,20 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
     tip_pos, tip_quat = compose(ulna_pos, ulna_quat,
                                 np.array([0.0, 0.0, bones.ulna]), _IDENTITY_QUAT)
 
-    # Centre each strut's ARC on the bone line, not its body origin. An arc's
-    # origin sits off to one side of the arc it describes, so placing bodies
-    # directly leaves the cage hanging below the bones instead of straddling
-    # them — the joint then reads as something lying on the wing rather than
-    # holding it together.
-    prox_body = np.zeros(3) - quat_rotate(prox_quat, proximal_geom.midpoint)
-    dist_body = dist_pos_rel - quat_rotate(dist_quat_rel, distal_geom.midpoint)
+    # Centre the PAIR on the bone line, as one unit. Centring each strut on its
+    # own arc instead pulls them apart: the shoulder's two struts arc in
+    # perpendicular planes and nest into each other (centres 5.3 mm apart, each
+    # cage 16 mm deep), and re-centring each one destroys that interleaving and
+    # leaves two cages facing each other across a gap. An arc's body origin does
+    # sit off to one side of the arc, which is the thing that needed fixing — so
+    # offset by the pair's combined centroid, which corrects the hang without
+    # touching how the two struts sit relative to each other.
+    prox_cloud = np.array([quat_rotate(prox_quat, n) for n in proximal_geom.nodes.values()])
+    dist_cloud = np.array([dist_pos_rel + quat_rotate(dist_quat_rel, n)
+                           for n in distal_geom.nodes.values()])
+    pair_centroid = np.concatenate([prox_cloud, dist_cloud]).mean(axis=0)
+    prox_body = -pair_centroid
+    dist_body = dist_pos_rel - pair_centroid
 
     proximal_pos_world, proximal_quat_world = compose(tip_pos, tip_quat,
                                                       prox_body, prox_quat)
@@ -227,8 +234,13 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
     # instead (which keeps the planform identical) buries the strut pair inside
     # the hand, and then the joint reads as a cage lying on the feathers rather
     # than as the thing holding them on.
+    # The hand starts exactly one gap outboard of the forearm's tip, stated
+    # directly rather than inferred from the distal strut's arc — centring the
+    # pair moves that arc, and hanging the manus off it once put the hand INBOARD
+    # of the joint it is supposed to be distal to.
     inv_distal = np.array([distal_quat_world[0], *(-distal_quat_world[1:])])
-    manus_pos = np.array(distal_geom.midpoint, dtype=float)
+    hand_world = tip_pos + quat_rotate(tip_quat, np.array([0.0, 0.0, w.gap]))
+    manus_pos = quat_rotate(inv_distal, hand_world - distal_pos_world)
     manus_quat = quat_mul(inv_distal, tip_quat)
 
     return CompiledWrist(
