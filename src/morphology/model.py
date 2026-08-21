@@ -234,6 +234,35 @@ class WristTensegrity:
 
 
 @dataclass
+class WingCables:
+    """Cables spanning humerus -> ulna -> manus, making the wing itself a tensegrity.
+
+    Two antagonists per wing, each a single spatial tendon threaded through an
+    anchor on all three bones: one routed cranial (ahead of the bones, the
+    propatagial side) and one caudal. Because each crosses both the elbow and the
+    wrist, tensioning one drives the whole chain — which is how a bird extends and
+    folds its wing without a muscle at the carpus, and the thing a passive
+    tensegrity wrist otherwise cannot do.
+
+    Anchors are given as a chordwise stand-off from the bone and a fraction along
+    its span, so the same numbers describe the routing at any bone length.
+    ``extend`` and ``contract`` are (cranial, caudal) rest-length fractions: below
+    1 the cable is pretensioned and pulls.
+    """
+
+    cranial_offset: float = 0.020  # m ahead of the bone line
+    caudal_offset: float = 0.020  # m behind it
+    humerus_frac: float = 0.55  # fraction along each bone, from its proximal end
+    ulna_frac: float = 0.50
+    manus_frac: float = 0.60
+    stiffness: float = 120.0
+    damping: float = 0.4
+    width: float = 0.0005
+    extend: Tuple[float, float] = (1.0, 0.90)
+    contract: Tuple[float, float] = (0.90, 1.0)
+
+
+@dataclass
 class WingBones:
     """Three-linkage avian wing (humerus / ulna / manus) in place of the flat plate.
 
@@ -271,6 +300,8 @@ class WingBones:
     # None -> the wrist is a plain hinge. Set -> a scaled-down tensegrity joint,
     # and the wrist hinge and its servo disappear.
     wrist: Optional[WristTensegrity] = None
+    # None -> no wing cables. Set -> the wing is itself a tensegrity.
+    cables: Optional[WingCables] = None
 
     @property
     def span(self) -> float:

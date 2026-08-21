@@ -401,6 +401,30 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph, compiled: 
 #: Spacing between successive feather vanes along the wing normal (m).
 _SHINGLE = 0.0005
 
+def _emit_cable_anchors(prefix, y_sign, b, humerus, ulna) -> None:
+    """Anchor sites for the wing cables on the humerus and ulna.
+
+    Chordwise stand-off is what gives each cable a moment arm about the elbow; on
+    the bone line it would only pull the joints together. The manus anchor is
+    emitted with the hand, wherever the hand happens to hang.
+    """
+    del y_sign  # anchors are y-free, like every other bone offset
+    c = b.cables
+    for body, name, length in ((humerus, "humerus", b.humerus), (ulna, "ulna", b.ulna)):
+        frac = c.humerus_frac if name == "humerus" else c.ulna_frac
+        for tag, offset in (("cranial", -c.cranial_offset), ("caudal", c.caudal_offset)):
+            ET.SubElement(
+                body,
+                "site",
+                name=f"{prefix}_cable_{tag}_{name}",
+                type="sphere",
+                pos=f"{offset} 0 {frac * length}",
+                size="0.0022",
+                rgba="0.15 0.85 0.4 1",
+                group="3",
+            )
+
+
 BONE_RGBA = "0.93 0.90 0.82 1"
 FEATHER_RGBA = ("0.30 0.22 0.16 1", "0.20 0.15 0.11 1")  # coverts, flight feathers
 
@@ -586,6 +610,9 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph,
              1.0 * b.chord, 0.84 * b.chord, math.radians(95), math.radians(78),
              0.30 * b.chord, FEATHER_RGBA[0], group=1)
 
+    if b.cables is not None:
+        _emit_cable_anchors(prefix, y_sign, b, humerus, ulna)
+
     wrist_host = None
     if b.wrist is not None:
         if worldbody is None:
@@ -633,6 +660,21 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph,
     tip = feathers(manus, "primary", 8, 0.05 * b.manus, b.manus,
                    0.72 * b.primary, 1.0 * b.primary, math.radians(72), math.radians(24),
                    0.20 * b.chord, FEATHER_RGBA[1], group=2)
+    if b.cables is not None:
+        c = b.cables
+        for tag, sign in (("cranial", -1.0), ("caudal", 1.0)):
+            ET.SubElement(
+                manus,
+                "site",
+                name=f"{prefix}_cable_{tag}_manus",
+                type="sphere",
+                pos=f"{sign * (c.cranial_offset if sign < 0 else c.caudal_offset)} 0 "
+                    f"{c.manus_frac * b.manus}",
+                size="0.0022",
+                rgba="0.15 0.85 0.4 1",
+                group="3",
+            )
+
     # Wingtip marker: the reference point every kinematic check measures.
     ET.SubElement(
         manus,
@@ -770,6 +812,36 @@ def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], m
     )
 
 
+def _add_wing_cables(tendon_el, prefix: str, morph) -> None:
+    """Two antagonist cables per wing, each threaded humerus -> ulna -> manus.
+
+    One spatial tendon through all three anchors, not a chain of two: MuJoCo sums
+    the segment lengths, so a single tendon's tension is shared across the elbow
+    and the wrist and the two joints move together. That coupling is the point —
+    it is the bird's ulna-radius linkage, the thing that lets one pull extend or
+    fold the whole wing.
+
+    Rest lengths are set from the compiled extended pose by the ``extend`` and
+    ``contract`` fractions; ``springlength`` is what the search actually tunes.
+    """
+    c = morph.wing.bones.cables
+    for tag, rest in (("cranial", c.extend[0]), ("caudal", c.extend[1])):
+        spatial = ET.SubElement(
+            tendon_el,
+            "spatial",
+            name=f"{prefix}_cable_{tag}",
+            stiffness=str(c.stiffness),
+            damping=str(c.damping),
+            width=str(c.width),
+            rgba="0.15 0.85 0.4 1",
+            # springlength is rewritten at load time from the measured extended
+            # length; this placeholder keeps the model valid on its own.
+            springlength=str(rest),
+        )
+        for bone in ("humerus", "ulna", "manus"):
+            ET.SubElement(spatial, "site", site=f"{prefix}_cable_{tag}_{bone}")
+
+
 def _add_wrist_tendons(tendon_el, shoulder: CompiledShoulder, morph,
                        color_structural_tendons: bool) -> None:
     """The wrist's own sigma-expanded net, same topology as the shoulder's.
@@ -847,6 +919,8 @@ def _add_tendons(
 
         if shoulder.wrist is not None:
             _add_wrist_tendons(tendon_el, shoulder, morph, color_structural_tendons)
+        if morph.wing.bones is not None and morph.wing.bones.cables is not None:
+            _add_wing_cables(tendon_el, shoulder.side, morph)
 
         for foot in morph.motors.feet:
             st = foot.station

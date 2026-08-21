@@ -36,6 +36,7 @@ from morphology.model import (
     Wing,
     WingAero,
     WingBones,
+    WingCables,
     WristTensegrity,
     WingPitch,
     World,
@@ -228,6 +229,8 @@ class _TgParser:
         self.wing_bones_declared = False
         self.wing_wrist: Dict[str, Any] = {}
         self.wing_wrist_declared = False
+        self.wing_cables: Dict[str, Any] = {}
+        self.wing_cables_declared = False
 
     def parse(self) -> Morphology:
         i = 0
@@ -476,6 +479,10 @@ class _TgParser:
                 section = "wrist"
                 self.wing_wrist_declared = True
                 continue
+            if line == "cables:":
+                section = "cables"
+                self.wing_cables_declared = True
+                continue
             if " = " in line:
                 key, val = line.split("=", 1)
                 key = key.strip()
@@ -488,6 +495,8 @@ class _TgParser:
                     bucket = self.wing_bones
                 elif section == "wrist":
                     bucket = self.wing_wrist
+                elif section == "cables":
+                    bucket = self.wing_cables
                 parsed = _parse_scalar(val.strip())
                 # _parse_scalar keeps angle literals numeric; convert deg->rad here.
                 if (
@@ -708,6 +717,42 @@ class _TgParser:
             damping=float(b.get("damping", d.damping)),
             armature=float(b.get("armature", d.armature)),
             wrist=self._build_wrist(),
+            cables=self._build_cables(),
+        )
+
+    def _build_cables(self) -> Optional[WingCables]:
+        c = self.wing_cables
+        if not c:
+            if self.wing_cables_declared:
+                raise ValueError("wing cables: section is empty — remove it, or give it keys")
+            return None
+        d = WingCables()
+        known = {"cranial_offset", "caudal_offset", "humerus_frac", "ulna_frac",
+                 "manus_frac", "stiffness", "damping", "width", "extend", "contract"}
+        unknown = sorted(set(c) - known)
+        if unknown:
+            raise ValueError(
+                f"unknown wing cables key(s) {', '.join(unknown)}; expected one of "
+                + ", ".join(sorted(known))
+            )
+
+        def pair(key, default):
+            v = c.get(key, default)
+            if not isinstance(v, (tuple, list)) or len(v) != 2:
+                raise ValueError(f"wing cables {key} must be (cranial, caudal), got {v!r}")
+            return tuple(float(x) for x in v)
+
+        return WingCables(
+            cranial_offset=float(c.get("cranial_offset", d.cranial_offset)),
+            caudal_offset=float(c.get("caudal_offset", d.caudal_offset)),
+            humerus_frac=float(c.get("humerus_frac", d.humerus_frac)),
+            ulna_frac=float(c.get("ulna_frac", d.ulna_frac)),
+            manus_frac=float(c.get("manus_frac", d.manus_frac)),
+            stiffness=float(c.get("stiffness", d.stiffness)),
+            damping=float(c.get("damping", d.damping)),
+            width=float(c.get("width", d.width)),
+            extend=pair("extend", d.extend),
+            contract=pair("contract", d.contract),
         )
 
     def _build_wrist(self) -> Optional[WristTensegrity]:

@@ -31,7 +31,31 @@ from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.eagle_drive import CrankDrive, calibrated_drive, check_stable
+from runtime.wing_cables import apply_tension, cable_names, release_fold_servos
 from runtime.viewer_runtime import RealtimeSync
+
+
+def _tension_cables(model, morph, args) -> None:
+    """Set the wing cables' rest lengths, if the design has any.
+
+    The compiler cannot do this: a cable is tensioned when its spring is shorter
+    than the distance its anchors currently span, so the fractions in the .tg only
+    mean something once the extended pose exists to measure. Without this the
+    cables are emitted but inert.
+    """
+    cables = morph.wing.bones.cables if morph.wing.bones else None
+    if cables is None or not cable_names(model):
+        if args.cables not in ("slack", "extend"):
+            raise SystemExit(f"{args.tg} declares no `cables:` section, so --cables has nothing to set")
+        return
+    fractions = {"extend": cables.extend, "contract": cables.contract, "slack": (1.0, 1.0)}[args.cables]
+    apply_tension(model, fractions)
+    if args.cable_only:
+        # Let the cables alone hold the wing: a stiff position servo on the elbow
+        # would otherwise decide the pose no matter how they are tensioned.
+        release_fold_servos(model)
+    print(f"wing cables: {args.cables} (cranial, caudal) = {tuple(fractions)}"
+          + ("; elbow servo released" if args.cable_only else ""), flush=True)
 
 
 def build(args):
@@ -43,6 +67,7 @@ def build(args):
         raise SystemExit(f"{args.tg} has no `bones:` section — that is the hummingbird plate wing")
     control = load_control_for_morphology(args.tg)
     model = mujoco.MjModel.from_xml_path(str(args.scene))
+    _tension_cables(model, morph, args)
     data = mujoco.MjData(model)
     sync_crank_disks_at_rest(model, data)
     if args.paused:
@@ -148,6 +173,10 @@ def main() -> None:
     p.add_argument("--attack", type=float, default=None,
                    help="Wing-plane roll to hold (deg). 0 lies flat and slices the sweep, "
                         "~90 stands the wing on edge so it paddles. Default: the mount's own roll")
+    p.add_argument("--cables", choices=("slack", "extend", "contract"), default="slack",
+                   help="Wing-cable tension preset from the .tg (default: slack)")
+    p.add_argument("--cable-only", action="store_true",
+                   help="Release the elbow servo so the cables alone hold the wing's pose")
     p.add_argument("--paused", action="store_true",
                    help="Freeze at the compiled rest pose: nothing driven, no physics stepped")
     p.add_argument("--gif", type=Path, default=None, help="Record to this GIF instead of viewing")
