@@ -27,12 +27,15 @@ def loss_for(*, Lbar, A_stroke, lift_cap=None, swing=0.0, w_swing=0.0,
              tau_hat=0.0, tau_max=0.300, lift0=None, tradeoff=None):
     """Scalar loss for a design with the given lift / amplitude / torque-swing
     (other metrics neutral). metrics() = (Lbar, tau_hat, A_stroke, S, C_lc,
-    P_inactive, C_overlap, swing, P_supplied)."""
+    P_inactive, C_overlap, swing, P_supplied, C_valid, alpha_pk, k_eff,
+    conv_err, tau_peak, tau_drift) -- make_loss unpacks all 15, so this stub
+    has to track build_rollout's tuple exactly."""
     def metrics(theta):
-        return (jnp.asarray(Lbar), jnp.asarray(tau_hat), jnp.asarray(A_stroke),
-                jnp.asarray(0.0), jnp.asarray(0.0), jnp.asarray(0.0), jnp.asarray(0.0),
-                jnp.asarray(swing), jnp.asarray(0.0), jnp.asarray(0.0), jnp.asarray(0.0),
-                jnp.asarray(0.0), jnp.asarray(0.0))
+        zeros = [jnp.asarray(0.0)] * 15
+        out = list(zeros)
+        out[0], out[1], out[2] = jnp.asarray(Lbar), jnp.asarray(tau_hat), jnp.asarray(A_stroke)
+        out[7] = jnp.asarray(swing)
+        return tuple(out)
     grad_fn = make_loss(metrics, lift_floor=FLOOR, lift_cap=lift_cap, lift_smooth=0.015,
                         lift_above_weight=0.25, A_target=A_TARGET, tau_max=None,
                         weights=(1.0, 1.0, 1.0, 0.0), w_lc=0.0, w_power=0.0, w_overlap=0.0,

@@ -219,7 +219,8 @@ def ricker_atoms(phase, centers, sigmas, xp):
     return (1.0 - u * u) * xp.exp(-0.5 * u * u)
 
 
-def build_rollout(mx, dx0, drive, pitch, aero, tip_ids, omega, K, warmup_steps, sample_steps,
+def build_rollout(mx_base, dx0_base, drive, pitch, aero, tip_ids, omega, K,
+                  warmup_steps, sample_steps,
                   *, steps_per_cycle, aero_substep, base_a0, tune_control, control_fixed,
                   tune_frequency, tune_tendons, tendons, tune_pitch=False, tune_motor=False,
                   motor_ids=None, flap_t1_mask=None, lp_power=10.0, avg_periods=3,
@@ -252,7 +253,7 @@ def build_rollout(mx, dx0, drive, pitch, aero, tip_ids, omega, K, warmup_steps, 
     window_start = (n_full - n_avg) * steps_per_cycle
     window_end = n_full * steps_per_cycle
     record = (jnp.arange(total_steps) >= window_start) & (jnp.arange(total_steps) < window_end)
-    qdim = int(dx0.qpos.shape[0])
+    qdim = int(dx0_base.qpos.shape[0])
     if tune_strokeplane:
         sp_qadr = int(strokeplane["qadr"])
         sp_body_ids = strokeplane["body_ids"]
@@ -284,9 +285,13 @@ def build_rollout(mx, dx0, drive, pitch, aero, tip_ids, omega, K, warmup_steps, 
         sp = theta[i : i + 10] if tune_strokeplane else None
         return ctrl, f_log, stiff_log, pre_log, pitch_log, motor_log, sp
 
-    def perturbed_model(stiff_log, pre_log, motor_log):
+    def perturbed_model(mxb, stiff_log, pre_log, motor_log):
         # Log-factors (seeded exp(0)=1) scale the design base; exp keeps values >0.
-        stiff, lenspring = base_stiff, base_lenspring
+        # The base comes off `mxb`, not the captured arrays, so a per-genome model
+        # (evolve_codesign's geometry genes) scales ITS OWN derived rest lengths --
+        # tendon `length = derived` moves when the struts do.
+        stiff, lenspring = mxb.tendon_stiffness, mxb.tendon_lengthspring
+        base_stiff, base_lenspring = stiff, lenspring
         if tune_tendons:  # per-pair structural, mirrored L=R
             sp = base_stiff[l_ids] * jnp.exp(stiff_log)
             stiff = stiff.at[l_ids].set(sp).at[r_ids].set(sp)
@@ -296,15 +301,21 @@ def build_rollout(mx, dx0, drive, pitch, aero, tip_ids, omega, K, warmup_steps, 
         if tune_motor:  # one shared stiffness + one shared pretension over the 4 motor tendons
             stiff = stiff.at[motor_ids].set(base_stiff[motor_ids] * jnp.exp(motor_log[0]))
             lenspring = lenspring.at[motor_ids].set(base_lenspring[motor_ids] * jnp.exp(motor_log[1]))
-        return mx.replace(tendon_stiffness=stiff, tendon_lengthspring=lenspring)
+        return mxb.replace(tendon_stiffness=stiff, tendon_lengthspring=lenspring)
 
-    def metrics(theta):
+    def metrics(theta, mx_g=None, dx_g=None):
+        """``mx_g``/``dx_g`` override the compiled-in model for THIS call. Both
+        default to the model this rollout was built against, so every existing
+        caller is unchanged; evolve_codesign passes a per-genome model (same
+        array shapes, so one trace serves the whole batched vmap)."""
+        mx, dx0 = (mx_base if mx_g is None else mx_g), (dx0_base if dx_g is None else dx_g)
         ctrl, f_log, stiff_log, pre_log, pitch_log, motor_log, sp = split(theta)
         a0 = base_a0 * jnp.exp(ctrl[0])
         a, b = ctrl[1 : 1 + K], ctrl[1 + K :]
         wl_coeff = ctrl[1:]  # wavelet mode: all 2K coeffs are atom amplitudes
         omega_eff = omega * jnp.exp(f_log)
-        mx_eff = perturbed_model(stiff_log, pre_log, motor_log) if (tune_tendons or tune_motor) else mx
+        mx_eff = (perturbed_model(mx, stiff_log, pre_log, motor_log)
+                  if (tune_tendons or tune_motor) else mx)
         # Pitch deadband+stiffness as log-factors of the design base (resonant feathering).
         pc = pitch
         if tune_pitch:
@@ -906,6 +917,9 @@ def main() -> None:
     # Tendon co-design: optimize per-pair (L=R) structural-tendon stiffness + pretension.
     p.add_argument("--tune-tendons", action="store_true",
                    help="optimize the 24 structural-tendon params (12 stiffness + 12 pretension)")
+    p.add_argument("--tendon-params", choices=("both", "stiffness", "pretension"), default="both",
+                   help="restrict --tune-tendons to one half of the structural-tendon block; the "
+                        "frozen half stays at its seed (--init-tendons/--init-codesign, else 1x)")
     p.add_argument("--tune-pitch", action="store_true",
                    help="optimize the 4 wing-pitch params (up/down deadband + stiffness) -- feathering")
     p.add_argument("--tune-motor-tendons", action="store_true",
@@ -963,6 +977,15 @@ def main() -> None:
     warmup_steps = math.ceil(args.warmup_periods * period / dt)
     sample_steps = math.ceil(args.sample_periods * period / dt)
     motor_dir = load_morphology(args.tg).motors.motor_direction
+
+    # Half-tendon freeze: theta packs [control][f_log][stiff(n)][pre(n)][...], so the
+    # frozen half is a contiguous slice whose gradient we zero every step.
+    tendon_freeze = None
+    if tune_tendons and args.tendon_params != "both":
+        _off = (2 * K + 1 if tune_control else 0) + (1 if args.tune_frequency else 0)
+        _n = int(np.asarray(tendons[0]).shape[0])
+        tendon_freeze = ((_off + _n, _off + 2 * _n) if args.tendon_params == "stiffness"
+                         else (_off, _off + _n))
 
     base_a0 = float(drive.a0)
     control_seed = jnp.asarray(load_control_seed(args.init_control, K, drive, base_a0,
@@ -1550,6 +1573,8 @@ def main() -> None:
                     grad = grad.at[:2 * K + 1].set(0.0)  # safer knobs first: tendons/motor only
                 if tune_sp:
                     grad = grad.at[-10:].set(0.0)  # stroke-plane unlocks with the harmonics
+            if tendon_freeze is not None:
+                grad = grad.at[tendon_freeze[0]:tendon_freeze[1]].set(0.0)
             (Lbar, tau_hat, A_stroke, S, Clc, Pin, Ovl, swing, P_sup, loss,
              tau_i, tau_r, tau_rob, tau_spread, Cvalid, alpha_pk, k_eff, conv_err,
              tau_pk, drift_w) = (float(x) for x in aux)

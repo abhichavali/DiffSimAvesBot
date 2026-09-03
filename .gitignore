@@ -26,5 +26,7 @@ opt/tendon_seeds/
 opt/codesign_seeds*/
 opt/remote_*snapshot/
 opt/.compile.lock
+opt/gui_runs/
+_ea_genome.tg
 out/
 *.log
