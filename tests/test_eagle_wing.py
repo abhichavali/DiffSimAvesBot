@@ -123,6 +123,233 @@ def test_topology_is_humerus_ulna_manus(tmp_path):
     assert model.body_jntnum[hid] == 1
 
 
+def test_elbow_sweep_covers_the_whole_range(tmp_path):
+    """--elbow-sweep leaves the extended stop, reaches the flexed one, comes back.
+
+    A raised cosine, so half a period is full fold and a whole one is back where
+    it started — get the phase or the endpoints wrong and the wing either never
+    reaches a stop or slams into one at t=0.
+    """
+    from view_eagle import elbow_sweep, elbow_targets  # noqa: PLC0415
+
+    scene = tmp_path / "sweep.xml"
+    compile_tg(EAGLE_TG, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "L_elbow_servo")
+    assert aid >= 0
+    extended, flexed = (elbow_targets(model, f)[aid] for f in (0.0, 1.0))
+    assert extended != flexed
+
+    sweep = elbow_sweep(model, 4.0)
+    assert sweep(0.0)[aid] == pytest.approx(extended)
+    assert sweep(2.0)[aid] == pytest.approx(flexed)
+    assert sweep(4.0)[aid] == pytest.approx(extended)
+    # Through the middle, not a step: a quarter period sits strictly between.
+    assert min(extended, flexed) < sweep(1.0)[aid] < max(extended, flexed)
+
+
+def test_glide_pose_spreads_both_wings_flat(tmp_path):
+    """--glide holds the wing out level, and holds the same pose on both sides.
+
+    Two things it can silently get wrong. The mount stands the wing on edge by
+    89 deg, so a flat wing is the twist servo's doing and not the rest pose — and
+    the servo's 70 deg cannot always cover it, so the correction is clipped and
+    the park angle has to be one it can reach. And the two cranks on a shoulder
+    counter-rotate while the right shoulder mirrors the left, so parking them is
+    a sign per disk: get one wrong and the wings park in different postures,
+    which reads as a bird with a broken wing rather than a glide.
+    """
+    from view_eagle import glide_pose  # noqa: PLC0415
+
+    scene = tmp_path / "glide.xml"
+    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
+    compile_tg(EAGLE_TG, scene)
+    control = load_control_for_morphology(EAGLE_TG)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    data = mujoco.MjData(model)
+    sync_crank_disks_at_rest(model, data)
+    glide_pose(model, data, control, math.radians(20.0))
+
+    pose = {}
+    for side in "LR":
+        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{side}_humerus")
+        rot = np.asarray(data.xmat[bid]).reshape(3, 3)
+        pose[side] = (
+            math.degrees(wing_plane_roll(rot, side)),
+            math.degrees(math.asin(float(np.clip(rot[2, 2], -1, 1)))),
+        )
+        assert abs(pose[side][0]) < 4.0, f"{side} wing plane is {pose[side][0]:.1f} deg off flat"
+    # Mirror images, which is what says the crank park signs are right.
+    assert abs(pose["L"][0] - pose["R"][0]) < 2.0, f"wings are not flat alike: {pose}"
+    assert abs(pose["L"][1] - pose["R"][1]) < 2.0, f"wings sit at different heights: {pose}"
+    # Spread, not folded: a glide is the extended stop, not the fold schedule.
+    jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "L_elbow")
+    lo, hi = (math.degrees(v) for v in model.jnt_range[jid])
+    elbow = math.degrees(float(data.qpos[model.jnt_qposadr[jid]]))
+    assert elbow > hi - 0.15 * (hi - lo), f"the glide is folded: elbow {elbow:.1f} of {lo:.0f}..{hi:.0f}"
+
+
+def test_feathers_bend_along_the_shaft(tmp_path):
+    """Each vane is a chain of sprung links, soft enough to curve and stiff enough to fly.
+
+    Three ways this silently stops being a feather. The vanes sit under the
+    bones' ``childclass="shoulder-joint"``, whose frictionloss of 0.1 N m is ~1e5
+    times anything a milligram link exerts and whose armature of 0.005 is orders
+    over a link's own inertia — inherit either and the fan is welded solid with
+    the DOFs still there to pay for. And the spring has a band: the natural
+    frequency has to stay well above the 2.5 Hz beat, or the vane rings on its
+    own instead of tracking the stroke.
+    """
+    scene = tmp_path / "feathers.xml"
+    compile_tg(EAGLE_TG, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    vanes = load_morphology(EAGLE_TG).wing.bones.feathers
+    assert vanes is not None, "design/eagle.tg no longer declares feathers:"
+    # The whole vane's stiffness is shared out over its nodes; see FeatherVanes.
+    node_stiffness = vanes.segments * vanes.stiffness
+
+    chains, freqs = {}, {}
+    for i in range(model.ngeom):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i)
+        if not name or not any(k in name for k in ("tertial", "secondary", "primary")):
+            continue
+        body = model.geom_bodyid[i]
+        assert mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body) == f"{name}_quill"
+        assert model.body_jntnum[body] == 1, f"{name} carries more than its bend hinge"
+        jid = model.body_jntadr[body]
+        assert mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jid) == f"{name}_bend"
+        dof = model.jnt_dofadr[jid]
+        # Neither inherited from the shoulder-joint class, which would weld it.
+        assert model.dof_frictionloss[dof] == 0.0, f"{name} hinge has stiction"
+        centre = model.body_ipos[body]
+        inertia = float(model.body_inertia[body][0]
+                        + model.body_mass[body] * (centre[1] ** 2 + centre[2] ** 2))
+        assert model.dof_armature[dof] < 0.5 * inertia, f"{name} armature swamps the link"
+        freqs[name] = math.sqrt(node_stiffness / (inertia + model.dof_armature[dof])) / math.tau
+        vane = re.match(r"^(.+_(?:tertial|secondary|primary)_\d{2})", name).group(1)
+        chains.setdefault(vane, []).append(body)
+
+    assert len(chains) > 12
+    for vane, bodies in chains.items():
+        # A chain, not a bouquet: link j+1 hangs off link j, or the vane pivots
+        # at the quill however many joints it has and cannot curve at all.
+        assert len(bodies) == vanes.segments, f"{vane} has {len(bodies)} links"
+        for parent, child in zip(sorted(bodies), sorted(bodies)[1:]):
+            assert model.body_parentid[child] == parent, f"{vane} is not a chain"
+
+    # Above the beat by a wide margin, and below what a 0.13 ms step can carry.
+    assert 4.0 * 2.5 < min(freqs.values()), f"softest link rings at {min(freqs.values()):.1f} Hz"
+    assert max(freqs.values()) < 400.0
+    # Graded along the span: one stiffness against rising inertia, so the long
+    # primaries give and the tertials barely do. That gradient IS the effect.
+    assert freqs["L_primary_08_01"] < 0.85 * freqs["L_tertial_01_01"], "the fan flexes as a slab"
+
+
+def test_the_wings_are_mirror_images(tmp_path):
+    """Right cable hardware mirrors the left, anchors and crank pins alike.
+
+    The pin did not: it was placed at the same disk-local coordinates on both
+    sides, but the R disk body is the y-mirror of L, so it landed 19 mm off its
+    mirror position. The right cables came out 17 mm shorter than the left and
+    flapped the right wing out of phase — one wing rising while the other fell.
+    The motor tendon's rim has always been mirrored for exactly this reason (see
+    the R-disk block in morphology/compile.py); the cable pin is the same rule.
+    """
+    # Both the shipped design and an off-axis pin. At the shipped pin_phase of
+    # 180 deg the pin's disk-local y is zero, so a missing mirror is invisible
+    # there — the bug only shows once the pin comes off the disk's x axis, which
+    # is one edit away.
+    variant = tmp_path / "offaxis.tg"
+    text, count = re.subn(r"pin_phase(\s*)= 180 deg", r"pin_phase\g<1>= 120 deg",
+                          EAGLE_TG.read_text(encoding="utf-8"))
+    assert count == 1, "design/eagle.tg no longer declares pin_phase = 180 deg"
+    variant.write_text(text, encoding="utf-8")
+    for tg in (EAGLE_TG, variant):
+        _assert_wings_mirror(tg, tmp_path / f"{tg.stem}_mirror.xml")
+
+
+def _assert_wings_mirror(tg, scene) -> None:
+    compile_tg(tg, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    for name in ("cable_humerus", "cable_ulna", "cable_manus", "cable_guide_humerus",
+                 "cable_guide_ulna", "t1_cable_pin", "t4_cable_pin"):
+        pos = {}
+        for side in "LR":
+            sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, f"{side}_{name}")
+            assert sid >= 0, f"missing site {side}_{name}"
+            pos[side] = np.array(data.site_xpos[sid])
+        off = np.linalg.norm(pos["L"] * [1, -1, 1] - pos["R"])
+        assert off < 1e-9, f"{tg.name}: {name} is {off * 1000:.2f} mm off its mirror"
+
+    # And the cables the hardware carries come out the same length on both sides.
+    for bone in ("humerus", "ulna", "manus"):
+        length = {}
+        for side in "LR":
+            tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, f"{side}_cable_{bone}")
+            length[side] = float(data.ten_length[tid])
+        diff = abs(length["L"] - length["R"]) * 1000
+        assert diff < 1e-6, f"{tg.name}: {bone} cable differs L/R by {diff:.2f} mm"
+
+
+def test_cables_route_along_the_skeleton(tmp_path):
+    """Each cable rides the bones in to the disk instead of hanging across air.
+
+    Two things break if the guides go: the cable spans open air from the hand to
+    the body, and — because the hand is a free body, not a descendant of the
+    elbow — the manus cable stops crossing the elbow at all, so contracting it
+    cannot fold the wing. Both are checked here, the second as the sign and size
+    of d(length)/d(elbow): positive means tension flexes, which is the direction
+    the elbow's [-70, 4] deg range actually has room to move in.
+    """
+    scene = tmp_path / "cables.xml"
+    compile_tg(EAGLE_TG, scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    def site(name):
+        sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
+        assert sid >= 0, f"missing site {name}"
+        return sid
+
+    for side in "LR":
+        # Routing, in order: out at the bone, in over the guide on every bone
+        # inboard of it, down to the crank pin.
+        for bone, guides in (("humerus", ()), ("ulna", ("guide_humerus",)),
+                             ("manus", ("guide_ulna", "guide_humerus"))):
+            tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, f"{side}_cable_{bone}")
+            assert tid >= 0, f"missing cable {side}_cable_{bone}"
+            adr = model.tendon_adr[tid]
+            path = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_SITE, model.wrap_objid[adr + k])
+                    for k in range(model.tendon_num[tid])]
+            assert path[:-1] == [f"{side}_cable_{bone}"] + [f"{side}_cable_{g}" for g in guides]
+            assert path[-1].endswith("_cable_pin")
+            # Every segment but the last drop to the motor stays on the bones.
+            pts = [data.site_xpos[site(n)] for n in path]
+            for k in range(len(pts) - 2):
+                span = float(np.linalg.norm(pts[k + 1] - pts[k]))
+                assert span < 0.07, (
+                    f"{side}_cable_{bone} spans {span * 1000:.0f} mm of open air")
+
+    jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "L_elbow")
+    adr = model.jnt_qposadr[jid]
+
+    def cable_lengths(theta):
+        mujoco.mj_resetData(model, data)
+        data.qpos[adr] = theta
+        mujoco.mj_forward(model, data)
+        return {n: data.ten_length[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, n)]
+                for n in ("L_cable_ulna", "L_cable_manus")}
+
+    lo, hi = cable_lengths(-0.01), cable_lengths(0.01)
+    for name in lo:
+        arm = (hi[name] - lo[name]) / 0.02
+        assert arm > 0.002, f"{name} has no flexing moment arm at the elbow ({arm * 1000:.1f} mm/rad)"
+
+
 def test_elbow_is_exactly_one_dof(tmp_path):
     """The elbow is the one plain hinge left in the wing, and it stays 1 DOF."""
     scene = tmp_path / "elbow.xml"
@@ -329,9 +556,17 @@ def test_feathers_clear_the_rig_and_each_other(tmp_path):
     assert worst_cross > 0.0, f"the wings' feathers pass through each other ({worst_cross * 1000:.1f} mm)"
 
     # Shingled, not coplanar: no two vanes anywhere on the wing may share an
-    # offset along the wing normal, or they z-fight wherever they overlap.
-    ys = {round(float(model.geom_pos[gid(n)][1]), 7) for n in vanes["L"]}
-    assert len(ys) == len(vanes["L"]), f"vanes are coplanar ({len(ys)} planes for {len(vanes['L'])})"
+    # offset along the wing normal, or they z-fight wherever they overlap. A vane
+    # is a chain of links, and every link of one vane sits in that vane's plane —
+    # so this is one plane per feather, not one per geom.
+    planes = {}
+    for n in vanes["L"]:
+        vane = re.match(r"^(.+_(?:tertial|secondary|primary)_\d{2})", n).group(1)
+        planes.setdefault(vane, set()).add(round(float(model.geom_pos[gid(n)][1]), 7))
+    for vane, offsets in planes.items():
+        assert len(offsets) == 1, f"{vane}'s own links are not coplanar"
+    ys = {next(iter(o)) for o in planes.values()}
+    assert len(ys) == len(planes), f"vanes are coplanar ({len(ys)} planes for {len(planes)})"
     # ...but the whole fan stays thin: this is a wing, not a venetian blind.
     assert max(ys) - min(ys) < 0.012
 
@@ -361,6 +596,36 @@ def test_malformed_bones_section_is_rejected(tmp_path, pattern, replacement):
     tg.write_text(text)
     with pytest.raises(ValueError):
         load_morphology(tg)
+
+
+def test_the_two_wings_stay_in_phase(tmp_path):
+    """Both shoulders must beat together for the whole run, not just at t=0.
+
+    crank_sync matches the L/R cranks once at startup and nothing held them
+    there: each side integrates its own velocity command against its own tendon
+    load, so the phase walked off ~0.014 deg/beat — open-loop, so it only grows,
+    and the wings are plainly out of phase after a few thousand cycles. The right
+    crank mirrors the left, so q_L_t1 + q_R_t1 is the invariant that exposes it.
+    """
+    scene = tmp_path / "phase.xml"
+    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
+    compile_tg(EAGLE_TG, scene)
+    morph = load_morphology(EAGLE_TG)
+    control = load_control_for_morphology(EAGLE_TG)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    data = mujoco.MjData(model)
+    sync_crank_disks_at_rest(model, data, lag_rad=morph.motors.crank_phase_lag_rad)
+    cranks = CrankDrive(model, morph, control)
+
+    cycles = 25
+    for _ in range(round(cycles * control.period / model.opt.timestep)):
+        data.ctrl[:] = 0.0
+        cranks.apply(data)
+        mujoco.mj_step(model, data)
+        check_stable(model, data, "phase run")
+    drift = math.degrees(cranks.phase_error(data))
+    # Unlocked this window measures +0.33 deg and keeps going; locked, +0.03.
+    assert abs(drift) < 0.15, f"wings drifted {drift:+.3f} deg apart over {cycles} cycles"
 
 
 def test_crank_lag_holds_over_a_long_run(tmp_path):

@@ -152,6 +152,57 @@ wing on M.midpoint:
         tendon_width = 0.4 mm
         arc_rod     = { radius: 1.3 mm, mass: 2.0 g }
         rung_rod    = { radius: 0.9 mm, mass: 1.0 g }
+    feathers:
+        # Each vane is a short chain of sprung links rather than a geom welded to
+        # the bone, so the shaft CURVES under load the way a feather does. Rest
+        # angle is the welded pose; the springs are the elastic lining a real
+        # feather is rooted in, and the axis is the one a feather gives on — out
+        # of the wing plane, not sweeping in it.
+        #
+        # `segments` is what makes the fan move feather by feather. One link is a
+        # gate hinged at the quill: the tip only moves if the root angle is large,
+        # and since every vane in a fan sees the same acceleration they all swing
+        # together. Softening a gate does not fix that -- it only makes a floppier
+        # gate. Measured on the primaries, adjacent |difference| and the spread
+        # across the fan at one instant:
+        #
+        #   1 seg  k=3e-4   tip 22 deg   adjacent 0.34   spread  2.4
+        #   1 seg  k=8e-5   tip 58       adjacent 1.40   spread  9.4   (on the stops)
+        #   1 seg  k=2e-5   tip 86       adjacent 1.92   spread 13.0   (on the stops)
+        #   3 seg  k=1e-4   tip 47       adjacent 1.96   spread  9.6
+        #   3 seg  k=7e-5   tip 72       adjacent 3.52   spread 20.7
+        #   3 seg  k=5e-5   tip 103      adjacent 8.00   spread 41.1   (on the stops)
+        #
+        # A gate saturates near 2 deg of neighbour-to-neighbour difference however
+        # soft it gets. A chain has bending modes of its own, and adjacent vanes
+        # differ enough in length to run them at different phases, so the fan
+        # ripples instead of swinging as a slab.
+        segments  = 3
+        # The WHOLE vane's bending stiffness, not one joint's: a uniform beam of
+        # stiffness EI cut into N links wants N*EI/L at each node, and that is
+        # what the emitter hands out. So `segments` refines the shape without
+        # changing how floppy the feather is.
+        #
+        # 7e-5 puts the outer primary's tip through 72 deg over a cycle with each
+        # joint at ~44, and holds ~21 deg of spread across the eight primaries --
+        # visibly individual, still a wing. Past ~6e-5 the vanes rake through each
+        # other (they do not collide, so nothing stops them) and the hand reads as
+        # a feather duster.
+        stiffness = 7.0e-5
+        # Damping ratio, applied per joint as 2*zeta*sqrt(k*I) against that link's
+        # own inertia. Underdamped: a feather springs back, it does not creep back.
+        zeta      = 0.35
+        # Armature as a FRACTION of the link's own inertia. It has to be a
+        # fraction: a link's inertia falls as 1/segments^3, so any absolute number
+        # stops meaning anything the moment the segment count moves. The
+        # shoulder-joint class default is absolute, 0.005, and orders above a
+        # link's inertia -- the emitter overrides it, and the frictionloss, or the
+        # vane is welded solid with the DOFs still there to pay for.
+        armature  = 0.05
+        # Per joint, so the vane's whole travel is three times this. A backstop,
+        # not a working range: peak demand is 44 deg. Stops on a milligram link
+        # are worth never reaching.
+        range     = [-50, 50] deg
     cables:
         # The wing as a tensegrity: one cable per bone, each running in to a pin
         # on a crank disk rather than to another bone. The pin is off the disk's
@@ -160,6 +211,15 @@ wing on M.midpoint:
         ulna_frac    = 0.50
         manus_frac   = 0.45
         offset       = 0 mm
+        # Retinacula. Every cable rides in over a post at the distal end of each
+        # bone inboard of its own — the hand's runs wrist, forearm, humerus, body
+        # — instead of hanging straight across open air to the disk. Signed along
+        # the chord (+x = trailing edge, so -x is cranial), and opposite because
+        # the elbow and the wrist counter-rotate: this is the avian Z-fold. At 0
+        # the cable passes through the joint centre, where it has no moment arm
+        # and stops folding that joint at all.
+        humerus_guide = -6 mm
+        ulna_guide    = 6 mm
         disks        = [t1, t4, t4]
         pin_radius   = 12 mm
         pin_phase    = 180 deg

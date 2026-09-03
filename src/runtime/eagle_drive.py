@@ -58,6 +58,18 @@ class CrankDrive:
     motion, so the drift shows up in that sum and nowhere else. Trimming the t4
     command to hold the sum at its startup value holds the lag with no effect on
     the stroke itself.
+
+    The two shoulders drift apart the same way and for the same reason. ``crank_sync``
+    matches them once at t=0 and its docstring claims they then "begin together",
+    but nothing holds them there: each side integrates its own velocity command
+    against its own tendon load, and the L/R phase walks off at ~0.014 deg per
+    beat — slow, but open-loop, so it only ever grows, and the wings are visibly
+    out of phase after a few thousand cycles. The R crank mirrors L, so it
+    counter-rotates and q_L_t1 + q_R_t1 is the invariant; the same trim on the
+    right t1 holds it. Everything distal is slaved to the L crank
+    (``EagleWingDrive`` reads ``PHASE_JOINT``), so this also keeps the right
+    wing's fold and feathering on its own stroke rather than on a stale copy of
+    the left's.
     """
 
     #: Trim gain (1/s). Loose enough not to fight the tendon load within a beat,
@@ -89,6 +101,19 @@ class CrankDrive:
         if not self._pairs:
             raise ValueError("no crank disks — is this a compiled shoulder scene?")
         self._target: list[float] | None = None
+        # Cross-shoulder lock, in the same terms: (L t1 qpos, R t1 actuator, R t1
+        # qpos, R t1 gear). One shoulder — a scene with a side missing — has no
+        # phase to hold.
+        self._lr: tuple[int, int, int, float] | None = None
+        if len(self._pairs) == 2:
+            (left_t1, _, _), (right_t1, _, _) = self._pairs
+            self._lr = (
+                left_t1[1],
+                right_t1[0],
+                right_t1[1],
+                float(model.actuator_gear[right_t1[0]][0]) or 1.0,
+            )
+        self._lr_target: float | None = None
 
     def command(self, t: float, t0: float = 0.0) -> float:
         return (
@@ -106,17 +131,32 @@ class CrankDrive:
             for (t1, t4, _), target in zip(self._pairs, self._target)
         )
 
+    def phase_error(self, data) -> float:
+        """How far the two shoulders have walked apart since startup (rad)."""
+        if self._lr is None or self._lr_target is None:
+            return 0.0
+        left_q, _, right_q, _ = self._lr
+        return float(data.qpos[left_q] + data.qpos[right_q]) - self._lr_target
+
     def apply(self, data, t0: float = 0.0) -> None:
         cmd = self.command(data.time, t0)
         if self._target is None:
             self._target = [
                 float(data.qpos[t1[1]] + data.qpos[t4[1]]) for t1, t4, _ in self._pairs
             ]
+            if self._lr is not None:
+                self._lr_target = float(data.qpos[self._lr[0]] + data.qpos[self._lr[2]])
         for (t1, t4, gear), target in zip(self._pairs, self._target):
             data.ctrl[t1[0]] = cmd
             error = float(data.qpos[t1[1]] + data.qpos[t4[1]]) - target
             # q_dot = gear * ctrl, so d(sum)/dt = gear_t4 * trim.
             data.ctrl[t4[0]] = cmd - self.GAIN * error / gear
+        if self._lr is not None:
+            # Trim the right t1 the same way, against the L/R sum. The right t4's
+            # own loop then follows it, so the shoulder stays internally phased
+            # while it is pulled back level with the left.
+            _, right_aid, _, right_gear = self._lr
+            data.ctrl[right_aid] -= self.GAIN * self.phase_error(data) / right_gear
 
 
 def crank_period(control: FourierControl) -> float:

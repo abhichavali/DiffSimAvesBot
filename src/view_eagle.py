@@ -25,12 +25,13 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import mujoco
+import numpy as np
 
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
-from runtime.eagle_drive import CrankDrive, calibrated_drive, check_stable
+from runtime.eagle_drive import CrankDrive, calibrated_drive, check_stable, wing_plane_roll
 from runtime.wing_cables import CABLE_TAGS, apply_tension, cable_names, release_fold_servos
 from runtime.viewer_runtime import RealtimeSync
 
@@ -75,6 +76,21 @@ def elbow_targets(model, fraction: float) -> dict[int, float]:
     return out
 
 
+def elbow_sweep(model, seconds: float):
+    """Elbow commands that fold and unfold once every ``seconds``.
+
+    A raised cosine, so it leaves and returns to the extended stop with zero
+    velocity — a linear ramp would step the servo at each turnaround and ring the
+    tensegrity, which is the one thing you cannot tell apart from a real fold.
+    Returns a function of sim time, which is what makes it a schedule rather than
+    the held pose ``elbow_targets`` gives.
+    """
+    def targets(t: float) -> dict[int, float]:
+        return elbow_targets(model, 0.5 - 0.5 * math.cos(2.0 * math.pi * t / seconds))
+
+    return targets
+
+
 def settle_elbow(model, data, targets, control, cycles: float = 2.0) -> None:
     """Step the wing to rest at a held elbow angle, with the shoulder quiet.
 
@@ -88,6 +104,85 @@ def settle_elbow(model, data, targets, control, cycles: float = 2.0) -> None:
             data.ctrl[aid] = target
         mujoco.mj_step(model, data)
         check_stable(model, data, "elbow settle")
+
+
+def park_cranks(model, data, park_rad: float) -> None:
+    """Turn every crank ``park_rad`` off its synced angle, keeping the mirror.
+
+    The two cranks on a shoulder counter-rotate and the right shoulder mirrors the
+    left, so the same advance in the world is the opposite step in qpos on three
+    of the four disks — the same rule ``crank_sync.apply_crank_phase_lag`` follows
+    for the t4 lag. Get it wrong and the wings park in different postures.
+    """
+    for side in ("L", "R"):
+        for station in ("t1", "t4"):
+            jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_{station}_disk_hinge")
+            if jid < 0:
+                continue
+            sign = 1.0 if (side == "L") == (station == "t1") else -1.0
+            data.qpos[model.jnt_qposadr[jid]] += sign * park_rad
+    mujoco.mj_forward(model, data)
+
+
+def glide_pose(model, data, control, park_rad: float, cycles: float = 1.2):
+    """Park the motors and hold the wing out flat — the glide posture.
+
+    Nothing about this is the rest pose. The mount stands the wing on edge by
+    89 deg so it paddles the stroke, and the tensegrity shoulder presents the span
+    at whatever elevation the parked crank angle puts it. So two things are set
+    here: the crank park, which trades span elevation against sweep, and the twist
+    servo, which takes the mount's roll back out until the wing plane is level.
+
+    How much twist is measured, not baked. On a left wing the plane's roll IS the
+    twist joint's angle, so one correction lands it and the second confirms — and
+    the correction has to be clipped, because the servo's 70 deg cannot always
+    cover the mount's 89. Both wings take the same command: the right hinge axis
+    is mirrored and its bank is the negative of the left's, and the two signs
+    cancel (the same rule ``EagleWingDrive`` follows).
+
+    Returns a schedule rather than a dict, which is what tells the viewer to keep
+    stepping: the pose is static but the feathers hanging off it are not.
+    """
+    park_cranks(model, data, park_rad)
+    targets = elbow_targets(model, 0.0)  # 0 = the extended stop: a glide is spread
+    twist = {}
+    for side in ("L", "R"):
+        aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{side}_humerus_twist_servo")
+        if aid >= 0:
+            twist[aid] = 0.0
+
+    def settle():
+        for _ in range(round(cycles * control.period / model.opt.timestep)):
+            data.ctrl[:] = 0.0
+            for aid, target in {**targets, **twist}.items():
+                data.ctrl[aid] = target
+            mujoco.mj_step(model, data)
+            check_stable(model, data, "glide settle")
+
+    def plane_roll() -> float:
+        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_humerus")
+        return wing_plane_roll(np.asarray(data.xmat[bid]).reshape(3, 3), "L")
+
+    settle()
+    for _ in range(2):
+        error = plane_roll()
+        for aid in twist:
+            lo, hi = (float(v) for v in model.actuator_ctrlrange[aid])
+            twist[aid] = float(np.clip(twist[aid] - error, lo, hi))
+        settle()
+
+    bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "L_humerus")
+    span = np.asarray(data.xmat[bid]).reshape(3, 3)[:, 2]
+    print(
+        f"glide: cranks parked at {math.degrees(park_rad):.0f} deg; span "
+        f"{math.degrees(math.asin(float(np.clip(span[2], -1, 1)))):+.1f} deg above level, "
+        f"swept {math.degrees(math.atan2(span[0], span[1])):+.1f} deg; wing plane "
+        f"{math.degrees(plane_roll()):+.1f} deg off flat "
+        f"(0 = flat, 90 = on edge)",
+        flush=True,
+    )
+    held = {**targets, **twist}
+    return lambda _t: held
 
 
 def build(args):
@@ -112,16 +207,31 @@ def build(args):
               f"(0 = extended {math.degrees(hi):.0f}, 1 = flexed {math.degrees(lo):.0f})",
               flush=True)
 
-    if args.paused:
-        # Nothing is driven and nothing is stepped, so skip the calibration
-        # rollouts too — they exist to schedule motion there is none of. This is
-        # the compiled design exactly as the .tg describes it.
+    if args.elbow_sweep is not None:
+        if not elbow_targets(model, 0.0):
+            raise SystemExit(f"{args.tg} has no elbow servo to sweep")
+        held = elbow_sweep(model, args.elbow_sweep)
+    if args.glide:
+        held = glide_pose(model, data, control, math.radians(args.glide_park))
+    if args.paused or args.elbow_sweep is not None or args.glide:
+        # The shoulder is not driven, so skip the calibration rollouts too — they
+        # exist to schedule a stroke there is none of. A sweep still steps: it is
+        # the elbow servo alone against the tensegrity, nothing else.
         mujoco.mj_forward(model, data)
-        print(
-            f"paused at the compiled rest pose; wing half-span "
-            f"{morph.wing.bones.span * 1000:.0f} mm",
-            flush=True,
-        )
+        span = morph.wing.bones.span * 1000
+        if args.glide:
+            pass  # glide_pose has already said where the wing ended up
+        elif args.elbow_sweep is not None:
+            print(
+                f"shoulder quiet; elbow folding and unfolding every "
+                f"{args.elbow_sweep:g} s; wing half-span {span:.0f} mm",
+                flush=True,
+            )
+        else:
+            # --elbow already stepped the wing to a held pose, so this is only the
+            # compiled rest pose when the elbow was left alone.
+            where = "the elbow's settled pose" if held else "the compiled rest pose"
+            print(f"paused at {where}; wing half-span {span:.0f} mm", flush=True)
         return model, data, None, control, None, held
     cranks = CrankDrive(model, morph, control)
     extra = {} if args.attack is None else {"attack": math.radians(args.attack)}
@@ -149,19 +259,22 @@ def build(args):
 
 
 def step(model, data, cranks, drive, held=None) -> None:
-    """Command one physics step. ``cranks is None`` means paused — do nothing."""
-    if cranks is None:
-        return
+    """Command one physics step.
+
+    ``cranks is None`` means the crank drive is off. Fully paused, nobody calls
+    this at all; under --elbow-sweep the elbow servo is the only thing driven.
+    """
     # check_stable here too, not just on the recording path: MuJoCo auto-resets a
     # diverged model and rewinds the clock, so without it an interactive session
     # on a marginal timestep silently restarts instead of saying anything.
     check_stable(model, data, "viewer")
     data.ctrl[:] = 0.0
-    cranks.apply(data)
-    drive.apply(data)
-    # --elbow overrides the fold schedule: the point is to watch the one hinge,
-    # not to watch the stroke move it.
-    for aid, target in (held or {}).items():
+    if cranks is not None:
+        cranks.apply(data)
+        drive.apply(data)
+    # --elbow and --elbow-sweep both override the fold schedule: the point is to
+    # watch the one hinge, not to watch the stroke move it.
+    for aid, target in (held(data.time) if callable(held) else held or {}).items():
         data.ctrl[aid] = target
 
 
@@ -174,18 +287,20 @@ def record_gif(args, model, data, cranks, control, drive, held=None) -> None:
     opt = mujoco.MjvOption()
     opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = True
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
-    if cranks is None:  # paused: one still frame, no settling and no stepping
+    if cranks is None and not callable(held):  # paused: one still frame, no stepping
         renderer.update_scene(data, camera=cam, scene_option=opt)
         args.gif.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(renderer.render()).save(args.gif)
         print(f"wrote {args.gif} (1 still frame, {args.width}x{args.height})")
         return
-    period = 1.0 / control.fundamental_frequency_hz
+    # A sweep sets its own period, and there is no stroke to settle into first.
+    sweeping = args.elbow_sweep is not None or args.glide
+    period = args.elbow_sweep if args.elbow_sweep is not None else 1.0 / control.fundamental_frequency_hz
     frames, taken = [], 0
-    total = int(args.gif_cycles * args.fps / control.fundamental_frequency_hz)
+    total = int(args.gif_cycles * args.fps * period)
     # Step-counted, not clock-counted: MuJoCo rewinds data.time when it resets a
     # diverged model, and a clock-driven loop then never finishes.
-    start_step = round(args.settle * period / model.opt.timestep)
+    start_step = 0 if sweeping else round(args.settle * period / model.opt.timestep)
     every = max(1, round(1.0 / (args.fps * model.opt.timestep)))
     stepped = 0
     while taken < total:
@@ -193,6 +308,9 @@ def record_gif(args, model, data, cranks, control, drive, held=None) -> None:
         mujoco.mj_step(model, data)
         stepped += 1
         if stepped >= start_step and (stepped - start_step) % every == 0:
+            # An orbit is what turns a held pose into a clip: nothing on the bird
+            # is moving much, so the camera has to be the thing that does.
+            cam.azimuth = args.azimuth + args.orbit * taken / max(total - 1, 1)
             renderer.update_scene(data, camera=cam, scene_option=opt)
             frames.append(Image.fromarray(renderer.render()))
             taken += 1
@@ -226,6 +344,14 @@ def main() -> None:
     p.add_argument("--elbow", type=float, default=None, metavar="FRAC",
                    help="Hold the elbow at FRAC of its range and show it: 0 extended, "
                         "1 fully contracted. Overrides the fold schedule")
+    p.add_argument("--elbow-sweep", type=float, default=None, metavar="SECONDS",
+                   help="Fold and unfold the elbow once every SECONDS, shoulder quiet")
+    p.add_argument("--glide", action="store_true",
+                   help="Motors parked, wings spread and held flat: the glide posture")
+    p.add_argument("--glide-park", type=float, default=20.0, metavar="DEG",
+                   help="Crank angle the glide parks at; trades span elevation against sweep")
+    p.add_argument("--orbit", type=float, default=0.0, metavar="DEG",
+                   help="Spin the camera this far over a --gif clip")
     p.add_argument("--paused", action="store_true",
                    help="Freeze at the compiled rest pose: nothing driven, no physics stepped")
     p.add_argument("--gif", type=Path, default=None, help="Record to this GIF instead of viewing")
@@ -239,6 +365,10 @@ def main() -> None:
     p.add_argument("--distance", type=float, default=0.8)
     p.add_argument("--lookat", default="0.03,0,0.24")
     args = p.parse_args()
+    if args.elbow_sweep is not None and args.elbow_sweep <= 0:
+        raise SystemExit("--elbow-sweep needs a positive period in seconds")
+    if args.glide and (args.paused or args.elbow_sweep is not None):
+        raise SystemExit("--glide holds one pose; drop --paused / --elbow-sweep")
 
     model, data, cranks, control, drive, held = build(args)
     if args.gif is not None:
@@ -251,7 +381,7 @@ def main() -> None:
         sync = RealtimeSync(data, realtime_factor=args.speed)
         next_log = time.time() + 2.0
         while viewer.is_running():
-            if cranks is None:
+            if cranks is None and not callable(held):
                 viewer.sync()
                 time.sleep(1.0 / 60.0)
                 continue

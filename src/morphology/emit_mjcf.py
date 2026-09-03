@@ -401,11 +401,79 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph, compiled: 
 #: Spacing between successive feather vanes along the wing normal (m).
 _SHINGLE = 0.0005
 
+
+def _emit_vane(bone, name: str, root_z: float, rake: float, length: float,
+               lift: float, width: float, mass: float, rgba: str, f) -> None:
+    """Emit one vane as a chain of sprung links, so the shaft curves under load.
+
+    Every hinge turns about its link's local x, perpendicular to both the shaft
+    (local z) and the wing normal (local y, which the rake rotation leaves alone),
+    so the vane bends out of the wing plane rather than sweeping in it.
+
+    ``f.stiffness`` is the whole vane's, so each of the N nodes gets N times it —
+    the discretisation of a uniform beam. Damping and armature are derived from
+    each link's own inertia rather than given absolutely, because that inertia
+    falls as 1/N^3 and a fixed number stops meaning anything the moment the
+    segment count moves.
+
+    Both class defaults must be overridden here, not inherited: the bones sit
+    under ``childclass="shoulder-joint"``, whose frictionloss of 0.1 N m is ~1e5
+    times anything a milligram vane exerts and whose armature of 0.005 is orders
+    over a link's inertia. Either one alone welds the feather solid.
+    """
+    n = f.segments
+    seg, seg_mass = length / n, mass / n
+    stiffness = n * f.stiffness
+    # A thin box about the end of its own long axis. The width and thickness
+    # terms are ~1e-3 of this on any vane here, so they are left out.
+    link_inertia = seg_mass * seg * seg / 3.0
+    armature = f.armature * link_inertia
+    damping = 2.0 * f.zeta * math.sqrt(stiffness * (link_inertia + armature))
+
+    parent, pos, euler = bone, f"0 0 {root_z}", f"0 {rake} 0"
+    for j in range(n):
+        attrs = {"pos": pos} if euler is None else {"pos": pos, "euler": euler}
+        link = ET.SubElement(parent, "body", name=f"{name}_{j + 1:02d}_quill", **attrs)
+        ET.SubElement(
+            link,
+            "joint",
+            name=f"{name}_{j + 1:02d}_bend",
+            type="hinge",
+            axis="1 0 0",
+            limited="true",
+            range=_vec2(f.range_rad),
+            stiffness=str(stiffness),
+            damping=str(damping),
+            armature=str(armature),
+            frictionloss="0",
+        )
+        ET.SubElement(
+            link,
+            "geom",
+            name=f"{name}_{j + 1:02d}",
+            type="box",
+            pos=f"0 {lift} {0.5 * seg}",
+            size=f"{0.5 * width} 0.0004 {0.5 * seg}",
+            mass=str(seg_mass),
+            rgba=rgba,
+            contype="0",
+            conaffinity="0",
+            group="2",
+        )
+        parent, pos, euler = link, f"0 0 {seg}", None
+
 def _emit_cable_anchors(prefix, b, humerus, ulna) -> None:
-    """One cable anchor on the humerus and one on the ulna.
+    """One cable anchor on the humerus and one on the ulna, plus the two guides.
 
     The manus anchor is emitted with the hand, since the hand is a free body and
     does not exist yet at this point in the tree.
+
+    The guides are the posts the cables ride over on their way in: one at the
+    distal end of the humerus (the elbow) and one at the distal end of the ulna
+    (the wrist), each standing off the bone axis. That stand-off is the whole
+    point of them — routed through the joint centre a cable has no moment arm
+    there and cannot fold that joint -- so it is a bird's retinaculum, not a
+    decoration.
     """
     c = b.cables
     for body, name, length, frac in (
@@ -413,6 +481,24 @@ def _emit_cable_anchors(prefix, b, humerus, ulna) -> None:
         (ulna, "ulna", b.ulna, c.ulna_frac),
     ):
         _cable_anchor_site(body, prefix, name, c.offset, frac * length)
+    for body, name, span, offset in (
+        (humerus, "guide_humerus", b.humerus, c.humerus_guide),
+        (ulna, "guide_ulna", b.ulna, c.ulna_guide),
+    ):
+        _cable_anchor_site(body, prefix, name, offset, span)
+        ET.SubElement(
+            body,
+            "geom",
+            name=f"{prefix}_cable_{name}_post",
+            type="capsule",
+            fromto=f"0 0 {span} {offset} 0 {span}",
+            size="0.0011",
+            mass="0",
+            rgba="0.15 0.85 0.4 1",
+            contype="0",
+            conaffinity="0",
+            group="2",
+        )
 
 
 def _cable_anchor_site(body, prefix, name, offset, span) -> None:
@@ -556,20 +642,28 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph,
             # Rotating +z about +y by `rake` gives (sin, 0, cos): out along the
             # span and aft. The vane's long axis is its own local z.
             d = (math.sin(rake), 0.0, math.cos(rake))
-            ET.SubElement(
-                body,
-                "geom",
-                name=f"{prefix}_{tag}_{i + 1:02d}",
-                type="box",
-                pos=f"{0.5 * length * d[0]} {lift} {root_z + 0.5 * length * d[2]}",
-                euler=f"0 {rake} 0",
-                size=f"{0.5 * width} 0.0004 {0.5 * length}",
-                mass=str(0.02 * b.mass),
-                rgba=rgba,
-                contype="0",
-                conaffinity="0",
-                group="2",
-            )
+            name = f"{prefix}_{tag}_{i + 1:02d}"
+            if b.feathers is not None:
+                # Each link is a body turned so its own +z runs out along the
+                # shaft, which leaves `lift` as the geom's only offset — still
+                # the shingle, and still one plane per feather.
+                _emit_vane(body, name, root_z, rake, length, lift, width,
+                           0.02 * b.mass, rgba, b.feathers)
+            else:
+                ET.SubElement(
+                    body,
+                    "geom",
+                    name=name,
+                    type="box",
+                    pos=f"{0.5 * length * d[0]} {lift} {root_z + 0.5 * length * d[2]}",
+                    euler=f"0 {rake} 0",
+                    size=f"{0.5 * width} 0.0004 {0.5 * length}",
+                    mass=str(0.02 * b.mass),
+                    rgba=rgba,
+                    contype="0",
+                    conaffinity="0",
+                    group="2",
+                )
             tip = (length * d[0], lift, root_z + length * d[2])
         return tip
 
@@ -792,9 +886,17 @@ def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], m
         # The wing cables get their own pin, clear of the motor tendon's. Off the
         # hinge axis on purpose: at radius zero the cable length stops depending on
         # crank angle and the motor stops driving the wing's shape at all.
+        #
+        # Mirrored exactly as the motor tendon's rim is (compile.py, where the R
+        # disks are built): the R disk body is tilted -tilt where L is +tilt, so a
+        # y-mirror of a disk-local point flips its y and leaves x alone. Giving
+        # both sides the same local pin puts the R one on the wrong side of its
+        # disk — 19 mm off its mirror position, which leaves the right cables
+        # 17 mm short and flaps the right wing out of phase with the left.
+        y_mirror = -1.0 if disk_name.startswith("R_") else 1.0
         pin = np.array([
             cables.pin_radius * math.cos(cables.pin_phase),
-            cables.pin_radius * math.sin(cables.pin_phase),
+            y_mirror * cables.pin_radius * math.sin(cables.pin_phase),
             0.0,
         ])
         ET.SubElement(
@@ -837,6 +939,16 @@ def _add_wing_cables(tendon_el, prefix: str, morph) -> None:
     """
     c = morph.wing.bones.cables
     bones = (("humerus", c.disks[0]), ("ulna", c.disks[1]), ("manus", c.disks[2]))
+    # Each cable rides in over the guide at the distal end of every bone inboard
+    # of its own before it drops to the disk. Straight from the hand to the body
+    # a cable hangs across open air and hauls the hand off the wrist cage; over
+    # the forearm and the humerus it stays on the skeleton, and it gains a moment
+    # arm at every joint it crosses instead of only at the shoulder.
+    via = {
+        "humerus": (),
+        "ulna": ("guide_humerus",),
+        "manus": ("guide_ulna", "guide_humerus"),
+    }
     for bone, station in bones:
         spatial = ET.SubElement(
             tendon_el,
@@ -849,6 +961,8 @@ def _add_wing_cables(tendon_el, prefix: str, morph) -> None:
             springlength="0 1e9",
         )
         ET.SubElement(spatial, "site", site=f"{prefix}_cable_{bone}")
+        for guide in via[bone]:
+            ET.SubElement(spatial, "site", site=f"{prefix}_cable_{guide}")
         ET.SubElement(spatial, "site", site=f"{prefix}_{station}_cable_pin")
 
 

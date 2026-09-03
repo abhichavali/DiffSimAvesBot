@@ -36,6 +36,7 @@ from morphology.model import (
     Wing,
     WingAero,
     WingBones,
+    FeatherVanes,
     WingCables,
     WristTensegrity,
     WingPitch,
@@ -231,6 +232,8 @@ class _TgParser:
         self.wing_wrist_declared = False
         self.wing_cables: Dict[str, Any] = {}
         self.wing_cables_declared = False
+        self.wing_feathers: Dict[str, Any] = {}
+        self.wing_feathers_declared = False
 
     def parse(self) -> Morphology:
         i = 0
@@ -483,6 +486,10 @@ class _TgParser:
                 section = "cables"
                 self.wing_cables_declared = True
                 continue
+            if line == "feathers:":
+                section = "feathers"
+                self.wing_feathers_declared = True
+                continue
             if " = " in line:
                 key, val = line.split("=", 1)
                 key = key.strip()
@@ -497,6 +504,8 @@ class _TgParser:
                     bucket = self.wing_wrist
                 elif section == "cables":
                     bucket = self.wing_cables
+                elif section == "feathers":
+                    bucket = self.wing_feathers
                 parsed = _parse_scalar(val.strip())
                 # _parse_scalar keeps angle literals numeric; convert deg->rad here.
                 if (
@@ -509,7 +518,8 @@ class _TgParser:
                     section == "wrist"
                     and key != "stations"  # stations stay in degrees, like archetype's
                     and re.search(r"\bdeg\b", val, re.I)
-                ) or (section == "bones" and re.search(r"\bdeg\b", val, re.I)):
+                ) or (section in ("bones", "cables", "feathers")
+                      and re.search(r"\bdeg\b", val, re.I)):
                     parsed = (
                         tuple(math.radians(float(v)) for v in parsed)
                         if isinstance(parsed, tuple)
@@ -718,6 +728,35 @@ class _TgParser:
             armature=float(b.get("armature", d.armature)),
             wrist=self._build_wrist(),
             cables=self._build_cables(),
+            feathers=self._build_feathers(),
+        )
+
+    def _build_feathers(self) -> Optional[FeatherVanes]:
+        f = self.wing_feathers
+        if not f:
+            if self.wing_feathers_declared:
+                raise ValueError("wing feathers: section is empty — remove it, or give it keys")
+            return None
+        d = FeatherVanes()
+        known = {"segments", "stiffness", "zeta", "armature", "range"}
+        unknown = sorted(set(f) - known)
+        if unknown:
+            raise ValueError(
+                f"unknown wing feathers key(s) {', '.join(unknown)}; expected one of "
+                + ", ".join(sorted(known))
+            )
+        rng = f.get("range", d.range_rad)
+        if not isinstance(rng, (tuple, list)) or len(rng) != 2:
+            raise ValueError(f"wing feathers range must be two angles, got {rng!r}")
+        segments = int(f.get("segments", d.segments))
+        if segments < 1:
+            raise ValueError(f"wing feathers segments must be at least 1, got {segments}")
+        return FeatherVanes(
+            segments=segments,
+            stiffness=float(f.get("stiffness", d.stiffness)),
+            zeta=float(f.get("zeta", d.zeta)),
+            armature=float(f.get("armature", d.armature)),
+            range_rad=(float(rng[0]), float(rng[1])),
         )
 
     def _build_cables(self) -> Optional[WingCables]:
@@ -728,6 +767,7 @@ class _TgParser:
             return None
         d = WingCables()
         known = {"humerus_frac", "ulna_frac", "manus_frac", "offset", "disks",
+                 "humerus_guide", "ulna_guide",
                  "pin_radius", "pin_phase", "stiffness", "damping", "width",
                  "extend", "contract"}
         unknown = sorted(set(c) - known)
@@ -752,6 +792,8 @@ class _TgParser:
             ulna_frac=float(c.get("ulna_frac", d.ulna_frac)),
             manus_frac=float(c.get("manus_frac", d.manus_frac)),
             offset=float(c.get("offset", d.offset)),
+            humerus_guide=float(c.get("humerus_guide", d.humerus_guide)),
+            ulna_guide=float(c.get("ulna_guide", d.ulna_guide)),
             disks=disks,
             pin_radius=float(c.get("pin_radius", d.pin_radius)),
             pin_phase=float(c.get("pin_phase", d.pin_phase)),

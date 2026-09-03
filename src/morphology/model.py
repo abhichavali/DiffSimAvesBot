@@ -243,8 +243,17 @@ class WingCables:
     One cable per bone: an anchor on the humerus, the ulna and the manus, each
     running in to a pin on a crank disk. The pin is off the disk's hinge axis, so
     the cable's length is a function of crank angle and the motors drive the
-    wing's shape directly, the same way they already drive the shoulder. Nothing
-    routes bone-to-bone; every cable ends on a motor.
+    wing's shape directly, the same way they already drive the shoulder. Every
+    cable ends on a motor.
+
+    Getting there, a cable rides the skeleton rather than hanging across open air:
+    it routes over a guide at the distal end of each bone inboard of its own, so
+    the hand's cable runs wrist -> forearm -> humerus -> body the way a bird's
+    flexor tendons do. ``humerus_guide`` and ``ulna_guide`` stand those guides off
+    the bone axis, signed along the chord (+x = trailing edge). That stand-off is
+    the cable's moment arm at the joint it crosses: at 0 the cable passes through
+    the joint centre and stops folding that joint at all. The two are opposite in
+    sign because the elbow and the wrist counter-rotate — the avian Z-fold.
 
     ``disks`` names which disk each of the three cables goes to, in bone order.
     ``pin_radius`` and ``pin_phase`` place the pin on that disk — radius zero puts
@@ -256,6 +265,8 @@ class WingCables:
     ulna_frac: float = 0.50
     manus_frac: float = 0.45
     offset: float = 0.0  # chordwise stand-off of the bone anchor (m)
+    humerus_guide: float = -0.006  # guide stand-off at the elbow (m, -x = cranial)
+    ulna_guide: float = 0.006  # guide stand-off at the wrist (m, +x = caudal)
     disks: Tuple[str, str, str] = ("t1", "t4", "t4")
     pin_radius: float = 0.012  # m from the disk hinge axis
     pin_phase: float = math.radians(180.0)
@@ -265,6 +276,47 @@ class WingCables:
     #: Rest-length fractions of each cable's compiled length, in bone order.
     extend: Tuple[float, float, float] = (1.0, 1.0, 1.0)
     contract: Tuple[float, float, float] = (0.92, 0.92, 0.92)
+
+
+@dataclass
+class FeatherVanes:
+    """Every vane on its own sprung root instead of welded to the bone.
+
+    A flight feather is rooted in skin, not bolted to the skeleton: it gives out
+    of the wing plane under load and springs back, and each one gives by its own
+    amount. So each vane becomes a body on a hinge at its own quill, with the
+    axis perpendicular to both the shaft and the wing normal — the direction a
+    feather actually bends. The spring is that elastic rooting; rest angle is the
+    welded pose, so a stiff enough spring reproduces the old rigid fan exactly.
+
+    One DOF per vane (36 across the two wings, against 32 for the whole rig
+    without them), so it is opt-in: leave the ``feathers:`` section out of the
+    .tg and the vanes are welded geoms as before.
+    """
+
+    #: Links the shaft is split into. 1 is a gate hinged at the quill: the tip
+    #: only moves if the root angle is large, and every vane in a fan swings the
+    #: same way because they all see the same acceleration. Past 1 the shaft
+    #: curves, and the chain has modes of its own, so neighbours ripple against
+    #: each other instead of moving as one slab.
+    segments: int = 3
+    #: The whole vane's bending stiffness (N m/rad), not one joint's — a uniform
+    #: beam of stiffness EI cut into N links wants N*EI/L at each node, which is
+    #: what the emitter hands out. So this number means the same thing at any
+    #: segment count, and `segments` refines the shape without changing how
+    #: floppy the feather is.
+    stiffness: float = 2.0e-5
+    #: Damping ratio per joint, applied as 2*zeta*sqrt(k*I) against that link's
+    #: own inertia. Underdamped: a feather springs back, it does not creep back.
+    zeta: float = 0.35
+    #: Armature as a fraction of the link's own inertia. Conditioning only — but
+    #: it has to be a fraction, because a link's inertia falls as 1/N^3 and any
+    #: absolute number would swamp it the moment `segments` changed. The
+    #: shoulder-joint class default of 0.005 is absolute and six orders up, which
+    #: is why the emitter overrides it explicitly.
+    armature: float = 0.05
+    #: Per joint, so the vane's total travel is `segments` times this.
+    range_rad: Tuple[float, float] = (math.radians(-25.0), math.radians(25.0))
 
 
 @dataclass
@@ -307,6 +359,8 @@ class WingBones:
     wrist: Optional[WristTensegrity] = None
     # None -> no wing cables. Set -> the wing is itself a tensegrity.
     cables: Optional[WingCables] = None
+    # None -> vanes are welded to the bone. Set -> each one is sprung at its quill.
+    feathers: Optional[FeatherVanes] = None
 
     @property
     def span(self) -> float:

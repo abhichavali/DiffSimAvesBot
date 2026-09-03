@@ -26,3 +26,5 @@ uv run pytest -q tests/test_eagle_wing.py
 
 The default design is `design/shoulder.tg`; it points at `design/control.tg` for
 the Fourier control signal. The default generated scene is `scene.xml`.
+
+- evaluate sensititiy in angular velocity profile to wing motion
