@@ -41,6 +41,7 @@ from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
+from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.viewer_runtime import RealtimeSync, get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 from runtime.wing_pitch_limit import WingPitchLimiter
@@ -113,7 +114,7 @@ def collision_obstacle(t, period, park, hit):
 
 # --------------------------------------------------------------------------- #
 def build_scene(args, meta):
-    tg = Path(meta["tg"])
+    tg = ROOT / meta["tg"]  # repo-relative (or absolute)
     scene = args.run / "hover_scene.xml"
     os.environ["MORPHOLOGY_PATH"] = str(tg)
     os.environ["MUJOCO_XML_PATH"] = str(scene)
@@ -133,7 +134,7 @@ def build_scene(args, meta):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--mode", choices=MODES, default="hover")
-    ap.add_argument("--run", type=Path, default=ROOT / "opt" / "runs_hover")
+    ap.add_argument("--run", type=Path, default=DEFAULT_HUMMER_TG.parent / "hover_policy")
     ap.add_argument("--policy", default="best", choices=["best", "final"])
     ap.add_argument("--speed", type=float, default=0.15, help="viewer realtime factor (0.15 = ~7x slow-mo)")
     ap.add_argument("--openloop", action="store_true", help="ignore the policy (K=0) for comparison")

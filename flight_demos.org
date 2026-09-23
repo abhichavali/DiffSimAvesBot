@@ -39,7 +39,7 @@ Key files:
 - ~src/flying.py~ -- post-compile XML surgery (~to_airframe~,
   ~shrink_pillar_visual~, ~enable_wing_collision~, ~add_mocap_obstacle~,
   ~add_visual_bird~).
-- ~opt/runs_hover/~ -- the saved controller (~policy_best.npz~) + ~hover_meta.json~.
+- ~designs/hummer/hover/hover_policy/~ -- the saved controller (~policy_best.npz~) + ~hover_meta.json~.
 
 * How the hover was built (the foundation)
 
@@ -142,7 +142,7 @@ What works is the *structured PD above, whose handful of gains were tuned by a
 sweep in the (differentiable) simulator*. The differentiable sim was used heavily
 to build and evaluate everything; gradient descent specifically was the one tool
 that did not pan out. (The controller was developed on a vast.ai RTX 5070 Ti,
-since destroyed; the result is saved locally in ~opt/runs_hover/~.)
+since destroyed; the result is committed in ~designs/hummer/hover/hover_policy/~.)
 
 * The shared build pipeline (all five modes)
 

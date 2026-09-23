@@ -1,0 +1,25 @@
+{
+  "tg": "designs/hummer/hover/shoulder.tg",
+  "dt_ms": 0.13,
+  "gravity": 5.27302954784013,
+  "aero_substep": 1,
+  "a0": 65.0,
+  "f_max": 0.4,
+  "tau_max": 0.25,
+  "qadr": 16,
+  "dofadr": 14,
+  "com0": [
+    0.0003162383218295872,
+    7.791623647790402e-05,
+    -0.17779281735420227
+  ],
+  "n_feat": 12,
+  "n_ctrl": 6,
+  "filter_alpha": 0.006701692819328309,
+  "pd_gains": {
+    "kp_pos": 6.0,
+    "kd_pos": 2.5,
+    "kp_att": 0.4,
+    "kd_att": 0.1
+  }
+}

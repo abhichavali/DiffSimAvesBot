@@ -25,3 +25,4 @@ _ea_genome.tg
 out/
 *.log
 .claude/settings.local.json
+hover_scene*.xml
