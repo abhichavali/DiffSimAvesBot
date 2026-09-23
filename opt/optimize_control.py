@@ -534,7 +534,7 @@ def build_rollout(mx_base, dx0_base, drive, pitch, aero, tip_ids, omega, K,
             conv_err = jnp.sqrt(jnp.mean((qcyc[-1] - qcyc[-2]) ** 2))
         else:
             conv_err = jnp.array(0.0)
-        # Waveform-shape metrics (opt/screen_targets.py ranked these). Cheap, so they
+        # Waveform-shape metrics (the Sep-10 objective screen ranked these). Cheap, so they
         # are always computed and APPENDED at indices 15..17 -- every positional index
         # the rest of the file uses stays put.
         tau_w = jnp.where(record, tau, 0.0)
@@ -1013,7 +1013,7 @@ def main() -> None:
                         "soft ceiling guard (--tau-guard); loss, selection scores and the "
                         "full/cpu transfer gates all follow the chosen metric. "
                         "'swing' = robust peak-to-peak motor torque swing (m[7]). Picked by "
-                        "opt/screen_targets.py: of every candidate, swing is the one the "
+                        "the Sep-10 objective screen: of every candidate, swing is the one the "
                         "SHARED FOURIER WAVEFORM both moves hard (3258%/unit vs 203% for a0) "
                         "and moves in a direction all 6 dt/integrator cells agree on "
                         "(consensus 0.996). Peak torque has the same authority with "

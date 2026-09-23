@@ -95,12 +95,8 @@ uv run python opt/optimize_control.py --warmup-periods 0.2 --sample-periods 0.2 
     --iters-per-stage 1 --harmonics 2
 ```
 
-On the vast 5090 (syncs the private repo via rsync, installs CUDA jax, runs,
-pulls `opt/runs/` back):
-```sh
-opt/sync_and_run.sh                          # defaults: K=5, 40 iters/stage
-HOST=ssh7.vast.ai PORT=26920 opt/sync_and_run.sh --iters-per-stage 60
-```
+On a GPU box: rsync the repo over and run the same command with `uv run --no-sync`
+(plain `uv run` re-syncs and drops CUDA jax).
 
 ## Phase 2 — structural-tendon co-design
 
@@ -110,7 +106,7 @@ arrays directly as traced inputs (gradient-optimizable; no recompile). Control i
 warm-started from phase 1 and frozen:
 
 ```sh
-opt/sync_and_run.sh --tune-tendons --freeze-control \
+uv run python opt/optimize_control.py --tune-tendons --freeze-control \
     --init-control opt/runs/theta_best.json --out opt/runs_tendons --iters-per-stage 60
 ```
 

@@ -122,7 +122,7 @@ def main():
     assert abs(energy(P_BASE, L_BASE, tau_hat=0.290) - base) < 1e-6, "torque under the ceiling is free"
     assert guarded > base + 0.1, f"torque over the ceiling must be guarded: {guarded} !> {base}"
 
-    # --- objective=swing: the screen's pick (opt/screen_targets.py) ------------
+    # --- objective=swing: the Sep-10 objective screen's pick ------------
     SW0 = 0.030          # 30 mNm baseline torque swing
     def swing_obj(sw, Lbar=L_BASE):
         return loss_for(Lbar=Lbar, A_stroke=A_TARGET, swing=sw, tau_max=0.300,

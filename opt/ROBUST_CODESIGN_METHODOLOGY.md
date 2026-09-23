@@ -243,7 +243,7 @@ hit **158–159 mNm (−9%)** with MJX full-matrix spread 9–13%, all gates gre
 ```bash
 # fetch checkpoint, then CPU-sweep it AND the untouched seed (it000) as control:
 for dt in 0.03 0.04 0.06 0.09 0.11 0.13 0.16; do
-  uv run python opt/replay_checkpoint.py <design_dir> \
+  uv run python opt/design_io.py <design_dir> \
     --integrator euler implicitfast rk4 --timestep $dt
 done
 ```
@@ -433,8 +433,8 @@ Current output dir (`opt/runs_robust_hover_3080_from_g1_it027_l330_stable_mjxfas
   trail incl. per-check matrices).
 - Each design dir: `shoulder.tg`, `control.tg`/`theta_best.json` (a/b are ABSOLUTE,
   divide by a0 for depths), `tendon_optimized.json` (per-tendon stiffness/pretension
-  factors), `motor_tendon_optimized.json`. Reconstruct/validate via `opt/design_io.py` /
-  `opt/replay_checkpoint.py` (warmup=8!).
+  factors), `motor_tendon_optimized.json`. Reconstruct/validate via `opt/design_io.py`
+  (warmup=8!).
 
 Success criteria, in order of authority:
 1. `cpu_best` worst-case over the CPU sweep grid (§7 method) **beats the seed's worst

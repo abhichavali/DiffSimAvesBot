@@ -34,7 +34,7 @@ def is_morphology(path: Path) -> bool:
 
 def test_every_tracked_tg_is_tagged_and_loads():
     files = tracked_tg()
-    assert len(files) > 100  # the optimizer artefacts count too
+    assert len(files) >= 10  # every committed design
     for path in files:
         assert not path.is_symlink(), path
         text = path.read_text()

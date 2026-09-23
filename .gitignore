@@ -8,7 +8,6 @@ aves_control_diff.org
 .#aves_control_diff.org
 .tokensave
 scene_viewer.xml
-opt/sweep_scene.xml
 MUJOCO_LOG.TXT
 ff_scene.xml
 scene_*.xml
@@ -17,16 +16,12 @@ ltximg/
 .cursor/
 .gui_plot_cache/
 .best_designs/
-.codex_efforts_*/
 best_designs/
-opt/auto/run_*/scene.xml
-opt/auto/*.log
 opt/runs*/
-opt/tendon_seeds/
 opt/codesign_seeds*/
-opt/remote_*snapshot/
 opt/.compile.lock
 opt/gui_runs/
 _ea_genome.tg
 out/
 *.log
+.claude/settings.local.json
