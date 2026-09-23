@@ -31,8 +31,8 @@ from compile_tg import compile_tg
 from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
 from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
-import runtime.aero_runtime as aero_runtime
-from runtime.aero_runtime import AeroBladeRuntime
+import runtime.aero as cpu_aero
+from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control, load_control_for_morphology, ramp_factor
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
@@ -224,14 +224,14 @@ def data_by_phase(
     def step() -> None:
         data.qfrc_applied[:] = 0.0
         data.ctrl[:] = 0.0
-        caps = (aero_runtime.OMEGA_DOT_CAP, aero_runtime.LIN_ACC_CAP)
+        caps = (cpu_aero.OMEGA_DOT_CAP, cpu_aero.LIN_ACC_CAP)
         if is_mean_lift_plot:
-            aero_runtime.OMEGA_DOT_CAP = aero_runtime.LIN_ACC_CAP = 0.0
+            cpu_aero.OMEGA_DOT_CAP = cpu_aero.LIN_ACC_CAP = 0.0
         try:
             aero.apply(model, data)
         finally:
             if is_mean_lift_plot:
-                aero_runtime.OMEGA_DOT_CAP, aero_runtime.LIN_ACC_CAP = caps
+                cpu_aero.OMEGA_DOT_CAP, cpu_aero.LIN_ACC_CAP = caps
         pitch.apply(model, data)
         ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
         base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)

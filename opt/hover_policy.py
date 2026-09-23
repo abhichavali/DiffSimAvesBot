@@ -148,7 +148,7 @@ def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_sub
 
 def measure_mean_lift(tg_path: Path, scene_bench: Path, *, ncyc=6) -> float:
     """Mean grounded-bench aero lift over ncyc flap cycles (pins the body)."""
-    from runtime.aero_runtime import AeroBladeRuntime
+    from runtime.aero import AeroBladeRuntime
     from runtime.wing_pitch_limit import WingPitchLimiter
     from runtime.viewer_runtime import get_actuator_id
     import os

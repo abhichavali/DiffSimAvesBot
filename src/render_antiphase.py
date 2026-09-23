@@ -32,7 +32,7 @@ import numpy as np
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from render_configs import TIP_SITES, WING_COLORS, draw_aero_arrows, draw_trail, smoothstep
-from runtime.aero_runtime import AeroBladeRuntime
+from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG

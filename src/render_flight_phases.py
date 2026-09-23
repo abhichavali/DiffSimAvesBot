@@ -33,7 +33,7 @@ import mujoco  # noqa: E402
 import flying  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from render_configs import ACTUATORS, _ffmpeg, _save_still, build_model  # noqa: E402
-from runtime.aero_runtime import AeroBladeRuntime  # noqa: E402
+from runtime.aero import AeroBladeRuntime  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
     eval_control,
     load_control_for_morphology,

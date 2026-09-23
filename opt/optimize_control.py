@@ -93,7 +93,7 @@ def set_unsteady_aero(enabled: bool):
     quasi-steady lift is the transferable quantity. Must be set before the
     rollout is jitted (the caps are captured at trace time).
     """
-    import runtime.aero_runtime as ca
+    import runtime.aero as ca
     import runtime.mjx.aero_runtime as ma
     o, l = (5.0e4, 1.0e3) if enabled else (0.0, 0.0)
     ca.OMEGA_DOT_CAP, ca.LIN_ACC_CAP = o, l
@@ -576,7 +576,7 @@ def cpu_validate_design(scene_path, ctrl_params, tendon_arrays, integrator,
     rollout, not a remodeling artifact. ``ctrl_params`` = (a0, a, b, omega) with
     a,b modulation depths (cmd = a0*(1 + sum a_n cos + b_n sin)).
     """
-    from runtime.aero_runtime import AeroBladeRuntime
+    from runtime.aero import AeroBladeRuntime
     from runtime.viewer_runtime import get_actuator_id
     from runtime.wing_pitch_limit import WingPitchLimiter
 

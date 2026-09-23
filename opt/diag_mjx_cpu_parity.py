@@ -18,7 +18,7 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from optimize_control import _INTEGRATORS, setup, set_unsteady_aero
-from runtime.aero_runtime import AeroBladeRuntime
+from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime as maero

@@ -42,7 +42,7 @@ def tendon_pairs(model):
 
 def roll(model, control, cycles=CYCLES):
     """Drive the shared crank command with aero+pitch live; return per-wing traces."""
-    from runtime.aero_runtime import AeroBladeRuntime
+    from runtime.aero import AeroBladeRuntime
     from runtime.crank_sync import sync_crank_disks_at_rest
     from runtime.viewer_runtime import get_actuator_id
     from runtime.wing_pitch_limit import WingPitchLimiter

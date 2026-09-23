@@ -1,7 +1,7 @@
 """Quasi-steady blade-element wing aerodynamics, in JAX.
 
-JAX port of ``utils.aero.Aerodynamics_left`` / ``Aerodynamics_right`` (plus the
-``CL_hovering`` / ``CD_hovering`` / ``ry_rad`` helpers). Computes the per-strip
+JAX port of the numpy ``runtime.aero.aerodynamics`` strip model (plus its
+``_cl`` / ``_cd`` / ``_ry`` helpers). Computes the per-strip
 aerodynamic force and pitching moment for a wing, expressed in the wing root-site
 frame — the same quantities the numpy model returns, ready to be rotated to world
 and applied at each blade site by the MJX runtime layer.

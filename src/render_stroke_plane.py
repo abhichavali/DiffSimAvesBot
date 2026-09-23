@@ -51,7 +51,7 @@ from render_configs import (  # noqa: E402
     build_model,
     draw_trail,
 )
-from runtime.aero_runtime import AeroBladeRuntime  # noqa: E402
+from runtime.aero import AeroBladeRuntime  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
     FourierControl,
     eval_control,

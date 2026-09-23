@@ -248,7 +248,7 @@ def _emit_strut_body(
 def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph, compiled: CompiledMorphology) -> None:
     # Deferred import: wing_geometry -> morphology_runtime -> morphology.compile
     # -> emit_mjcf would cycle at module level.
-    from utils.aero.wing_geometry import _resolve_wing_mesh_path, load_wing_geometry_from_stl
+    from morphology.wing_geometry import _resolve_wing_mesh_path, load_wing_geometry_from_stl
 
     scale = morph.world.scale
     rod = morph.wing.rod_length * scale
@@ -297,7 +297,7 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph, compiled: 
         armature=str(pitch.armature),
         ref=str(pitch.initial_rad),
     )
-    # The blade-element model (utils/aero) is expressed in the root-SITE frame
+    # The blade-element model (runtime/aero.py) is expressed in the root-SITE frame
     # with span along -y (strips at y<0... lever=[0,-r,0]), chord along z, and
     # the pitching moment about y. The site quat maps that convention onto the
     # body: y_site = -z_body (span), x_site/z_site in the chord/normal plane.

@@ -39,7 +39,8 @@ The pipeline is **`shoulder/*.tg` → parser → compiler → MuJoCo simulation*
 - `src/morphology/` — geometry/symmetry derivation, MJCF emitter
 - `src/compile_morphology.py` — CLI entry point
 - `src/runtime/morphology_runtime.py` — loads `.tg` for sim-time aero/wing params
-- `src/utils/aero/*` — quasi-steady aerodynamic forces (CPU/numpy reference)
+- `src/runtime/aero.py` — quasi-steady blade-element aero forces (CPU/numpy reference)
+- `src/morphology/wing_geometry.py` — wing planform (span, chords) from the STL mesh
 - `src/run_hanging_poc.py` — loads compiled XML (`MUJOCO_XML_PATH`; default `templates/generated-joint/scene.xml`), viewer + actuators + aero
 - `templates/generated-joint/` — compiled MJCF output target
 - `src/runtime/mjx/` — **JAX/MJX port** of the simulation (GPU, jittable, differentiable). See the MJX section below.

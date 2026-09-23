@@ -38,7 +38,7 @@ import numpy as np
 import flying
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
-from runtime.aero_runtime import AeroBladeRuntime
+from runtime.aero import AeroBladeRuntime
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG

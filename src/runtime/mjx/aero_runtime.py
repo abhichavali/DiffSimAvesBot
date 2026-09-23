@@ -1,6 +1,6 @@
 """Apply the JAX blade-element aero (``aero.py``) inside an MJX rollout.
 
-JAX/MJX port of ``runtime.aero_runtime.AeroBladeRuntime``. For each wing it:
+JAX/MJX port of ``runtime.aero.AeroBladeRuntime``. For each wing it:
 
 1. reads the root-site spatial velocity from the site Jacobian
    (``mjx.jac``) — the MJX equivalent of ``mj_objectVelocity`` — and rotates
@@ -30,7 +30,7 @@ import mujoco
 import mujoco.mjx as mjx
 
 from runtime.mjx.aero import RHO_AIR, AeroParams, aero_wing, aero_wing_diagnostics
-from utils.aero.wing_geometry import load_default_wing_geometry
+from morphology.wing_geometry import load_default_wing_geometry
 
 # Match the CPU runtime: quasi-steady by default. set_unsteady_aero(True) opts
 # into the explicit finite-difference added-mass hack for diagnostics.
