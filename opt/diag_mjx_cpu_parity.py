@@ -24,7 +24,7 @@ from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime as maero
 from runtime.mjx import rollout as mroll
 from runtime.mjx import wing_pitch as mwing
-from runtime.morphology_runtime import load_design_morphology
+from runtime.morphology_runtime import DESIGNS_DIR, load_design_morphology
 from runtime.viewer_runtime import get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 from runtime.wing_pitch_limit import WingPitchLimiter
@@ -86,7 +86,7 @@ def make_mjx_pre(mx, drive, pitch, aero, substep: int):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tg", type=Path, default=ROOT / "flight-orientations" / "hovering-tuned-hacked" / "shoulder.tg")
+    ap.add_argument("--tg", type=Path, default=DESIGNS_DIR / "hummer" / "checkpoints" / "tuned-dt-hacked" / "shoulder.tg")
     ap.add_argument("--scene", type=Path, default=Path("/tmp/diag_mjx_cpu_parity_scene.xml"))
     ap.add_argument("--steps", type=int, default=40)
     ap.add_argument("--aero-substep", type=int, default=4)

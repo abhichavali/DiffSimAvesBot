@@ -43,6 +43,7 @@ from render_stroke_plane import _captioner
 from runtime.aero_runtime import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
 from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.viewer_runtime import get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 from runtime.wing_pitch_limit import WingPitchLimiter
@@ -548,7 +549,7 @@ def self_check(args) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
+    p.add_argument("--tg", type=Path, default=DEFAULT_HUMMER_TG)
     p.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     p.add_argument("--out", type=Path, default=ROOT / "out" / "bilateral_control.mp4")
     p.add_argument("--hold-beats", type=float, default=1.0, help="beats each setting is held")

@@ -1,4 +1,4 @@
-"""Train a state-feedback policy that makes free-flying it009p HOVER, via
+"""Train a state-feedback policy that makes the free-flying default hummer design HOVER, via
 reverse-mode BPTT through the differentiable MJX rollout.
 
 WHY A BODY WRENCH: the tensegrity flapping mechanism is *fundamentally unstable*
@@ -17,7 +17,7 @@ stabilizing wrench on the airframe -- attitude torque (3) + vertical thrust trim
 to the flap lift, the solver runs at iterations=1, and the stabilizer is a
 virtual body wrench -- all fine for a viewer demo, none physical.
 
-    .venv/bin/python opt/hover_policy.py --tg flight-orientations/hovering-it009p/shoulder.tg \
+    .venv/bin/python opt/hover_policy.py --tg designs/hummer/hover/shoulder.tg \
         --iters 300 --out opt/runs_hover
     python opt/hover_policy.py --selfcheck     # CPU mapping/parity smoke test
 """
@@ -47,6 +47,7 @@ from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
+from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 from runtime.mjx import aero_runtime, rollout as mroll, wing_pitch as mwp
 
@@ -275,7 +276,7 @@ def adam(loss_fn, theta0, *, iters, lr, log_every, out_dir, save_fn, grad_clip=5
 # --------------------------------------------------------------------------- #
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--tg", type=Path, default=ROOT / "flight-orientations" / "hovering-it009p" / "shoulder.tg")
+    ap.add_argument("--tg", type=Path, default=DEFAULT_HUMMER_TG)
     ap.add_argument("--out", type=Path, default=ROOT / "opt" / "runs_hover")
     ap.add_argument("--iters", type=int, default=300)
     ap.add_argument("--lr", type=float, default=2e-3)

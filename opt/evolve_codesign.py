@@ -34,6 +34,7 @@ import mujoco
 
 import optimize_control as oc
 import tg_scalars
+from runtime.morphology_runtime import HOVER_BASE_TG
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -199,7 +200,7 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--tg", type=Path, default=ROOT / "flight-orientations/hovering/shoulder.tg")
+    p.add_argument("--tg", type=Path, default=HOVER_BASE_TG)
     p.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     p.add_argument("--aero-substep", type=int, default=2)
     p.add_argument("--timesteps", type=float, nargs="+", default=[0.06, 0.03],

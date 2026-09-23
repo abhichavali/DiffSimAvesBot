@@ -11,7 +11,7 @@ end-to-end from it.
 
 > **STATUS (2026-07-11): CAMPAIGN CONCLUDED — GOAL MET.** Flagship = run-5 it009
 > ("it009p"), certified **156.5 mNm doctrine worst-case = −10.4% vs seed** at 345–348 mN
-> lift, baked in `flight-orientations/hovering-soft-it009p/`. The §7 "simulator gap"
+> lift, baked in `designs/hummer/hover-soft-it009p/`. The §7 "simulator gap"
 > diagnosis was falsified (§11 — it was a metric mismatch plus a beat-sampling artifact);
 > §1–10 are kept as history of the old campaign. The fixed-protocol campaign, final
 > standings, the harmonics verdict, and phase-lag findings are in §11–14. All cloud
@@ -66,7 +66,7 @@ CPU validation is a manual checkpoint replay, not an in-loop gate.
 
 ## 3. Seed design
 
-- Morphology: `flight-orientations/hovering-tuned/shoulder.tg` — hand-tuned hover
+- Morphology: `designs/hummer/hover/shoulder.tg` — hand-tuned hover
   design, **24 per-tendon stiffness/pretension overrides baked into the .tg** `overrides:`
   block. Native `timestep = 0.13 ms`, `integrator = Euler` (0.13 is the documented
   stability edge for this scale).
@@ -179,7 +179,7 @@ annealing, and harmonics unlocked early/always depending on the seed.
 
 ```bash
 uv run python opt/optimize_control.py \
-  --tg flight-orientations/hovering-tuned/shoulder.tg \
+  --tg designs/hummer/hover/shoulder.tg \
   --init-codesign opt/init_from_g1_it009.json \
   --tune-tendons --tune-motor-tendons --single-stage \
   --lift-floor 0.330 --lift-torque-tradeoff 5 \
@@ -206,7 +206,7 @@ before the first iteration, so the live continuation is MJX-fast and CPU replay 
 
 ```bash
 uv run python opt/optimize_control.py \
-  --tg flight-orientations/hovering-tuned/shoulder.tg \
+  --tg designs/hummer/hover/shoulder.tg \
   --init-codesign opt/restart_from_g1_it027.json \
   --tune-tendons --tune-motor-tendons --single-stage \
   --lift-floor 0.330 --lift-torque-tradeoff 5 \
@@ -533,10 +533,10 @@ sweep adds euler @0.04/0.09. Certify offline via `opt/design_io.py`
 |---|---|---|---|---|
 | seed (hand-tuned) | 174.7 | ~176 | 358–364 | baseline |
 | uniform 0.8× tendons | 166.3 (−4.7%) | 166.3 | 357 | corridor proof, unoptimized |
-| run-4 it015 | 158.4 (−9.3%) | 158.4 | 347–351 | baked `hovering-soft-it015/` |
-| run-4 it018 | 157.1 (−10.1%) | 158.2 | 347–349 | baked `hovering-soft-it018/` |
-| run-4 it021 | 157.6 | 162 @0.04/0.09 | — | dt-specialized (deploy-dt champion only); baked `hovering-soft-it021/` |
-| **run-5 it009 ("it009p")** | **156.5 (−10.4%)** | 158.5 (−9.3%) | 345–348 | **FLAGSHIP**; baked `hovering-soft-it009p/` |
+| run-4 it015 | 158.4 (−9.3%) | 158.4 | 347–351 | baked `designs/hummer/checkpoints/it015/` |
+| run-4 it018 | 157.1 (−10.1%) | 158.2 | 347–349 | baked `designs/hummer/checkpoints/it018/` |
+| run-4 it021 | 157.6 | 162 @0.04/0.09 | — | dt-specialized (deploy-dt champion only); baked `designs/hummer/checkpoints/it021-harmonic/` |
+| **run-5 it009 ("it009p")** | **156.5 (−10.4%)** | 158.5 (−9.3%) | 345–348 | **FLAGSHIP**; baked `designs/hummer/hover-soft-it009p/` |
 | run-5 it021 | 158.0 | 162.0 | — | harmonics replication #3, checkpoint only |
 | run-6 it050 | ~156 | 159.2 | ~351 | parity + lift; checkpoints only |
 
@@ -613,8 +613,8 @@ run — sweep it globally, bake the optimum into the .tg, let the gradient adapt
 All cloud compute torn down 2026-07-11; nothing is live or billing. Worktree
 `~/Code/DiffSimAvesBot-fixed` (branch `fixed-codesign`) holds:
 
-- **Baked, committed designs**: `flight-orientations/hovering-soft-it009p/` (flagship),
-  `hovering-soft-it018/`, `hovering-soft-it021/`, `hovering-soft-it015/` (all also in
+- **Baked, committed designs**: `designs/hummer/hover-soft-it009p/` (flagship),
+  `checkpoints/it018/`, `checkpoints/it021-harmonic/`, `checkpoints/it015/` (all also in
   the main repo); lag-12 seed variant `hovering-tuned-lag12/`.
 - **Raw artifacts** (gitignored, on disk): `opt/runs_lag12_5090/` (run 6: checkpoints
   it000–it057 + `robust_best` + log), `opt/runs_fixed4_5090_archive/` (run 4, incl.

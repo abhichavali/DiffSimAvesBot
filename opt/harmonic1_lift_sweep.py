@@ -22,6 +22,7 @@ for p in (ROOT, ROOT / "src", ROOT / "opt"):
     sys.path.insert(0, str(p))
 
 from optimize_control import cpu_validate_design, set_unsteady_aero  # noqa: E402
+from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 
 
 def run(task):
@@ -57,7 +58,7 @@ def summarize(rows, cells):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
+    ap.add_argument("--tg", type=Path, default=DEFAULT_HUMMER_TG)
     ap.add_argument("--depths", type=float, nargs="+", default=[0.02, 0.05, 0.1, 0.2])
     ap.add_argument("--phases", type=int, default=12, help="phi samples over [0, 360)")
     ap.add_argument("--cells", nargs="+",

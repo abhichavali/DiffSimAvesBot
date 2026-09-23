@@ -60,6 +60,7 @@ from runtime.control_signal import (  # noqa: E402
 )
 from runtime.crank_sync import sync_crank_disks_at_rest  # noqa: E402
 from runtime.disk_orientation import DiskOrientation  # noqa: E402
+from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 from runtime.viewer_runtime import get_actuator_id  # noqa: E402
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest  # noqa: E402
 from runtime.wing_pitch_limit import WingPitchLimiter  # noqa: E402
@@ -380,7 +381,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--self-check", action="store_true", help="assert the sequence, no render")
     p.add_argument("--name", default="stroke_plane_paths")
-    p.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
+    p.add_argument("--tg", type=Path, default=DEFAULT_HUMMER_TG)
     p.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     p.add_argument("--out", type=Path, default=ROOT / "out")
     p.add_argument("--bird-assets", default=flying.BIRD_ASSETS_DIR)

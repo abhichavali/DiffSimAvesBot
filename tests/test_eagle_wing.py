@@ -1,6 +1,6 @@
 """The AvesEagle wing strokes like the hummingbird, and the plate wing still works.
 
-One rollout of `design/eagle.tg` covers the whole chain: the .tg parses, the
+One rollout of `designs/eagle/shoulder.tg` covers the whole chain: the .tg parses, the
 compiler emits the three-linkage wing, the drive's calibration converges, and the
 resulting motion is the hummingbird's — a wide side-to-side sweep in a
 near-horizontal stroke plane, mirror-symmetric, tucking a little at each reversal,
@@ -39,7 +39,7 @@ from runtime.eagle_drive import (  # noqa: E402
     wing_plane_roll,
 )  # noqa: E402
 
-EAGLE_TG = ROOT / "design" / "eagle.tg"
+EAGLE_TG = ROOT / "designs" / "eagle" / "shoulder.tg"
 
 CYCLES = 8.0
 SETTLE = 5.0
@@ -204,7 +204,7 @@ def test_feathers_bend_along_the_shaft(tmp_path):
     compile_tg(EAGLE_TG, scene)
     model = mujoco.MjModel.from_xml_path(str(scene))
     vanes = load_morphology(EAGLE_TG).wing.bones.feathers
-    assert vanes is not None, "design/eagle.tg no longer declares feathers:"
+    assert vanes is not None, "designs/eagle/shoulder.tg no longer declares feathers:"
     # The whole vane's stiffness is shared out over its nodes; see FeatherVanes.
     node_stiffness = vanes.segments * vanes.stiffness
 
@@ -262,7 +262,7 @@ def test_the_wings_are_mirror_images(tmp_path):
     variant = tmp_path / "offaxis.tg"
     text, count = re.subn(r"pin_phase(\s*)= 180 deg", r"pin_phase\g<1>= 120 deg",
                           EAGLE_TG.read_text(encoding="utf-8"))
-    assert count == 1, "design/eagle.tg no longer declares pin_phase = 180 deg"
+    assert count == 1, "designs/eagle/shoulder.tg no longer declares pin_phase = 180 deg"
     variant.write_text(text, encoding="utf-8")
     for tg in (EAGLE_TG, variant):
         _assert_wings_mirror(tg, tmp_path / f"{tg.stem}_mirror.xml")
@@ -591,7 +591,7 @@ def test_malformed_bones_section_is_rejected(tmp_path, pattern, replacement):
     """A dropped mount component or a typo'd key is a different wing, not a rounder
     number — the parser must say so instead of substituting a default."""
     text, count = re.subn(pattern, replacement, EAGLE_TG.read_text(), count=1)
-    assert count == 1, f"{pattern} no longer matches design/eagle.tg"
+    assert count == 1, f"{pattern} no longer matches designs/eagle/shoulder.tg"
     tg = tmp_path / "bad.tg"
     tg.write_text(text)
     with pytest.raises(ValueError):
@@ -666,7 +666,7 @@ def test_divergence_raises_instead_of_hanging(tmp_path):
         EAGLE_TG.read_text()
         .replace("timestep   = 0.13 ms", "timestep   = 0.40 ms")
         .replace("meshdir    = assets", f"meshdir    = {ROOT / 'assets'}")
-        .replace("control = eagle_control.tg", f"control = {ROOT / 'design' / 'eagle_control.tg'}")
+        .replace("control = control.tg", f"control = {ROOT / 'designs' / 'eagle' / 'control.tg'}")
     )
     scene = tmp_path / "toobig.xml"
     os.environ["MORPHOLOGY_PATH"] = str(tg)
@@ -681,7 +681,7 @@ def test_calibration_does_not_read_the_environment(tmp_path, monkeypatch):
     """`calibrate_stroke` is handed a morphology; it must use that one.
 
     The crank sync underneath re-reads MORPHOLOGY_PATH, which falls back to
-    design/shoulder.tg. Leaking through it applies that file's crank lag instead
+    designs/hummer/hover/shoulder.tg. Leaking through it applies that file's crank lag instead
     of this one's, which silently moves the clock every schedule is written
     against.
     """
@@ -702,7 +702,7 @@ def test_calibration_does_not_read_the_environment(tmp_path, monkeypatch):
 
 def test_plate_wing_still_compiles(tmp_path):
     """The hummingbird path is untouched: no `bones:` -> the old plate wing."""
-    tg = ROOT / "design" / "shoulder.tg"
+    tg = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
     assert load_morphology(tg).wing.bones is None
     scene = tmp_path / "plate.xml"
     compile_tg(tg, scene)

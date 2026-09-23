@@ -7275,7 +7275,7 @@
      "tendon_damping": 1.0,
      "crank_phase_lag_rad": 3.141592653589793,
      "motor_direction": 1.0,
-     "control_file": "baseline_control.tg"
+     "control_file": "control.tg"
     },
     "wing": {
      "rod_length": 0.018,
@@ -14217,7 +14217,7 @@
      "tendon_damping": 1.0,
      "crank_phase_lag_rad": 0.20943951023931956,
      "motor_direction": 1.0,
-     "control_file": "eagle_control.tg"
+     "control_file": "control.tg"
     },
     "wing": {
      "rod_length": 0.018,

@@ -56,7 +56,7 @@ candidate the way a torque spread does. Self-check: `uv run python opt/test_rewa
 The control signal was always shared (one scalar command drives all four crank
 actuators), but the morphology was not: `structural_tendon_pairs(individual=True)`
 gives each of the 24 structural tendons its own gene, and the seed `.tg` bakes very
-different L/R values on top (`hovering-soft-it009p`: `L_t1_to_t1_2` 184 N/m vs `R`
+different L/R values on top (`hover-soft-it009p`: `L_t1_to_t1_2` 184 N/m vs `R`
 341 N/m). Every previous run therefore optimized **two different wings** sharing one
 command — the two wingtips traced paths 6.5% of the stroke apart.
 
@@ -117,7 +117,7 @@ Drop `--freeze-control` to refine control jointly. Output: `tendon_optimized.jso
 
 - `control_optimized.tg` — best coefficients, design frame. Use it:
   `MORPHOLOGY_PATH=... uv run python src/run_mjx_fixed_frequency.py` after pointing
-  `design/shoulder.tg`'s `control_file` at it (or copy over `design/control.tg`).
+  `designs/hummer/hover/shoulder.tg`'s `control_file` at it (or copy over `designs/hummer/hover/control.tg`).
 - `theta_best.json` — raw params (actuator frame) + omega.
 - `log.json` — per-iteration loss / Lbar / tau_hat / A_stroke / S.
 

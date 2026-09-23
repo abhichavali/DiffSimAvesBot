@@ -33,6 +33,7 @@ from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.eagle_drive import CrankDrive, calibrated_drive, check_stable, wing_plane_roll
+from runtime.morphology_runtime import EAGLE_TG
 from runtime.wing_cables import CABLE_TAGS, apply_tension, cable_names, release_fold_servos
 from runtime.viewer_runtime import RealtimeSync
 
@@ -327,7 +328,7 @@ def record_gif(args, model, data, cranks, control, drive, held=None) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--tg", type=Path, default=ROOT / "design" / "eagle.tg")
+    p.add_argument("--tg", type=Path, default=EAGLE_TG)
     p.add_argument("--scene", type=Path, default=ROOT / "eagle_scene.xml")
     p.add_argument("--speed", type=float, default=1.0, help="Viewer realtime factor")
     p.add_argument("--fold", type=float, default=0.35, help="Elbow/wrist flexion at the stroke reversals, 0..1 of range")

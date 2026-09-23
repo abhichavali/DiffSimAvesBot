@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 BIRDS = ("hummer", "swift", "eagle")
 #: The flat plate wing on the tensegrity shoulder: the fixed-frequency runners,
 #: the plotting GUI and the codesign optimizers are all plate-wing tools.
-#: `eagle` is the three-linkage bone wing (design/eagle.tg, src/view_eagle.py).
+#: `eagle` is the three-linkage bone wing (designs/eagle/shoulder.tg, src/view_eagle.py).
 PLATE_BIRDS = ("hummer", "swift")
 
 
@@ -347,7 +347,7 @@ class WingBones:
     ``mount_euler_rad`` reorients that chain on the strut. It is load-bearing: the
     strut's rocking is a compound whirl, and only a narrow band of mount
     orientations turns it into a dominant up/down flap instead of the plate wing's
-    fore-aft hummingbird sweep. See ``design/eagle.tg`` for how the default was found.
+    fore-aft hummingbird sweep. See ``designs/eagle/shoulder.tg`` for how the default was found.
     """
 
     mount_euler_rad: Tuple[float, float, float] = (

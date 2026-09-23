@@ -11,12 +11,13 @@ if str(SRC) not in sys.path:
 
 from morphology.compile import compile_to_mjcf
 from morphology.tg_parser import load_morphology
+from runtime.morphology_runtime import LEGACY_BASELINE_TG
 
 
 def compile_tg(tg_path: Path, output_path: Path, *, color_structural_tendons: bool = False) -> Path:
     morph = load_morphology(tg_path)
-    if not Path(morph.world.meshdir).is_absolute():
-        morph.world.meshdir = str((tg_path.parent.parent / morph.world.meshdir).resolve())
+    if not Path(morph.world.meshdir).is_absolute():  # a relative meshdir is repo-root relative
+        morph.world.meshdir = str((ROOT / morph.world.meshdir).resolve())
     xml = compile_to_mjcf(morph, color_structural_tendons=color_structural_tendons)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(xml, encoding="utf-8")
@@ -25,7 +26,7 @@ def compile_tg(tg_path: Path, output_path: Path, *, color_structural_tendons: bo
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compile a .tg morphology to MuJoCo XML.")
-    parser.add_argument("--tg", type=Path, default=ROOT / "design" / "baseline_shoulder.tg")
+    parser.add_argument("--tg", type=Path, default=LEGACY_BASELINE_TG)
     parser.add_argument("--out", type=Path, default=ROOT / "scene.xml")
     parser.add_argument("--color", action="store_true", help="Color structural tendons with plot colors")
     args = parser.parse_args()

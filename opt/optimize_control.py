@@ -50,6 +50,7 @@ from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.morphology_runtime import LEGACY_BASELINE_TG
 from runtime.mjx import aero_runtime, rollout, wing_pitch
 from runtime.mjx.rollout import _match_dtypes
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
@@ -153,7 +154,7 @@ def symmetrize_wings(model) -> int:
     """Force L/R structural tendons onto one shared design (in place).
 
     The genome mirrors L=R only as a *factor*; the .tg base it multiplies is not
-    mirrored (hovering-soft-it009p ships L_t1_to_t1_2 = 184 N/m against R's 341),
+    mirrored (hover-soft-it009p ships L_t1_to_t1_2 = 184 N/m against R's 341),
     so past runs shipped two different wings driven by one command. Stiffness is a
     multiplicative knob (the genome is a log-factor), so pairs meet at the GEOMETRIC
     mean; rest length is a length, so arithmetic. Returns the pair count.
@@ -855,7 +856,7 @@ def load_control_seed(path: Path | None, K: int, drive, base_a0: float,
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--tg", type=Path, default=ROOT / "design" / "baseline_shoulder.tg")
+    p.add_argument("--tg", type=Path, default=LEGACY_BASELINE_TG)
     p.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     p.add_argument("--harmonics", type=int, default=5, help="K Fourier harmonics")
     p.add_argument("--wavelet", action="store_true",

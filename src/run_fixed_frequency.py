@@ -20,6 +20,7 @@ from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
 from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.morphology_runtime import LEGACY_BASELINE_TG
 from runtime.viewer_runtime import get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 from runtime.wing_pitch_limit import WingPitchLimiter
@@ -78,7 +79,7 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the compiled morphology with its design control signal.")
-    parser.add_argument("--tg", type=Path, default=ROOT / "design" / "baseline_shoulder.tg")
+    parser.add_argument("--tg", type=Path, default=LEGACY_BASELINE_TG)
     parser.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     parser.add_argument("--periods", type=float, default=5.0)
     parser.add_argument("--warmup-periods", type=float, default=2.0)

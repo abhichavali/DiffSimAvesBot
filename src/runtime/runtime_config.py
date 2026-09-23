@@ -1,10 +1,9 @@
 """Runtime parameters derived from the morphology design."""
 
-import os
 from pathlib import Path
 
 from runtime.control_signal import load_control_for_morphology
-from runtime.morphology_runtime import load_design_morphology
+from runtime.morphology_runtime import load_design_morphology, resolve_morphology_path
 
 
 def load_runtime_config(config_path=None):
@@ -57,7 +56,7 @@ def load_runtime_config(config_path=None):
 
 def get_control_parameters():
     morph = load_design_morphology()
-    tg_path = Path(os.environ.get("MORPHOLOGY_PATH", "design/shoulder.tg"))
+    tg_path = Path(resolve_morphology_path())
     control = load_control_for_morphology(tg_path)
     return {
         "control_frequency_rad_s": control.omega,

@@ -94,7 +94,7 @@ motors:
     tendon_rest_length = 53 mm
     tendon_stiffness  = 1000 N/m
     tendon_damping    = 1.0
-    control = eagle_control.tg
+    control = control.tg
     motor_direction = 1
 
 wing on M.midpoint:

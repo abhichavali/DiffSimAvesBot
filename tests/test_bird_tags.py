@@ -19,8 +19,8 @@ from morphology.model import BIRDS, PLATE_BIRDS, require_bird  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.control_signal import load_control, load_control_for_morphology  # noqa: E402
 
-SHOULDER = ROOT / "design" / "shoulder.tg"
-EAGLE = ROOT / "design" / "eagle.tg"
+SHOULDER = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
+EAGLE = ROOT / "designs" / "eagle" / "shoulder.tg"
 
 
 def tracked_tg() -> list[Path]:
@@ -65,7 +65,7 @@ def test_untagged_or_mistagged_files_are_refused(tmp_path):
         load_morphology(mistagged)
 
     control = tmp_path / "control.tg"
-    control.write_text(re.sub(r"(?m)^bird\s*=.*\n", "", (ROOT / "design" / "control.tg").read_text()))
+    control.write_text(re.sub(r"(?m)^bird\s*=.*\n", "", (SHOULDER.with_name("control.tg")).read_text()))
     with pytest.raises(ValueError, match="bird"):
         load_control(control)
 
@@ -73,7 +73,7 @@ def test_untagged_or_mistagged_files_are_refused(tmp_path):
 def test_a_control_of_another_bird_cannot_be_paired(tmp_path):
     (tmp_path / "shoulder.tg").write_text(SHOULDER.read_text())
     (tmp_path / "control.tg").write_text(
-        (ROOT / "design" / "control.tg").read_text().replace("bird = hummer", "bird = eagle", 1)
+        (SHOULDER.with_name("control.tg")).read_text().replace("bird = hummer", "bird = eagle", 1)
     )
     with pytest.raises(ValueError, match="tagged bird = hummer .* tagged bird = eagle"):
         load_control_for_morphology(tmp_path / "shoulder.tg")

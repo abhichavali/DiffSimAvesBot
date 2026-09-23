@@ -37,7 +37,7 @@ from runtime.control_signal import eval_control, load_control, load_control_for_
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
 from runtime.eagle_drive import CrankDrive, wing_plane_roll
-from runtime.morphology_runtime import load_design_morphology
+from runtime.morphology_runtime import DEFAULT_HUMMER_TG, DESIGNS_DIR, load_design_morphology
 from runtime.viewer_runtime import get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 from runtime.wing_pitch_limit import WingPitchLimiter
@@ -1862,7 +1862,7 @@ class PlotGui:
         self.design_tabs.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.panes: dict[str, DesignPane] = {}
 
-        self.add_design_tab(ROOT / "design" / "shoulder.tg", select=True)
+        self.add_design_tab(DEFAULT_HUMMER_TG, select=True)
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -1873,7 +1873,7 @@ class PlotGui:
     def add_design_tab(self, tg_path: Path | None = None, *, select: bool = True) -> None:
         active = self.active_pane()
         if tg_path is None:
-            initial = Path(active.tg_var.get()).parent if active else ROOT / "flight-orientations"
+            initial = Path(active.tg_var.get()).parent if active else DESIGNS_DIR
             path = filedialog.askopenfilename(
                 title="Select morphology for new tab",
                 initialdir=str(initial),

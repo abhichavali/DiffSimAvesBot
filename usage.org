@@ -19,7 +19,7 @@ uv run python compile_tg.py
 Compile a specific =.tg= file or output scene:
 
 #+begin_src sh
-uv run python compile_tg.py --tg design/shoulder.tg --out scene.xml
+uv run python compile_tg.py --tg designs/hummer/hover/shoulder.tg --out scene.xml
 #+end_src
 
 * CPU Runner
@@ -34,7 +34,7 @@ Useful flags:
 
 #+begin_src sh
 uv run python run_fixed_frequency.py \
-  --tg design/shoulder.tg \
+  --tg designs/hummer/hover/shoulder.tg \
   --scene scene.xml \
   --frequency 10 \
   --periods 5 \
@@ -65,7 +65,7 @@ Useful flags:
 
 #+begin_src sh
 mjpython view_fixed_frequency.py \
-  --tg design/shoulder.tg \
+  --tg designs/hummer/hover/shoulder.tg \
   --scene scene.xml \
   --frequency 10 \
   --speed 0.2
@@ -85,7 +85,7 @@ Useful flags:
 
 #+begin_src sh
 uv run python run_mjx_fixed_frequency.py \
-  --tg design/shoulder.tg \
+  --tg designs/hummer/hover/shoulder.tg \
   --scene scene.xml \
   --frequency 10 \
   --periods 5 \
@@ -151,9 +151,9 @@ Useful flags:
 uv run python src/view_eagle.py --fold 0.35 --twist 30 --lead 35 --level 1.0
 #+end_src
 
-Design knobs live in =design/eagle.tg= (bone lengths, joint ranges, servo
+Design knobs live in =designs/eagle/shoulder.tg= (bone lengths, joint ranges, servo
 stiffness, and the humerus mount — the mount is what orients the wing on the
-sweep and is load-bearing) and =design/eagle_control.tg= (=a0= is the crank
+sweep and is load-bearing) and =designs/eagle/control.tg= (=a0= is the crank
 velocity command, so stroke Hz = a0 / 2pi; the sweep holds to 15 Hz).
 
 Check it:

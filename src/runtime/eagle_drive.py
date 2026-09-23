@@ -199,12 +199,12 @@ def check_stable(model, data, what: str) -> None:
     if data.warning[mujoco.mjtWarning.mjWARN_BADQACC].number:
         raise RuntimeError(
             f"{what} diverged (mjWARN_BADQACC) — world.timestep is likely past the "
-            "tendon stiffness limit; design/eagle.tg is stable to 0.20 ms"
+            "tendon stiffness limit; designs/eagle/shoulder.tg is stable to 0.20 ms"
         )
 
 
 # Harmonics in the roll fit, trading levelling against how fast the twist servo
-# has to move. Measured on design/eagle.tg (residual roll peak-to-peak / peak
+# has to move. Measured on designs/eagle/shoulder.tg (residual roll peak-to-peak / peak
 # twist rate): 2 -> 19.7 deg / 535 deg-s, 3 -> 10.4 / 785, 4 -> 5.2 / 921,
 # 6 -> 2.5 / 1066. Past 4 the extra flatness is bought with high-frequency
 # content that reads on screen as the wing snapping rather than feathering.

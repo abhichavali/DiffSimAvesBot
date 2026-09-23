@@ -7,7 +7,7 @@
 * Overview
 
 Five interactive MuJoCo simulations of the free-flying tensegrity flapping-wing
-robot (design ~flight-orientations/hovering-it009p~), all launched from one
+robot (design ~designs/hummer/hover~), all launched from one
 viewer via a ~--mode~ flag:
 
 #+begin_src bash

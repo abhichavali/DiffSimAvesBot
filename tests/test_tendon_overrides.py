@@ -45,14 +45,14 @@ def test_resolve_falls_back_to_defaults():
 
 
 def test_motor_tendon_rest_length():
-    morph = load_morphology(Path(__file__).resolve().parents[1] / "design" / "baseline_shoulder.tg")
+    morph = load_morphology(Path(__file__).resolve().parents[1] / "designs" / "hummer" / "legacy-baseline" / "shoulder.tg")
     assert morph.motors.tendon_rest_length == 0.053
     assert morph.motors.crank_phase_lag_rad == math.radians(180)
     assert [foot.station for foot in morph.motors.feet] == [1, 4]
 
 
 def test_motor_tendon_rest_length_foot_override(tmp_path=None):
-    baseline = Path(__file__).resolve().parents[1] / "design" / "baseline_shoulder.tg"
+    baseline = Path(__file__).resolve().parents[1] / "designs" / "hummer" / "legacy-baseline" / "shoulder.tg"
     text = baseline.read_text()
     if "tendon_rest_length_t1" in text:
         text = "\n".join(
@@ -80,7 +80,7 @@ def test_motor_tendon_rest_length_foot_override(tmp_path=None):
 
 
 def test_motor_tendons_are_crossed():
-    morph = load_morphology(Path(__file__).resolve().parents[1] / "design" / "baseline_shoulder.tg")
+    morph = load_morphology(Path(__file__).resolve().parents[1] / "designs" / "hummer" / "legacy-baseline" / "shoulder.tg")
     root = ET.fromstring(emit_mjcf(compile_morphology(morph)))
     tendons = {el.attrib["name"]: [site.attrib["site"] for site in el] for el in root.find("tendon")}
     assert tendons["L_motor_t1"] == ["L_part_1_motor_t4", "crank_disks_L_t1"]
@@ -88,7 +88,7 @@ def test_motor_tendons_are_crossed():
 
 
 def test_individual_structural_tendon_override(tmp_path=None):
-    baseline = Path(__file__).resolve().parents[1] / "design" / "baseline_shoulder.tg"
+    baseline = Path(__file__).resolve().parents[1] / "designs" / "hummer" / "legacy-baseline" / "shoulder.tg"
     text = baseline.read_text().replace(
         "motors:\n",
         "    overrides:\n"

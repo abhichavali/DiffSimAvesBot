@@ -17,8 +17,8 @@ for p in (ROOT, ROOT / "src"):
 
 from plot_fixed_frequency_gui import ImpulseSim, cut_wraps, wrap_deg  # noqa: E402
 
-TG = ROOT / "design" / "shoulder.tg"
-CONTROL = ROOT / "design" / "control.tg"
+TG = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
+CONTROL = TG.with_name("control.tg")
 
 
 def test_wrap_and_cut():

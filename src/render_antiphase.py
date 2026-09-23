@@ -35,6 +35,7 @@ from render_configs import TIP_SITES, WING_COLORS, draw_aero_arrows, draw_trail,
 from runtime.aero_runtime import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
 from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.viewer_runtime import get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 from runtime.wing_pitch_limit import WingPitchLimiter
@@ -295,7 +296,7 @@ def speed_strip(times, speeds, width, height, png_path):
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--tg", type=Path, default=ROOT / "design" / "shoulder.tg")
+    p.add_argument("--tg", type=Path, default=DEFAULT_HUMMER_TG)
     p.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     p.add_argument("--out", type=Path, default=ROOT / "out" / "antiphase.mp4")
     p.add_argument("--phases", type=lambda s: [float(x) for x in s.split(",")],

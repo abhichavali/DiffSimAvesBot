@@ -10,17 +10,24 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from pathlib import Path
 
 from morphology.model import Morphology
 from morphology.tg_parser import load_morphology
 
 # Repo root: src/runtime/morphology_runtime.py → ../../
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SHOULDER_TG = os.path.join(ROOT, "design", "shoulder.tg")
+
+# The committed designs (see designs/README.md) and the tool defaults that point at them.
+DESIGNS_DIR = Path(ROOT) / "designs"
+DEFAULT_HUMMER_TG = DESIGNS_DIR / "hummer" / "hover" / "shoulder.tg"  # runtime, viewers, GUI, renders
+HOVER_BASE_TG = DESIGNS_DIR / "hummer" / "hover-base" / "shoulder.tg"  # EA + run_gui
+LEGACY_BASELINE_TG = DESIGNS_DIR / "hummer" / "legacy-baseline" / "shoulder.tg"  # optimizer, compile_tg, run_fixed_frequency
+EAGLE_TG = DESIGNS_DIR / "eagle" / "shoulder.tg"
 
 
 def resolve_morphology_path() -> str:
-    return os.getenv("MORPHOLOGY_PATH", SHOULDER_TG)
+    return os.getenv("MORPHOLOGY_PATH", str(DEFAULT_HUMMER_TG))
 
 
 @lru_cache(maxsize=1)

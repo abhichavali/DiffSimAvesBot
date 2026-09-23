@@ -14,7 +14,7 @@ uv run python src/run_mjx_fixed_frequency.py --periods 5
 mjpython src/view_fixed_frequency.py
 ```
 
-`design/eagle.tg` is the AvesEagle spinoff: the same tensegrity shoulder
+`designs/eagle/shoulder.tg` is the AvesEagle spinoff: the same tensegrity shoulder
 carrying a three-linkage avian wing (humerus / ulna / manus) instead of the flat
 plate, stroking side to side the way the plate wing does, wing on edge.
 
@@ -24,7 +24,7 @@ uv run python src/view_eagle.py --gif out/eagle.gif
 uv run pytest -q tests/test_eagle_wing.py
 ```
 
-The default design is `design/shoulder.tg`; it points at `design/control.tg` for
+The default design is `designs/hummer/hover/shoulder.tg`; it points at `designs/hummer/hover/control.tg` for
 the Fourier control signal. The default generated scene is `scene.xml`.
 
 - evaluate sensititiy in angular velocity profile to wing motion

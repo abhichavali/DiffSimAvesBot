@@ -3,7 +3,7 @@
 One command drives all four crank motors, so the CONTROL signal was always shared.
 The morphology was not: `structural_tendon_pairs(individual=True)` gives each of the
 24 structural tendons its own (stiffness, pretension) gene, and the seed .tg bakes
-wildly different L/R values on top (hovering-soft-it009p: L_t1_to_t1_2 = 184 N/m vs
+wildly different L/R values on top (hover-soft-it009p: L_t1_to_t1_2 = 184 N/m vs
 R = 341 N/m). So past runs optimized two DIFFERENT wings sharing one command.
 
 --lock-wings geometric-means each L/R pair at load and tunes the 12 mirrored pairs.
@@ -25,7 +25,7 @@ import numpy as np
 
 from opt.optimize_control import ROOT, WINGTIP_SITES, setup
 
-TG = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "flight-orientations" / "hovering-soft-it009p" / "shoulder.tg"
+TG = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "designs" / "hummer" / "hover-soft-it009p" / "shoulder.tg"
 SCENE = ROOT / "scene.xml"
 CYCLES = 3.0
 

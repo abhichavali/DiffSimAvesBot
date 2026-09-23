@@ -522,7 +522,7 @@ class OptGui(ttk.Frame):
 def main() -> None:
     import argparse
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--tg", type=Path, default=ROOT / "flight-orientations" / "hovering" / "shoulder.tg")
+    p.add_argument("--tg", type=Path, default=ROOT / "designs" / "hummer" / "hover-base" / "shoulder.tg")
     p.add_argument("--control", type=Path, default=None,
                    help="control .tg (default: the shoulder's sibling control.tg)")
     p.add_argument("--scene", type=Path, default=ROOT / "scene.xml")

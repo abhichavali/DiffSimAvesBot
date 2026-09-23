@@ -8,8 +8,8 @@ from pathlib import Path
 from run_gui import (ROOT, RunConfig, block_of, build_commands, gene_blocks, grouped,
                      parse_tg)
 
-TG = ROOT / "design" / "shoulder.tg"  # the promoted flagship (hovering-it009p); values below are its
-CTRL = ROOT / "design" / "control.tg"  # must be named control.tg: the Fourier group keys on the file stem
+TG = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"  # the default hummer design; values below are its
+CTRL = ROOT / "designs" / "hummer" / "hover" / "control.tg"  # must be named control.tg: the Fourier group keys on the file stem
 
 
 def test_parse_tg():

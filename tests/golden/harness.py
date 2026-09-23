@@ -45,14 +45,14 @@ os.environ.pop("MUJOCO_WING_MESH_PATH", None)  # would override every design's w
 
 # logical design name -> current .tg path. Move a design: change its path here only.
 PATHS = {
-    "shoulder": "design/shoulder.tg",  # runtime / viewer / GUI default
-    "baseline": "design/baseline_shoulder.tg",  # optimizer / run_fixed_frequency default
-    "eagle": "design/eagle.tg",
-    "soft_it009p": "flight-orientations/hovering-soft-it009p/shoulder.tg",  # harmonics + stroke plane
-    "tuned": "flight-orientations/hovering-tuned/shoulder.tg",
-    "hovering": "flight-orientations/hovering/shoulder.tg",  # run_gui / freq_sweep default
-    "it009p": "flight-orientations/hovering-it009p/shoulder.tg",  # hover_policy default
-    "tuned_hacked": "flight-orientations/hovering-tuned-hacked/shoulder.tg",  # precision_divergence
+    "shoulder": "designs/hummer/hover/shoulder.tg",  # runtime / viewer / GUI default
+    "baseline": "designs/hummer/legacy-baseline/shoulder.tg",  # optimizer / run_fixed_frequency default
+    "eagle": "designs/eagle/shoulder.tg",
+    "soft_it009p": "designs/hummer/hover-soft-it009p/shoulder.tg",  # harmonics + stroke plane
+    "tuned": "designs/hummer/hover/shoulder.tg",  # was a byte-identical copy of `shoulder`
+    "hovering": "designs/hummer/hover-base/shoulder.tg",  # run_gui / EA default
+    "it009p": "designs/hummer/hover/shoulder.tg",  # hover_policy default; was a byte-identical copy of `shoulder`
+    "tuned_hacked": "designs/hummer/checkpoints/tuned-dt-hacked/shoulder.tg",  # diag_mjx_cpu_parity default
 }
 OPTIMIZER_CLI = ROOT / "opt" / "optimize_control.py"
 STROKEPLANE_JSON = "strokeplane_optimized.json"  # learned stroke-plane artifact beside a design

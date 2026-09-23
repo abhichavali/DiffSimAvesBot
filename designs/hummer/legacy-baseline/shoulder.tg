@@ -59,7 +59,7 @@ motors:
     tendon_rest_length_t1 = 47.7 mm
     tendon_stiffness  = 900 N/m
     tendon_damping    = 1.0
-    control = baseline_control.tg
+    control = control.tg
     motor_direction = 1
 
 wing on M.midpoint:
