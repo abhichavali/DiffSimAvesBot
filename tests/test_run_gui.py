@@ -1,7 +1,7 @@
 """Self-check for opt/run_gui.py: .tg flattening, gene wiring, argv building.
 
 No Tk display needed -- the parsing and command layers are plain functions.
-Run: uv run python opt/test_run_gui.py
+Run: uv run pytest -q tests/test_run_gui.py
 """
 from pathlib import Path
 
@@ -196,10 +196,3 @@ def test_rejects_empty_configs():
         else:
             raise AssertionError(f"expected ValueError for {bad}")
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all good")

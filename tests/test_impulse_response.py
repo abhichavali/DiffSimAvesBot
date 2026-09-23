@@ -1,22 +1,17 @@
 """Impulse-response sim behind the GUI pane: phase bookkeeping and the open-loop torque pulse.
 
-Run: uv run --with pytest pytest -q tests/test_impulse_response.py
+Run: uv run pytest -q tests/test_impulse_response.py
 """
 from __future__ import annotations
 
 import math
-import sys
 from pathlib import Path
 
 import numpy as np
 
+from plot_fixed_frequency_gui import ImpulseSim, cut_wraps, wrap_deg
+
 ROOT = Path(__file__).resolve().parent.parent
-for p in (ROOT, ROOT / "src"):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
-
-from plot_fixed_frequency_gui import ImpulseSim, cut_wraps, wrap_deg  # noqa: E402
-
 TG = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
 CONTROL = TG.with_name("control.tg")
 

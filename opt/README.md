@@ -49,7 +49,7 @@ scale offsets the objective at the floor (the run-9 hinge-normalization bug).
 
 Selection scores and the full-matrix / CPU transfer gates all follow the same metric,
 and under `power`/`energy` a power spread wider than the gap threshold rejects a
-candidate the way a torque spread does. Self-check: `uv run python opt/test_reward.py`.
+candidate the way a torque spread does. Self-check: `uv run pytest -q tests/test_reward.py`.
 
 ### `--lock-wings` — one design for both wings
 
@@ -64,7 +64,7 @@ command — the two wingtips traced paths 6.5% of the stroke apart.
 multiplicative knob; rest length is arithmetic) and tunes the 12 **mirrored** pairs —
 24 params instead of 48. With it the two wingtips are mirror-identical to 0.0000 mm
 and the two shoulders carry identical torque. Costs almost nothing: CPU baseline
-62.6 W/N locked vs 63.3 W/N unlocked. Check: `uv run python opt/test_wing_lock.py`.
+62.6 W/N locked vs 63.3 W/N unlocked. Check: `uv run pytest -q tests/test_wing_lock.py`.
 
 This also needed a real bug fixed in `src/runtime/crank.py`: the sync paired
 `L_t{a}` with `R_t{b}` across the sigma station swap (1↔4) and copied the angle

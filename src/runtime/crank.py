@@ -31,7 +31,7 @@ def sync_crank_disks_at_rest(model, data, lag_rad: float | None = None) -> None:
     # and copy the angle unnegated, which took a mirror-correct rest state and
     # un-mirrored it: the two wings then traced paths 0.6-0.8% of stroke apart
     # for the whole run, on top of whatever the .tg baked in. Per-station and
-    # negated, the wingtips agree to solver noise (opt/test_wing_lock.py).
+    # negated, the wingtips agree to solver noise (tests/test_wing_lock.py).
     for foot in feet:
         left = joint_id(f"L_t{foot.station}_disk_hinge")
         right = joint_id(f"R_t{foot.station}_disk_hinge")

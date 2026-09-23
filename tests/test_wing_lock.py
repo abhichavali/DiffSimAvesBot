@@ -1,4 +1,5 @@
-"""Self-check for --lock-wings (run: uv run python opt/test_wing_lock.py [design.tg]).
+"""Self-check for --lock-wings (run: uv run pytest -q tests/test_wing_lock.py -s,
+or on another design: uv run python -m tests.test_wing_lock design.tg).
 
 One command drives all four crank motors, so the CONTROL signal was always shared.
 The morphology was not: `structural_tendon_pairs(individual=True)` gives each of the
@@ -17,15 +18,12 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
 import mujoco
 import numpy as np
 
 from opt.optimize_control import ROOT, WINGTIP_SITES, setup
 
-TG = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "designs" / "hummer" / "hover-soft-it009p" / "shoulder.tg"
+TG = ROOT / "designs" / "hummer" / "hover-soft-it009p" / "shoulder.tg"
 SCENE = ROOT / "scene.xml"
 CYCLES = 3.0
 
@@ -85,10 +83,14 @@ def asymmetry(tip_tr):
     return err, err / max(extent, 1e-9)
 
 
-def main():
-    print(f"design: {TG}")
-    free_model, *_, free_tendons, _ = setup(TG, SCENE, lock_wings=False)
-    lock_model, _, _, control, *_, lock_tendons, _ = setup(TG, SCENE, lock_wings=True)
+def test_lock_wings(tg: Path = TG):
+    print(f"design: {tg}")
+    # The runtime caches ONE design regardless of MORPHOLOGY_PATH; drop whatever an
+    # earlier test in this process loaded so aero/pitch read `tg`.
+    from runtime.morphology_runtime import load_design_morphology
+    load_design_morphology.cache_clear()
+    free_model, *_, free_tendons, _ = setup(tg, SCENE, lock_wings=False)
+    lock_model, _, _, control, *_, lock_tendons, _ = setup(tg, SCENE, lock_wings=True)
 
     n_free, n_lock = int(np.asarray(free_tendons[0]).shape[0]), int(np.asarray(lock_tendons[0]).shape[0])
     assert n_lock * 2 == n_free, f"lock must halve the tendon genome: {n_free} -> {n_lock}"
@@ -125,4 +127,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    test_lock_wings(Path(sys.argv[1]) if len(sys.argv) > 1 else TG)

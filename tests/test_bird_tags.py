@@ -1,23 +1,20 @@
 """Every .tg is tagged with its bird, and the tools refuse the wrong one.
 
-Run: uv run --with pytest pytest -q tests/test_bird_tags.py
+Run: uv run pytest -q tests/test_bird_tags.py
 """
 from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(ROOT / "src"))
+from morphology.model import BIRDS, PLATE_BIRDS, require_bird
+from morphology.tg_parser import load_morphology
+from runtime.control_signal import load_control, load_control_for_morphology
 
-from morphology.model import BIRDS, PLATE_BIRDS, require_bird  # noqa: E402
-from morphology.tg_parser import load_morphology  # noqa: E402
-from runtime.control_signal import load_control, load_control_for_morphology  # noqa: E402
+ROOT = Path(__file__).resolve().parent.parent
 
 SHOULDER = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
 EAGLE = ROOT / "designs" / "eagle" / "shoulder.tg"

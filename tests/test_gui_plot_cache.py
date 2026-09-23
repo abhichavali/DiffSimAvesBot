@@ -38,7 +38,7 @@ class FakeCanvas:
         self.draws += 1
 
 
-def main() -> None:
+def test_plot_cache_and_resize_guard() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         gui.PLOT_CACHE_DIR = Path(tmp) / "cache"
         tg = Path(tmp) / "a.tg"
@@ -81,6 +81,3 @@ def main() -> None:
 
     print("ok")
 
-
-if __name__ == "__main__":
-    main()

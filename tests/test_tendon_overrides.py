@@ -1,16 +1,13 @@
 """Per-tendon material overrides: color / pretension / stiffness.
 
-Runnable directly (`uv run python tests/test_tendon_overrides.py`) or via pytest.
+Run: uv run pytest -q tests/test_tendon_overrides.py
 Covers the new logic units without a full mesh-dependent compile.
 """
 
-import sys
 import math
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from morphology.emit_mjcf import _color_to_rgba
 from morphology.compile import compile_morphology
@@ -111,17 +108,3 @@ def test_individual_structural_tendon_override(tmp_path=None):
     assert tendons["L_t1_to_t1_2"]["stiffness"] == "123.0"
     assert tendons["R_t1_to_t1_2"]["stiffness"] == "456.0"
 
-
-if __name__ == "__main__":
-    for fn in (
-        test_color_to_rgba,
-        test_parse_material_dict,
-        test_resolve_falls_back_to_defaults,
-        test_motor_tendon_rest_length,
-        test_motor_tendon_rest_length_foot_override,
-        test_motor_tendons_are_crossed,
-        test_individual_structural_tendon_override,
-    ):
-        fn()
-        print(f"ok  {fn.__name__}")
-    print("all passed")

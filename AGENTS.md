@@ -17,7 +17,7 @@ These instructions apply to all coding agents (Cursor, Claude, Gemini, Copilot, 
   - Author: `shoulder/shoulder.tg`
   - `uv run python src/compile_morphology.py templates/generated-joint/scene.xml`
   - Optional: `--morphology path/to/file.tg`
-  - Tests: `uv run pytest tests/test_morphology_compiler.py tests/test_tg_parser.py`
+  - Tests: `uv run pytest -q`
   - See `docs/MORPHOLOGY_COMPILER.md`
 - Run the simulation viewer:
   - `mjpython src/run_hanging_poc.py`
@@ -27,7 +27,7 @@ These instructions apply to all coding agents (Cursor, Claude, Gemini, Copilot, 
   - `MORPHOLOGY_PATH=path/to/custom.tg mjpython src/run_hanging_poc.py`
 
 No automated lint suite is configured. Validate morphology changes with
-`uv run pytest tests/test_morphology_compiler.py tests/test_tg_parser.py` and,
+`uv run pytest -q` (unit tests + the golden quick tier) and,
 where relevant, the viewer.
 
 ## High-level architecture
@@ -66,7 +66,7 @@ CPU path is unchanged and is the reference the port is validated against.
   needs `rollout.set_reverse_mode_solver(model)` / `simulate(..., differentiable=True)`.
   **Geometry params (radius/attach/offsets) are not differentiable** (host-side compiler).
 - **Batched**: `jax.vmap` a rollout over a swept param for parallel GPU runs.
-- **Tests**: `uv run pytest -q tests/test_mjx_*.py`.
+- **Tests**: `uv run pytest -q`; full behavior check: `uv run python -m tests.golden check`.
 - **GPU server**: SSH alias `HanatServer`; project at `/workspace/Tensegrity-Playground`
   (own `.venv`). Repo is **private** → sync with `rsync` (not `git clone`).
   Instances get evicted often → **`docs/vast_migration.md`** is the quick runbook

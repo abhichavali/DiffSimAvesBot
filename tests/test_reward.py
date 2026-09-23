@@ -1,4 +1,4 @@
-"""Self-check for the demo reward (run: uv run python opt/test_reward.py).
+"""Self-check for the demo reward (run: uv run pytest -q tests/test_reward.py -s).
 
 Verifies the reward shape:
   1. Stroke amplitude is STRICTLY banded around the baseline (+/-amp_band_pct):
@@ -11,10 +11,6 @@ make_loss returns jacfwd(loss, has_aux); aux[9] = -R = the scalar loss -- a
 constant stub metrics ignores theta, so
 the gradient is irrelevant, only the loss value is checked.
 """
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import jax.numpy as jnp
 
 from opt.optimize_control import make_loss, recorded_peak
@@ -51,7 +47,7 @@ def loss_for(*, Lbar, A_stroke, lift_cap=None, swing=0.0, w_swing=0.0,
     return float(aux[9])
 
 
-def main():
+def test_reward_shape():
     peak = recorded_peak(
         jnp.asarray([999.0, 0.10, 0.42, 0.11]),
         jnp.asarray([False, True, True, True]),
@@ -167,6 +163,3 @@ def main():
           f"swing: base={sw_base:.4f}~1 less={swing_obj(0.8*SW0):.4f}< more={swing_obj(1.2*SW0):.4f}>; "
           f"all {len(BASE)} screen objectives normalize to 1 and are monotone; composite ok")
 
-
-if __name__ == "__main__":
-    main()

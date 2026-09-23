@@ -14,31 +14,25 @@ from __future__ import annotations
 import math
 import os
 import re
-import sys
 from pathlib import Path
 
+import mujoco
 import numpy as np
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
-import mujoco  # noqa: E402
-
-from compile_tg import compile_tg  # noqa: E402
-from morphology.tg_parser import load_morphology  # noqa: E402
-from runtime.control_signal import load_control_for_morphology  # noqa: E402
-from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
-from runtime.eagle_drive import (  # noqa: E402
+from compile_tg import compile_tg
+from morphology.tg_parser import load_morphology
+from runtime.control_signal import load_control_for_morphology
+from runtime.crank import sync_crank_disks_at_rest
+from runtime.eagle_drive import (
     CrankDrive,
     calibrate_stroke,
     calibrated_drive,
     check_stable,
     wing_plane_roll,
-)  # noqa: E402
+)
 
+ROOT = Path(__file__).resolve().parent.parent
 EAGLE_TG = ROOT / "designs" / "eagle" / "shoulder.tg"
 
 CYCLES = 8.0
