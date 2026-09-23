@@ -190,7 +190,7 @@ class Motors:
     tendon_damping: float = 1.0
     # Phase lag (rad): initial crank-angle offset of the t4 crank vs t1. The two
     # cranks always counter-rotate (gear -1); this is an added timing offset, held
-    # under the shared velocity command (see crank_sync.apply_crank_phase_lag).
+    # under the shared velocity command (see runtime.crank.apply_crank_phase_lag).
     crank_phase_lag_rad: float = 0.0
     motor_direction: float = 1.0
     control_file: str = "control.tg"

@@ -1,6 +1,6 @@
 """Dead-zone restorative spring for the wing pitch joints, in JAX.
 
-JAX port of :class:`runtime.wing_pitch_limit.WingPitchLimiter`. The pitch hinges
+JAX port of :class:`runtime.wing_pitch.WingPitchLimiter`. The pitch hinges
 are emitted passively free (zero stiffness/damping in MJCF); this applies, every
 step, a constant velocity ``damping`` plus a restorative spring that engages only
 once the pitch deviates more than the one-sided pitch deadband from its
@@ -12,7 +12,7 @@ leveled-neutral rest:
 where ``dev = qpos - center``. It is branch-free (``clip``/``sign``), so it is
 fully ``jit``/``vmap``-able and differentiable for use inside an ``mjx.step``
 rollout. The CPU loop zeroes ``qfrc_applied`` each step then accumulates this and
-the aero force into it (see ``viewer_runtime.step_and_sync``); :func:`apply`
+the aero force into it (see ``realtime.RealtimeSync.step_and_sync``); :func:`apply`
 mirrors that by *adding* to the current ``qfrc_applied``, so the rollout must
 zero (or freshly build) ``qfrc_applied`` before composing force sources.
 """

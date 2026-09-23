@@ -1126,7 +1126,7 @@ def _add_actuators(root: ET.Element, compiled: CompiledMorphology) -> None:
             #   - the non-reference foot ALWAYS counter-rotates (gear -1) so the two
             #     cranks oppose and give the full reciprocating stroke.
             # crank_phase_lag is a crank-angle phase
-            # lag applied to the t4 cranks at init (see runtime.crank_sync).
+            # lag applied to the t4 cranks at init (see runtime.crank).
             gear = -1.0 if prefix == "R" else 1.0
             if st != ref_station:
                 gear *= -1.0

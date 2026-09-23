@@ -58,12 +58,11 @@ from runtime.control_signal import (  # noqa: E402
     load_control_for_morphology,
     ramp_factor,
 )
-from runtime.crank_sync import sync_crank_disks_at_rest  # noqa: E402
+from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
 from runtime.disk_orientation import DiskOrientation  # noqa: E402
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
-from runtime.viewer_runtime import get_actuator_id  # noqa: E402
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest  # noqa: E402
-from runtime.wing_pitch_limit import WingPitchLimiter  # noqa: E402
+from runtime.realtime import get_actuator_id  # noqa: E402
+from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest  # noqa: E402
 
 PITCH_AXIS = np.array([0.0, 1.0, 0.0])
 MAC_FONT = Path("/System/Library/Fonts/Helvetica.ttc")

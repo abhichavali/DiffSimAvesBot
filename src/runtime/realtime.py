@@ -1,28 +1,12 @@
+"""Viewer pacing: step the sim at wall-clock speed (or slow motion) between viewer syncs."""
+
 import time
 
 import mujoco
-import numpy as np
-
-
-def get_id(model, obj_type, name):
-    return mujoco.mj_name2id(model, obj_type, name)
-
-
-def get_first_existing_body_id(model, names):
-    for name in names:
-        body_id = get_id(model, mujoco.mjtObj.mjOBJ_BODY, name)
-        if body_id != -1:
-            return body_id
-    return -1
 
 
 def get_actuator_id(model, name):
     return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
-
-
-def settle(model, data, steps=500):
-    for _ in range(steps):
-        mujoco.mj_step(model, data)
 
 
 class RealtimeSync:
@@ -69,32 +53,3 @@ class RealtimeSync:
         if dt > 0:
             time.sleep(dt)
         viewer.sync()
-
-
-class Logger:
-    def __init__(self, model, body_names, interval=0.5):
-        self.ids = {name: get_id(model, mujoco.mjtObj.mjOBJ_BODY, name) for name in body_names}
-        self.interval = interval
-        self.last_time = 0.0
-
-    def log(self, data, **extras):
-        if data.time - self.last_time < self.interval:
-            return
-
-        parts = [f"t={data.time:5.2f}s"]
-        for key, value in extras.items():
-            parts.append(f"{key}={value:+.3f}")
-        for name, body_id in self.ids.items():
-            parts.append(f"{name}={data.xpos[body_id]}")
-
-        print(" | ".join(parts))
-        self.last_time = data.time
-
-
-def get_free_body_names(model):
-    names = []
-    for body_id in range(1, model.nbody):
-        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
-        if name and model.body_jntnum[body_id] > 0 and model.jnt_type[model.body_jntadr[body_id]] == mujoco.mjtJoint.mjJNT_FREE:
-            names.append(name)
-    return names

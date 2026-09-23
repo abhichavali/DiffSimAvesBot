@@ -57,12 +57,11 @@ from runtime.control_signal import (  # noqa: E402
     load_control_for_morphology,
     ramp_factor,
 )
-from runtime.crank_sync import sync_crank_disks_at_rest  # noqa: E402
+from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
 from runtime.disk_orientation import DiskOrientation  # noqa: E402
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
-from runtime.viewer_runtime import get_actuator_id  # noqa: E402
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest  # noqa: E402
-from runtime.wing_pitch_limit import WingPitchLimiter  # noqa: E402
+from runtime.realtime import get_actuator_id  # noqa: E402
+from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest  # noqa: E402
 
 ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 

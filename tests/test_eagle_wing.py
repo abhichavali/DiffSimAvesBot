@@ -30,7 +30,7 @@ import mujoco  # noqa: E402
 from compile_tg import compile_tg  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.control_signal import load_control_for_morphology  # noqa: E402
-from runtime.crank_sync import sync_crank_disks_at_rest  # noqa: E402
+from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
 from runtime.eagle_drive import (  # noqa: E402
     CrankDrive,
     calibrate_stroke,
@@ -601,7 +601,7 @@ def test_malformed_bones_section_is_rejected(tmp_path, pattern, replacement):
 def test_the_two_wings_stay_in_phase(tmp_path):
     """Both shoulders must beat together for the whole run, not just at t=0.
 
-    crank_sync matches the L/R cranks once at startup and nothing held them
+    sync_crank_disks_at_rest matches the L/R cranks once at startup and nothing held them
     there: each side integrates its own velocity command against its own tendon
     load, so the phase walked off ~0.014 deg/beat — open-loop, so it only grows,
     and the wings are plainly out of phase after a few thousand cycles. The right

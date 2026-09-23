@@ -20,14 +20,13 @@ import numpy as np
 from optimize_control import _INTEGRATORS, setup, set_unsteady_aero
 from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology
-from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.crank import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime as maero
 from runtime.mjx import rollout as mroll
 from runtime.mjx import wing_pitch as mwing
 from runtime.morphology_runtime import DESIGNS_DIR, load_design_morphology
-from runtime.viewer_runtime import get_actuator_id
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
-from runtime.wing_pitch_limit import WingPitchLimiter
+from runtime.realtime import get_actuator_id
+from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
 
 
 def norm(x) -> float:

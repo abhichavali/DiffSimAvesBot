@@ -45,10 +45,10 @@ import numpy as np
 import flying
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
-from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.crank import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
+from runtime.wing_pitch import calibrate_wing_pitch_at_rest
 from runtime.mjx import aero_runtime, rollout as mroll, wing_pitch as mwp
 
 N_FEAT = 12
@@ -149,8 +149,8 @@ def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_sub
 def measure_mean_lift(tg_path: Path, scene_bench: Path, *, ncyc=6) -> float:
     """Mean grounded-bench aero lift over ncyc flap cycles (pins the body)."""
     from runtime.aero import AeroBladeRuntime
-    from runtime.wing_pitch_limit import WingPitchLimiter
-    from runtime.viewer_runtime import get_actuator_id
+    from runtime.wing_pitch import WingPitchLimiter
+    from runtime.realtime import get_actuator_id
     import os
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_bench)

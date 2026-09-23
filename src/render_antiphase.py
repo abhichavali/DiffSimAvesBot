@@ -1,6 +1,6 @@
 """Render the left/right wings driven out of phase, sweeping the phase as it goes.
 
-The two shoulders normally start from one matched crank angle (crank_sync), so
+The two shoulders normally start from one matched crank angle (runtime.crank), so
 they beat together. Every disk integrates the same velocity command, so an
 offset on the right cranks is a persistent L/R phase difference -- 180 deg =
 wings in opposite phase.
@@ -34,11 +34,10 @@ from morphology.tg_parser import load_morphology
 from render_configs import TIP_SITES, WING_COLORS, draw_aero_arrows, draw_trail, smoothstep
 from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
-from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.crank import sync_crank_disks_at_rest
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.viewer_runtime import get_actuator_id
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
-from runtime.wing_pitch_limit import WingPitchLimiter
+from runtime.realtime import get_actuator_id
+from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
 
 ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 

@@ -66,7 +66,7 @@ multiplicative knob; rest length is arithmetic) and tunes the 12 **mirrored** pa
 and the two shoulders carry identical torque. Costs almost nothing: CPU baseline
 62.6 W/N locked vs 63.3 W/N unlocked. Check: `uv run python opt/test_wing_lock.py`.
 
-This also needed a real bug fixed in `src/runtime/crank_sync.py`: the sync paired
+This also needed a real bug fixed in `src/runtime/crank.py`: the sync paired
 `L_t{a}` with `R_t{b}` across the sigma station swap (1↔4) and copied the angle
 **unnegated**, which took a mirror-correct settled state (+0.330° / −0.330°) and
 un-mirrored it. `R_t{s}_disk` is the Y-mirror of `L_t{s}_disk` at the *same* station,

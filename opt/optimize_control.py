@@ -49,11 +49,11 @@ from compile_tg import compile_tg
 from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
-from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.crank import sync_crank_disks_at_rest
 from runtime.morphology_runtime import LEGACY_BASELINE_TG
 from runtime.mjx import aero_runtime, rollout, wing_pitch
 from runtime.mjx.rollout import _match_dtypes
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
+from runtime.wing_pitch import calibrate_wing_pitch_at_rest
 
 WINGTIP_SITES = ("L_wing_aero_blade_04", "R_wing_aero_blade_04")  # L/R tip, full 3D stroke
 
@@ -577,8 +577,8 @@ def cpu_validate_design(scene_path, ctrl_params, tendon_arrays, integrator,
     a,b modulation depths (cmd = a0*(1 + sum a_n cos + b_n sin)).
     """
     from runtime.aero import AeroBladeRuntime
-    from runtime.viewer_runtime import get_actuator_id
-    from runtime.wing_pitch_limit import WingPitchLimiter
+    from runtime.realtime import get_actuator_id
+    from runtime.wing_pitch import WingPitchLimiter
 
     a0, a, b, omega = ctrl_params
     a = np.asarray(a); b = np.asarray(b); harm = np.arange(1, len(a) + 1)

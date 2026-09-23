@@ -70,18 +70,16 @@ import view_eagle as _view_eagle  # noqa: E402
 import view_fixed_frequency as _view_ff  # noqa: E402
 from compile_tg import compile_tg  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
+from morphology.wing_geometry import load_default_wing_geometry as wing_geometry  # noqa: E402
 from opt import optimize_control as _oc  # noqa: E402
-from runtime.aero import RHO_AIR, AeroBladeRuntime as CpuAero  # noqa: E402
+from runtime.aero import RHO_AIR, AeroBladeRuntime as CpuAero, aerodynamics as cpu_aero_strip  # noqa: E402
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor  # noqa: E402
-from runtime.crank_sync import sync_crank_disks_at_rest  # noqa: E402
+from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
 from runtime.mjx import aero as _mjx_aero, aero_runtime as _mjx_aero_rt  # noqa: E402
 from runtime.mjx import rollout as _mjx_rollout, wing_pitch as _mjx_pitch  # noqa: E402
 from runtime.morphology_runtime import load_design_morphology  # noqa: E402
 from runtime.runtime_config import get_control_parameters, load_runtime_config  # noqa: E402
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest  # noqa: E402
-from runtime.wing_pitch_limit import WingPitchLimiter as CpuPitch  # noqa: E402
-from runtime.aero import aerodynamics as cpu_aero_strip  # noqa: E402
-from morphology.wing_geometry import load_default_wing_geometry as wing_geometry  # noqa: E402
+from runtime.wing_pitch import WingPitchLimiter as CpuPitch, calibrate_wing_pitch_at_rest  # noqa: E402
 
 cpu_validate = _oc.cpu_validate_design
 set_unsteady_aero = _oc.set_unsteady_aero

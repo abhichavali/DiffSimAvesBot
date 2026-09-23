@@ -46,7 +46,7 @@ class CrankDrive:
     """Command every crank disk, and hold the t1/t4 offset that picks the flap mode.
 
     ``crank_phase_lag`` is the eagle knob: it selects which compliant mode of the
-    tendon network the two counter-rotating cranks excite. ``crank_sync`` sets it
+    tendon network the two counter-rotating cranks excite. ``runtime.crank`` sets it
     once at t=0 and its docstring claims the offset then stays put because "both
     integrate the same speed". They do not — the two disks are velocity servos
     sitting at different points of the tendon load cycle, so their achieved rates
@@ -59,7 +59,7 @@ class CrankDrive:
     command to hold the sum at its startup value holds the lag with no effect on
     the stroke itself.
 
-    The two shoulders drift apart the same way and for the same reason. ``crank_sync``
+    The two shoulders drift apart the same way and for the same reason. ``runtime.crank``
     matches them once at t=0 and its docstring claims they then "begin together",
     but nothing holds them there: each side integrates its own velocity command
     against its own tendon load, and the L/R phase walks off at ~0.014 deg per
@@ -293,7 +293,7 @@ def calibrate_stroke(
     flexing the wing moves its mass inboard, which changes what the strut does,
     so one pass leaves a residual. ``calibrated_drive`` does that loop for you.
     """
-    from runtime.crank_sync import sync_crank_disks_at_rest
+    from runtime.crank import sync_crank_disks_at_rest
 
     data = mujoco.MjData(model)
     # Explicit lag: sync_crank_disks_at_rest otherwise re-reads MORPHOLOGY_PATH,

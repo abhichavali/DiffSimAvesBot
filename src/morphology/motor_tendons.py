@@ -78,7 +78,7 @@ def measure_motor_tendon_ranges(
     data = mujoco.MjData(model)
 
     try:
-        from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
+        from runtime.wing_pitch import calibrate_wing_pitch_at_rest
 
         calibrate_wing_pitch_at_rest(model, data, settle_steps=settle_steps)
 

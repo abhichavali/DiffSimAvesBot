@@ -602,7 +602,7 @@ way. (Harness + raw data: `opt/harmonic_sweep.py`, `opt/harmonic_sweep_006.log`,
 `opt/harmonic_sweep_xdt.log` in the worktree.)
 
 **Crank phase lag** (`crank_phase_lag`: t4-vs-t1 crank qpos offset, sign-flipped on R;
-`src/runtime/crank_sync.py`): a structural parameter of the limit cycle — persistent
+`src/runtime/crank.py`): a structural parameter of the limit cycle — persistent
 under the shared velocity command, no beat risk. Sweep on it009p (euler@0.06, 24
 cycles): torque valley flat at 0–6° (154.4), then a **lift** knob at ~+1.6 mN/deg
 (+12°: 157.4 pk / 355 lift; +30°: 172.7/378; collapse past 60°). Run 6 tested the

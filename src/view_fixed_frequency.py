@@ -21,12 +21,11 @@ from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control, load_control_for_morphology, ramp_factor
-from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.crank import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.viewer_runtime import RealtimeSync, get_actuator_id
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
-from runtime.wing_pitch_limit import WingPitchLimiter
+from runtime.realtime import RealtimeSync, get_actuator_id
+from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
 
 
 ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")

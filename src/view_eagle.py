@@ -31,11 +31,11 @@ from compile_tg import compile_tg
 from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
-from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.crank import sync_crank_disks_at_rest
 from runtime.eagle_drive import CrankDrive, calibrated_drive, check_stable, wing_plane_roll
 from runtime.morphology_runtime import EAGLE_TG
 from runtime.wing_cables import CABLE_TAGS, apply_tension, cable_names, release_fold_servos
-from runtime.viewer_runtime import RealtimeSync
+from runtime.realtime import RealtimeSync
 
 
 def _tension_cables(model, morph, args) -> None:
@@ -113,7 +113,7 @@ def park_cranks(model, data, park_rad: float) -> None:
 
     The two cranks on a shoulder counter-rotate and the right shoulder mirrors the
     left, so the same advance in the world is the opposite step in qpos on three
-    of the four disks — the same rule ``crank_sync.apply_crank_phase_lag`` follows
+    of the four disks — the same rule ``crank.apply_crank_phase_lag`` follows
     for the t4 lag. Get it wrong and the wings park in different postures.
     """
     for side in ("L", "R"):

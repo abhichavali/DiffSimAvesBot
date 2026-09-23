@@ -39,12 +39,11 @@ import flying
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.aero import AeroBladeRuntime
-from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.crank import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.viewer_runtime import RealtimeSync, get_actuator_id
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
-from runtime.wing_pitch_limit import WingPitchLimiter
+from runtime.realtime import RealtimeSync, get_actuator_id
+from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
 from hover_policy import HoverCfg, hover_features, policy_commands, level_stroke_plane
 
 ACT = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")

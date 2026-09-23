@@ -1,7 +1,7 @@
 """Synchronize the left/right crank disks to a common rest phase at startup.
 
-The settle pass in ``load_model`` steps the model for ~2000 frames with no motor
-command. The velocity-driven disks creep a few degrees under tendon/gravity load
+The rest settle (``wing_pitch.calibrate_wing_pitch_at_rest``) steps the model for
+~2000 frames with no motor command. The velocity-driven disks creep a few degrees under tendon/gravity load
 and end up at slightly different angles *and* at nonzero speed, asymmetrically
 between the two shoulders. The result: when the flap ramp begins the L/R cranks
 are already out of phase and mid-spin, so the wings appear to start at different

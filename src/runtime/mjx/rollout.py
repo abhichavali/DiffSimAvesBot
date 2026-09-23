@@ -1,7 +1,7 @@
 """Scan-based MJX rollout: motor drive + pitch + aero + ``mjx.step``.
 
 Composes the migrated force sources into one jittable, differentiable rollout,
-mirroring the CPU loop in ``run_hanging_poc`` / ``viewer_runtime.step_and_sync``:
+mirroring the CPU loop in ``realtime.RealtimeSync.step_and_sync``:
 each step zeroes ``qfrc_applied``, sets the ramped motor ``ctrl``, adds the
 dead-zone pitch torque (:mod:`runtime.mjx.wing_pitch`) and the blade-element aero
 force (:mod:`runtime.mjx.aero_runtime`), then steps the physics. The aero

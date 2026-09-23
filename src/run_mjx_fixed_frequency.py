@@ -21,10 +21,10 @@ from compile_tg import compile_tg
 from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
-from runtime.crank_sync import sync_crank_disks_at_rest
+from runtime.crank import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime, rollout, wing_pitch
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
+from runtime.wing_pitch import calibrate_wing_pitch_at_rest
 
 
 def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) -> None:
