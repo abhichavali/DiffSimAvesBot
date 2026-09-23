@@ -75,7 +75,7 @@ def _add_visual(parent: ET.Element) -> None:
     ET.SubElement(visual, "headlight", diffuse="0.6 0.6 0.6", ambient="0.3 0.3 0.3", specular="0 0 0")
     ET.SubElement(visual, "rgba", haze="0.15 0.25 0.35 1")
     # offwidth/offheight raise the offscreen framebuffer above MuJoCo's 640x480
-    # default so the headless Renderer (mjx render.py / live_viewer.py) can render
+    # default so the headless Renderer (src/demos/render_*.py, view_eagle --gif) can render
     # up to 1080p without "Image width > framebuffer width" errors.
     ET.SubElement(
         visual, "global", azimuth="160", elevation="-20", offwidth="1920", offheight="1080"

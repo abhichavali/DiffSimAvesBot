@@ -61,7 +61,7 @@ that is `jit`/`vmap`-able and differentiable for gradient-based optimization. Th
 CPU path is unchanged and is the reference the port is validated against.
 
 - **Modules**: `wing_pitch.py`, `aero.py` (+ `AeroParams` pytree), `aero_runtime.py`,
-  `rollout.py` (`simulate(...)` / `rollout(...)`), `render.py`.
+  `rollout.py` (`simulate(...)` / `rollout(...)`).
 - **Autodiff**: forward mode (`jax.jacfwd`) works as-is; reverse mode (`jax.grad`)
   needs `rollout.set_reverse_mode_solver(model)` / `simulate(..., differentiable=True)`.
   **Geometry params (radius/attach/offsets) are not differentiable** (host-side compiler).
@@ -71,10 +71,8 @@ CPU path is unchanged and is the reference the port is validated against.
   (own `.venv`). Repo is **private** → sync with `rsync` (not `git clone`).
   Instances get evicted often → **`docs/vast_migration.md`** is the quick runbook
   for spinning up a fresh box and re-syncing.
-- **Viewer**: headless EGL render → inline video (`notebooks/mjx_viewer.ipynb`,
-  kernel `tensegrity-mjx`); plus a **live** interactive WebSocket pixel-stream
-  viewer (`src/runtime/mjx/live_viewer.py`, `notebooks/mjx_live_viewer.ipynb`)
-  reached via SSH tunnel (no WebRTC — vast is TCP-only).
+- **Renders**: headless MP4 demos in `src/demos/render_*.py` (`--self-check` asserts
+  without rendering).
 
 **Read `docs/usage.md` before doing MJX, GPU-server, or viewer work** — it has the
 module APIs, autodiff/solver details, MJCF-prep rationale, gotchas, and exact commands.
