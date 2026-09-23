@@ -8,7 +8,7 @@ the same `bird =` tag. The directory name is the design name. Tool defaults are
 the constants in `src/runtime/morphology_runtime.py` (`DEFAULT_HUMMER_TG`, ...).
 
 Peak torque is the CPU certification number: worst case over integrators/dt, exact
-per-cycle peaks (see `opt/ROBUST_CODESIGN_METHODOLOGY.md`).
+per-cycle peaks (see `docs/ROBUST_CODESIGN_METHODOLOGY.md`).
 
 | design | bird | what it is | lineage | key numbers | default for |
 |---|---|---|---|---|---|

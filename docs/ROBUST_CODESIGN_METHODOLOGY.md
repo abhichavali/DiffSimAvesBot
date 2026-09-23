@@ -1,5 +1,10 @@
 # Robust hover co-design: methodology & replication log
 
+> **Historical log.** Commands are as run during the campaign. Most run scripts,
+> warm-start JSONs and run dirs it names are not in the tree (the committed ones are in
+> git history before the refactor, e.g. `4889063`). Design paths point at `designs/`
+> (see `designs/README.md`).
+
 **Date**: 2026-07-07/14. **Branches**: `june-26-demo` (old campaign, §1–10) →
 `fixed-codesign` worktree (fixed-protocol campaign, §11–14). **Goal**: starting from the
 hand-tuned hover design, use Adam (via MJX differentiable simulation) to co-optimize a
