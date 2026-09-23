@@ -17,6 +17,7 @@ import mujoco
 import mujoco.viewer
 
 from compile_tg import compile_tg
+from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from runtime.aero_runtime import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control, load_control_for_morphology, ramp_factor
@@ -52,6 +53,7 @@ def main() -> None:
     compile_tg(args.tg, args.scene, color_structural_tendons=args.color)
 
     morph = load_morphology(args.tg)
+    require_bird(morph, *PLATE_BIRDS, tool="view_fixed_frequency")
     model = mujoco.MjModel.from_xml_path(str(args.scene))
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)

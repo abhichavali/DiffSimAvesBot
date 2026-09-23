@@ -28,6 +28,7 @@ import mujoco
 import numpy as np
 
 from compile_tg import compile_tg
+from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
@@ -190,8 +191,7 @@ def build(args):
     os.environ["MUJOCO_XML_PATH"] = str(args.scene)
     compile_tg(args.tg, args.scene)
     morph = load_morphology(args.tg)
-    if morph.wing.bones is None:
-        raise SystemExit(f"{args.tg} has no `bones:` section — that is the hummingbird plate wing")
+    require_bird(morph, "eagle", tool="view_eagle")
     control = load_control_for_morphology(args.tg)
     model = mujoco.MjModel.from_xml_path(str(args.scene))
     _tension_cables(model, morph, args)

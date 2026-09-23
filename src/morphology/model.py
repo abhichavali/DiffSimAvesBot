@@ -7,6 +7,21 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
+#: Every .tg carries `bird = <tag>`; it says which rig the file describes.
+BIRDS = ("hummer", "swift", "eagle")
+#: The flat plate wing on the tensegrity shoulder: the fixed-frequency runners,
+#: the plotting GUI and the codesign optimizers are all plate-wing tools.
+#: `eagle` is the three-linkage bone wing (design/eagle.tg, src/view_eagle.py).
+PLATE_BIRDS = ("hummer", "swift")
+
+
+def require_bird(morph: "Morphology", *allowed: str, tool: str = "this tool") -> None:
+    """Refuse a design the tool was not written for; the .tg's `bird` tag decides."""
+    if morph.bird not in allowed:
+        raise ValueError(
+            f"{tool} drives {' / '.join(allowed)} designs, but {morph.name} is tagged bird = {morph.bird or '(none)'}"
+        )
+
 
 class StrutRole(str, Enum):
     FIXED = "FIXED"
@@ -414,6 +429,7 @@ class Morphology:
     """Complete machine description — parsed from ``*.tg``, compiled to MJCF."""
 
     name: str = "bi-shoulder"
+    bird: str = ""  # one of BIRDS; required in every .tg
     world: World = field(default_factory=World)
     arc: StrutArc = field(default_factory=StrutArc)
     mobile: StrutInstance = field(
@@ -429,6 +445,16 @@ class Morphology:
     wing: Wing = field(default_factory=Wing)
 
     def validate(self) -> None:
+        if self.bird not in BIRDS:
+            raise ValueError(
+                f"{self.name}: missing or unknown bird tag {self.bird!r}; put "
+                "`bird = hummer`, `bird = swift` or `bird = eagle` at the top of the .tg"
+            )
+        if (self.bird == "eagle") != (self.wing.bones is not None):
+            raise ValueError(
+                f"{self.name}: bird = {self.bird} but the wing "
+                + ("has a `bones:` section (that is the eagle wing)" if self.wing.bones else "is the flat plate (eagle needs `bones:`)")
+            )
         if len(self.arc.stations_deg) != 4:
             raise ValueError("arc.stations_deg must have exactly 4 angles")
         if len(self.tendons.generators) != 6:

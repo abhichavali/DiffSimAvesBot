@@ -1,3 +1,4 @@
+bird = eagle
 # Stroke rate. a0 is the crank velocity command (rad/s); the disks are velocity
 # servos, so stroke frequency = a0 / 2pi. fundamental_frequency is the phase
 # reference the runners and plots use and must track it.

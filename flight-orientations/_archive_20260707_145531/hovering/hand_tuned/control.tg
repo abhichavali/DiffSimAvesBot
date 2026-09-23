@@ -1,3 +1,4 @@
+bird = hummer
 # fundamental_frequency is the phase/cycle reference for the plots, not the drive
 # (a0 is the velocity command). Hand-tuned: a0 63 -> 67 rad/s buys back lift lost
 # to the softened structural tendons (shoulder.tg) at ~+1 mNm peak torque; the

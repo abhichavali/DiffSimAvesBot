@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -8,7 +9,9 @@ import pickle
 import subprocess
 import sys
 import tempfile
+import time
 import tkinter as tk
+from collections import deque
 from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import Callable
@@ -26,12 +29,14 @@ from matplotlib.ticker import MultipleLocator
 
 from compile_tg import compile_tg
 from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
+from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 import runtime.aero_runtime as aero_runtime
 from runtime.aero_runtime import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control, load_control_for_morphology, ramp_factor
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
+from runtime.eagle_drive import CrankDrive, wing_plane_roll
 from runtime.morphology_runtime import load_design_morphology
 from runtime.viewer_runtime import get_actuator_id
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
@@ -101,15 +106,17 @@ def _short_path(path: str) -> str:
 def coupled_control_path(tg_path: Path) -> Path:
     """Control file referenced by a morphology, resolved relative to it."""
     morph = load_morphology(tg_path)
+    require_bird(morph, *PLATE_BIRDS, tool="the plotting GUI")
     control_path = Path(morph.motors.control_file)
     if not control_path.is_absolute():
         control_path = tg_path.parent / control_path
     return control_path
 
 
-def design_tab_title(tg_path: str) -> str:
+def design_tab_title(tg_path: str, bird: str = "") -> str:
     path = Path(tg_path)
-    return path.parent.name if path.name == "shoulder.tg" else path.stem
+    title = path.parent.name if path.name == "shoulder.tg" else path.stem
+    return f"{title} · {bird}" if bird else title
 
 
 def embed_figure(figure: Figure, master: ttk.Frame, **pack_options) -> FigureCanvasTkAgg:
@@ -600,6 +607,314 @@ def wing_path_correlation(
     return corr(pa.ravel(), pb.ravel()), per_axis
 
 
+# ---------------------------------------------------------------------------
+# Impulse response: spin the disks at one speed, kick a shaft, watch the phases.
+
+REF_MOTOR = "L_motor_t1"
+MOTOR_COLORS = {"L_motor_t1": "#1f77b4", "L_motor_t4": "#ff7f0e", "R_motor_t1": "#1f77b4", "R_motor_t4": "#ff7f0e"}
+SIDE_COLORS = {"L": "#1f77b4", "R": "#d62728"}
+
+
+def wrap_deg(angle, center: float = 180.0):
+    """Wrap degrees into [center-180, center+180): center 180 -> [0, 360), 0 -> [-180, 180)."""
+    return (angle - center + 180.0) % 360.0 + center - 180.0
+
+
+def cut_wraps(phase: np.ndarray, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Insert NaNs where a [0, 360) phase trace wraps, so a line plot doesn't draw the flyback."""
+    cut = np.flatnonzero(np.diff(phase) < -180.0) + 1
+    return np.insert(phase, cut, np.nan), np.insert(values, cut, np.nan)
+
+
+class ImpulseSim:
+    """Live sim: crank disks at one constant speed, plus a torque pulse through chosen servos.
+
+    Phase is each crank's travel from the synced rest angle in its OWN rotation
+    sense (the actuator gear encodes the counter-rotation and the L/R mirror), so
+    every motor reads 0 at sync and the .tg crank_phase_lag shows as the t4 motors
+    sitting at -lag. Relative phase is against ``REF_MOTOR``.
+
+    The motors are velocity servos, and a velocity loop cancels a torque added at
+    its shaft within one step, so an additive disturbance never reaches the wing.
+    The pulse therefore opens the loop: for its duration the pulsed servo outputs
+    the torque-vs-phase profile it produced over its last cycle (the nominal
+    drive) plus the pulse, and the wing feels the difference. Afterwards the
+    velocity loop closes again, blended back in over the pulse's own duration so
+    the re-lock is a finite-bandwidth recovery rather than a one-step slam.
+
+    Nothing in the plain drive regulates phase: the t1 and t4 cranks carry
+    different mean loads, so their servo slip differs and the .tg's crank lag
+    walks off (~0.1 deg/cycle on the flagship), and any phase a pulse shifts
+    stays shifted. ``hold_phase`` switches in the eagle's ``CrankDrive`` trim,
+    which pins q_t1 + q_t4 (and the L/R pair) at the synced values, so the lag
+    holds and a pulse's phase step decays back over ~1/GAIN seconds.
+    """
+
+    SAMPLE_EVERY = 4  # physics steps per recorded sample (~0.5 ms at the 0.13 ms step)
+    MAX_CYCLES = 200  # history kept for the plots
+    #: Per-wing kinematics in degrees, the same definitions the eagle's stroke
+    #: calibration uses, mirrored so a symmetric pose reads the same on both wings:
+    #:   sweep      - span direction in the horizontal plane: 0 straight out, + forward
+    #:   elevation  - span direction above the horizontal, + up
+    #:   roll       - plate rotation about the span (wing_plane_roll): 0 level, + nose-up
+    #:   aoa        - angle between the plate and its own relative wind at 62% span (unsigned)
+    #: The wingtip's fore-aft and height positions ride along (not plotted) so the
+    #: stroke-plane angle can be read off the two stroke reversals, Ellington-style.
+    KINEMATICS = ("sweep", "elevation", "roll", "aoa")
+    FORWARD = np.array([-1.0, 0.0, 0.0])  # .tg convention: +x is the trailing edge, so -x is cranial
+    AOA_BLADE = "aero_blade_03"  # (2 + 0.5) / 4 = 62.5% span, the nearest strip to the usual 70%
+    TIP_SITE = "aero_blade_04"
+
+    def __init__(self, tg_path: Path, scene_path: Path, control_path: Path | None,
+                 settle_periods: float, speed: float | None = None) -> None:
+        prepare_scene(tg_path, scene_path)
+        self.morph = load_morphology(tg_path)
+        self.model = model = mujoco.MjModel.from_xml_path(str(scene_path))
+        self.data = data = mujoco.MjData(model)
+        calibrate_wing_pitch_at_rest(model, data)
+        sync_crank_disks_at_rest(model, data)
+        control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
+        self.speed = control.a0 if speed is None else float(speed)  # rad/s commanded on every disk
+        self.period = math.tau / abs(self.speed) if self.speed else control.period
+        self.settle_periods = float(settle_periods)
+        self.aero = AeroBladeRuntime(model)
+        self.pitch = WingPitchLimiter(model, data)
+
+        self.motors = tuple(name for name in ACTUATORS if get_actuator_id(model, name) >= 0)
+        if not self.motors:
+            raise ValueError("no crank motors in this design")
+        self.aid = {name: get_actuator_id(model, name) for name in self.motors}
+        self.ctrl_sign = math.copysign(1.0, self.morph.motors.motor_direction * self.speed) if self.speed else 1.0
+        self.qadr: dict[str, int] = {}
+        self.dof: dict[str, int] = {}
+        self.direction: dict[str, float] = {}
+        self.kv: dict[str, float] = {}
+        self.gear: dict[str, float] = {}
+        for name in self.motors:
+            prefix, station = name.split("_motor_")
+            jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{station}_disk_hinge")
+            if jid < 0:
+                raise ValueError(f"missing disk hinge for {name}")
+            aid = self.aid[name]
+            self.qadr[name] = int(model.jnt_qposadr[jid])
+            self.dof[name] = int(model.jnt_dofadr[jid])
+            self.kv[name] = float(model.actuator_gainprm[aid][0]) or 1.0
+            self.gear[name] = float(model.actuator_gear[aid][0]) or 1.0
+            self.direction[name] = math.copysign(1.0, self.gear[name] * self.ctrl_sign)
+        self.ref = REF_MOTOR if REF_MOTOR in self.aid else self.motors[0]
+        self.theta_ref = float(data.qpos[self.qadr[self.ref]])
+        self.hold_phase = False  # off: the plain drive every hummer runner uses
+        self.lock = CrankDrive(model, self.morph, control)
+        self.lock.capture(data)  # the synced rest phases are the ones to hold, however late it is switched on
+
+        self.sides: dict[str, tuple[int, int, int]] = {}  # side -> (wing body, AoA blade site, tip site)
+        self.outboard: dict[str, np.ndarray] = {}  # world direction the span points at rest
+        for side in ("L", "R"):
+            bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{side}_wing")
+            sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, f"{side}_wing_{self.AOA_BLADE}")
+            tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, f"{side}_wing_{self.TIP_SITE}")
+            if bid >= 0 and sid >= 0 and tid >= 0:
+                self.sides[side] = (bid, sid, tid)
+                span = np.asarray(data.xmat[bid]).reshape(3, 3)[:, 2]
+                self.outboard[side] = np.array([0.0, math.copysign(1.0, span[1]), 0.0])
+        self._jacp = np.zeros((3, model.nv))
+        self._jacr = np.zeros((3, model.nv))
+
+        self.pulse: dict[str, float] = {}  # motor -> pulse torque (N m) while it is on
+        self.nominal: dict[str, Callable[[float], float]] = {}  # motor -> last cycle's torque vs phase (N m)
+        self.pulse_end = -math.inf
+        self.recovery = 0.0  # seconds after pulse_end over which the velocity loop is blended back in
+        self.pulses: list[tuple[float, float, float, tuple[str, ...]]] = []  # (t0, t1, mN m, motors)
+        self.applied = {name: 0.0 for name in self.motors}  # actuator-frame pulse torque this step (N m)
+        self.reference: dict[str, np.ndarray | float] | None = None  # undisturbed stroke, see capture_reference
+
+        keys = ["t"]
+        for name in self.motors:
+            keys += [f"phase:{name}", f"torque:{name}", f"applied:{name}"]
+        for side in self.sides:
+            keys += [f"{key}:{side}" for key in (*self.KINEMATICS, "tipf", "tipz")]
+        maxlen = int(self.MAX_CYCLES * self.period / (self.SAMPLE_EVERY * model.opt.timestep)) + 1
+        self.hist = {key: deque(maxlen=maxlen) for key in keys}
+
+        self.drive_start = data.time
+        self._steps = 0
+        self._carry = 0.0
+        for _ in range(math.ceil(self.settle_periods * self.period / model.opt.timestep)):
+            self.step()
+        self.t0 = data.time
+        self.record()
+
+    # -- physics ------------------------------------------------------------
+    def step(self) -> None:
+        model, data = self.model, self.data
+        data.qfrc_applied[:] = 0.0
+        data.ctrl[:] = 0.0
+        self.aero.apply(model, data)
+        self.pitch.apply(model, data)
+        ramp = ramp_factor(data.time, self.drive_start, self.settle_periods * self.period)
+        ctrl = ramp * self.morph.motors.motor_direction * self.speed
+        t = data.time
+        for name in self.motors:
+            data.ctrl[self.aid[name]] = ctrl
+        if self.hold_phase:
+            self.lock.trim(data)
+        for name in self.motors:
+            aid = self.aid[name]
+            tau = 0.0
+            if name in self.pulse and t < self.pulse_end + self.recovery:
+                # The servo's force is kv*(ctrl - gear*qvel): pick the ctrl that makes it
+                # exactly what we want. Pulse: last cycle's profile plus the pulse (loop
+                # open). Recovery: blend from that profile back to the velocity loop.
+                gear_qvel = self.gear[name] * float(data.qvel[self.dof[name]])
+                nominal = self.nominal[name](self.phase_deg(name))
+                if t < self.pulse_end:
+                    tau = self.pulse[name] * self.ctrl_sign  # actuator frame: + pushes forward
+                    want = nominal + tau
+                else:
+                    s = (t - self.pulse_end) / self.recovery
+                    want = (1.0 - s) * nominal + s * self.kv[name] * (ctrl - gear_qvel)
+                data.ctrl[aid] = want / self.kv[name] + gear_qvel  # open loop: no trim on this shaft
+            self.applied[name] = tau
+        mujoco.mj_step(model, data)
+        self._steps += 1
+
+    def advance(self, seconds: float) -> None:
+        """Step ``seconds`` of sim time, recording a sample every SAMPLE_EVERY steps."""
+        dt = self.model.opt.timestep
+        n = int((seconds + self._carry) / dt)
+        self._carry = seconds + self._carry - n * dt
+        for _ in range(n):
+            self.step()
+            if self._steps % self.SAMPLE_EVERY == 0:
+                self.record()
+
+    def inject(self, torque_mnm: float, duration_ms: float, motors) -> tuple[str, ...]:
+        """Open the loop on ``motors`` for ``duration_ms`` and add ``torque_mnm`` (+ aids rotation)."""
+        motors = tuple(name for name in motors if name in self.aid)
+        self.nominal = {name: self.nominal_profile(name) for name in motors}
+        self.pulse = {name: 1e-3 * torque_mnm for name in motors}
+        self.pulse_end = self.data.time + 1e-3 * duration_ms
+        self.recovery = 1e-3 * duration_ms
+        self.pulses.append((self.time, self.pulse_end - self.t0, torque_mnm, motors))
+        self.capture_reference()
+        return motors
+
+    def nominal_profile(self, name: str) -> Callable[[float], float]:
+        """This servo's torque vs phase over its last cycle, as a periodic interpolant (N m)."""
+        w = self.window(1.0)
+        phase, torque = w[f"phase:{name}"], 1e-3 * w[f"torque:{name}"]
+        if len(phase) < 8:  # barely started: hold what it is doing now
+            hold = float(self.data.actuator_force[self.aid[name]])
+            return lambda _phase: hold
+        order = np.argsort(phase)
+        phase, torque = phase[order], torque[order]
+        return lambda p: float(np.interp(p, phase, torque, period=360.0))
+
+    def capture_reference(self) -> None:
+        """Keep the last full stroke before the pulse; the plots tile it ahead as the undisturbed motion."""
+        t = np.array(self.hist["t"])
+        phase = np.array(self.hist[f"phase:{self.ref}"])
+        wraps = np.flatnonzero(np.diff(phase) < -180.0) + 1
+        if len(wraps) < 2:
+            self.reference = None
+            return
+        a, b = int(wraps[-2]), int(wraps[-1])
+        self.reference = {"t0": float(t[a]), "period": float(t[b] - t[a]), "t": t[a:b] - t[a]}
+        for side in self.sides:
+            for key in self.KINEMATICS:
+                self.reference[f"{key}:{side}"] = np.array(self.hist[f"{key}:{side}"])[a:b]
+
+    # -- readings -----------------------------------------------------------
+    @property
+    def time(self) -> float:
+        return self.data.time - self.t0
+
+    def kinematics(self, side: str) -> dict[str, float]:
+        model, data = self.model, self.data
+        bid, sid, tid = self.sides[side]
+        rot = np.asarray(data.xmat[bid]).reshape(3, 3)
+        normal, span = rot[:, 1], rot[:, 2]
+        out = {
+            "sweep": math.degrees(math.atan2(float(span @ self.FORWARD), float(span @ self.outboard[side]))),
+            "elevation": math.degrees(math.asin(float(np.clip(span[2], -1.0, 1.0)))),
+            "roll": math.degrees(wing_plane_roll(rot, side)),
+        }
+        # relative wind at the blade, in the section plane perpendicular to the span
+        mujoco.mj_jacSite(model, data, self._jacp, self._jacr, sid)
+        vel = self._jacp @ data.qvel
+        vel -= float(vel @ span) * span
+        speed = float(np.linalg.norm(vel))
+        # Blank around stroke reversal: with the plate nearly stopped its relative wind
+        # has no direction and the reading pins at 90 deg (mid-stroke is ~2 m/s).
+        out["aoa"] = (
+            math.degrees(math.asin(min(1.0, abs(float(vel @ normal)) / speed))) if speed > 0.3 else math.nan
+        )
+        tip = data.site_xpos[tid]
+        out["tipf"] = 1000.0 * float(tip @ self.FORWARD)
+        out["tipz"] = 1000.0 * float(tip[2])
+        return out
+
+    def stroke_cycle(self, side: str) -> dict[str, float]:
+        """Last period's stroke amplitude (deg, peak-to-peak sweep) and stroke-plane angle (deg).
+
+        The stroke plane is the line through the wingtip at the two stroke reversals,
+        measured from horizontal: + when the forward reversal is the higher one.
+        Both are NaN until a full period is in the history.
+        """
+        w = self.window(1.0)
+        if len(w["t"]) < 0.9 * self.period / (self.SAMPLE_EVERY * self.model.opt.timestep):
+            return {"amplitude": math.nan, "plane": math.nan}
+        sweep = w[f"sweep:{side}"]
+        fwd, aft = int(np.argmax(sweep)), int(np.argmin(sweep))
+        rise = w[f"tipz:{side}"][fwd] - w[f"tipz:{side}"][aft]
+        run = w[f"tipf:{side}"][fwd] - w[f"tipf:{side}"][aft]
+        return {"amplitude": float(sweep[fwd] - sweep[aft]), "plane": math.degrees(math.atan2(rise, run))}
+
+    def phase_deg(self, name: str) -> float:
+        travel = self.direction[name] * (float(self.data.qpos[self.qadr[name]]) - self.theta_ref)
+        return wrap_deg(math.degrees(travel))
+
+    def phases(self) -> dict[str, float]:
+        return {name: self.phase_deg(name) for name in self.motors}
+
+    def relative_deg(self, name: str) -> float:
+        return wrap_deg(self.phase_deg(name) - self.phase_deg(self.ref), 0.0)
+
+    def record(self) -> None:
+        h, data = self.hist, self.data
+        h["t"].append(self.time)
+        for name in self.motors:
+            h[f"phase:{name}"].append(self.phase_deg(name))
+            h[f"torque:{name}"].append(1000.0 * float(data.actuator_force[self.aid[name]]))
+            h[f"applied:{name}"].append(1000.0 * self.applied[name])
+        for side in self.sides:
+            for key, value in self.kinematics(side).items():
+                h[f"{key}:{side}"].append(value)
+
+    def window(self, cycles: float) -> dict[str, np.ndarray]:
+        """The last ``cycles`` commanded periods of history, oldest first."""
+        n = int(cycles * self.period / (self.SAMPLE_EVERY * self.model.opt.timestep)) + 1
+        n = max(1, min(n, len(self.hist["t"])))
+        return {
+            key: np.fromiter(itertools.islice(reversed(dq), n), dtype=float, count=n)[::-1]
+            for key, dq in self.hist.items()
+        }
+
+    def reference_tiled(self, key: str, t_from: float, t_to: float) -> tuple[np.ndarray, np.ndarray]:
+        """The captured stroke repeated over [t_from, t_to] (NaN-separated), for overlaying."""
+        ref = self.reference
+        if ref is None:
+            return np.array([]), np.array([])
+        t0, period = ref["t0"], ref["period"]
+        k_first = max(1, math.floor((t_from - t0) / period))  # the captured cycle itself is real data
+        k_last = math.ceil((t_to - t0) / period)
+        xs, ys = [], []
+        for k in range(k_first, k_last + 1):
+            xs += [t0 + k * period + ref["t"], [np.nan]]
+            ys += [ref[key], [np.nan]]
+        return (np.concatenate(xs), np.concatenate(ys)) if xs else (np.array([]), np.array([]))
+
+
 class DesignPane:
     def __init__(
         self,
@@ -619,6 +934,7 @@ class DesignPane:
 
         self.tg_var = tk.StringVar(value=str(default_tg))
         self.control_var = tk.StringVar(value=str(coupled_control_path(default_tg)))
+        self.bird = load_morphology(default_tg).bird
         self.tg_display = tk.StringVar()
         self.control_display = tk.StringVar()
         self.tg_var.trace_add("write", lambda *_: self.tg_display.set(_short_path(self.tg_var.get())))
@@ -634,16 +950,19 @@ class DesignPane:
         self.plot_tab = ttk.Frame(self.tabs)
         self.work_tab = ttk.Frame(self.tabs)
         self.wing_path_tab = ttk.Frame(self.tabs)
+        self.impulse_tab = ttk.Frame(self.tabs)
         self.viewer_tab = ttk.Frame(self.tabs)
         self.settings_tab = ttk.Frame(self.tabs)
         self.tabs.add(self.plot_tab, text="Phase plots")
         self.tabs.add(self.work_tab, text="Work loops")
         self.tabs.add(self.wing_path_tab, text="Wing path")
+        self.tabs.add(self.impulse_tab, text="Impulse response")
         self.tabs.add(self.viewer_tab, text="Viewer")
         self.tabs.add(self.settings_tab, text="Settings")
         self.viewer_proc: subprocess.Popen | None = None
         self.wing_paths: dict[str, dict] = {}
         self.build_wing_path_tab()
+        self.build_impulse_tab()
         self.build_viewer_tab()
         self.build_settings_tab()
 
@@ -728,6 +1047,239 @@ class DesignPane:
             self.wing_corr.set(f"Path correlation A↔B: overall {overall:+.3f}   (per axis: {axes})")
 
         embed_figure(figure, self.wing_path_plot, side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    IMPULSE_WINDOW_CYCLES = 4.0
+
+    def build_impulse_tab(self) -> None:
+        self.impulse_sim: ImpulseSim | None = None
+        self.impulse_running = False
+        self.impulse_wall = 0.0
+        self.impulse_drawn = 0.0
+        self.impulse_lines: dict[str, object] = {}
+        self.impulse_rate = tk.DoubleVar(value=0.2)
+        self.impulse_torque = tk.DoubleVar(value=100.0)
+        self.impulse_duration = tk.DoubleVar(value=20.0)
+        self.impulse_targets = {name: tk.BooleanVar(value=True) for name in ACTUATORS}
+        self.impulse_hold = tk.BooleanVar(value=False)
+        self.impulse_readout = tk.StringVar(value="")
+
+        bar = ttk.Frame(self.impulse_tab, padding=(12, 10, 12, 0))
+        bar.pack(side=tk.TOP, fill=tk.X)
+        self.impulse_start = ttk.Button(bar, text="Start", width=7, command=self.impulse_toggle)
+        self.impulse_start.pack(side=tk.LEFT)
+        ttk.Button(bar, text="Reset", width=7, command=self.impulse_reset).pack(side=tk.LEFT, padx=(6, 24))
+        ttk.Label(bar, text="Pulse").pack(side=tk.LEFT)
+        ttk.Entry(bar, textvariable=self.impulse_torque, width=7).pack(side=tk.LEFT, padx=(6, 2))
+        ttk.Label(bar, text="mN·m for").pack(side=tk.LEFT)
+        ttk.Entry(bar, textvariable=self.impulse_duration, width=5).pack(side=tk.LEFT, padx=(6, 2))
+        ttk.Label(bar, text="ms on").pack(side=tk.LEFT)
+        for name, var in self.impulse_targets.items():
+            ttk.Checkbutton(bar, text=name.replace("_motor_", " "), variable=var).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(bar, text="Inject  (Cmd-I)", command=self.impulse_inject).pack(side=tk.LEFT, padx=(16, 24))
+        ttk.Label(bar, text="Playback ×").pack(side=tk.LEFT)
+        ttk.Entry(bar, textvariable=self.impulse_rate, width=5).pack(side=tk.LEFT, padx=(6, 24))
+        ttk.Checkbutton(bar, text="Hold crank phase", variable=self.impulse_hold, command=self.impulse_set_hold).pack(
+            side=tk.LEFT
+        )
+        ttk.Label(self.impulse_tab, textvariable=self.impulse_readout, font=("Menlo", 11), padding=(12, 4)).pack(
+            side=tk.TOP, anchor=tk.W
+        )
+
+        plots = ttk.Frame(self.impulse_tab, padding=(12, 0, 12, 12))
+        plots.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        plots.columnconfigure(0, weight=1)
+        plots.columnconfigure(1, weight=1)
+        plots.rowconfigure(0, weight=1)
+        left = ttk.Frame(plots)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        right = ttk.Frame(plots)
+        right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+        fig = Figure(figsize=(7, 7), dpi=100)
+        self.ax_torque, self.ax_rel = fig.subplots(2, 1, height_ratios=[1.6, 1.0])
+        fig.subplots_adjust(left=0.13, right=0.97, bottom=0.08, top=0.94, hspace=0.4)
+        self.impulse_canvas_left = embed_figure(fig, left, side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        fig = Figure(figsize=(7, 7), dpi=100)
+        self.ax_kin = dict(zip(ImpulseSim.KINEMATICS, fig.subplots(4, 1, sharex=True)))
+        fig.subplots_adjust(left=0.12, right=0.97, bottom=0.07, top=0.95, hspace=0.25)
+        self.impulse_canvas_right = embed_figure(fig, right, side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.impulse_style_axes()
+
+    def impulse_style_axes(self) -> None:
+        ax = self.ax_torque
+        ax.set_title("Servo torque vs crank phase")
+        ax.set_xlabel("Crank phase (deg, own rotation, from synced rest)")
+        ax.set_ylabel("Torque (mN·m)")
+        ax.set_xlim(0.0, 360.0)
+        ax.xaxis.set_major_locator(MultipleLocator(45.0))
+        ax.grid(True, alpha=0.3)
+        ax = self.ax_rel
+        ax.set_title(f"Crank phase relative to {REF_MOTOR.replace('_motor_', ' ')}")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("deg")
+        ax.grid(True, alpha=0.3)
+        self.ax_kin["sweep"].set_title("Wing kinematics")
+        self.ax_kin["sweep"].set_ylabel("Sweep (deg, + fwd)")
+        self.ax_kin["elevation"].set_ylabel("Elevation (deg, + up)")
+        self.ax_kin["roll"].set_ylabel("Roll about span (deg)")
+        self.ax_kin["aoa"].set_ylabel("AoA at 62% span (deg)")
+        self.ax_kin["aoa"].set_xlabel("Time (s)")
+        for ax in self.ax_kin.values():
+            ax.grid(True, alpha=0.3)
+
+    def impulse_make_lines(self) -> None:
+        sim = self.impulse_sim
+        lines = self.impulse_lines = {}
+        for ax in (self.ax_torque, self.ax_rel, *self.ax_kin.values()):
+            for artist in list(ax.lines) + list(ax.patches):
+                artist.remove()
+        for name in sim.motors:
+            color = MOTOR_COLORS.get(name, "k")
+            right = name.startswith("R_")
+            style = "--" if right else "-"
+            label = name.replace("_motor_", " ")
+            (lines[f"torque:{name}"],) = self.ax_torque.plot([], [], style, color=color, lw=1.2, label=label)
+            (lines[f"applied:{name}"],) = self.ax_torque.plot([], [], ":", color=color, lw=2.2)
+            (lines[f"now:{name}"],) = self.ax_torque.plot([], [], "o", color=color, ms=7, mfc="white" if right else color)
+            if name != sim.ref:
+                (lines[f"rel:{name}"],) = self.ax_rel.plot([], [], style, color=color, lw=1.2, label=label)
+        for side in sim.sides:
+            for key, ax in self.ax_kin.items():
+                (lines[f"ref:{key}:{side}"],) = ax.plot([], [], ":", color="0.55", lw=1.0)
+                (lines[f"{key}:{side}"],) = ax.plot([], [], color=SIDE_COLORS[side], lw=1.2, label=f"{side} wing")
+        self.ax_torque.legend(loc="upper right", fontsize=8, ncol=len(sim.motors))
+        if len(sim.motors) > 1:
+            self.ax_rel.legend(loc="upper left", fontsize=8)
+        if sim.sides:
+            self.ax_kin["sweep"].legend(loc="upper right", fontsize=8)
+
+    def impulse_set_hold(self) -> None:
+        if self.impulse_sim is not None:
+            self.impulse_sim.hold_phase = bool(self.impulse_hold.get())
+            self.status.set(
+                "Holding crank phase (CrankDrive trim)." if self.impulse_sim.hold_phase else "Plain drive: no phase hold."
+            )
+
+    def impulse_reset(self) -> bool:
+        settle_periods = self.get_settle_periods()
+        if settle_periods is None:
+            return False
+        self.impulse_running = False
+        self.impulse_start.configure(text="Start")
+        self.status.set("Compiling and settling the impulse sim...")
+        self.root.update_idletasks()
+        try:
+            self.impulse_sim = ImpulseSim(
+                Path(self.tg_var.get()), self.scene_path, Path(self.control_var.get()), settle_periods
+            )
+        except Exception as exc:
+            self.status.set(f"Error: {exc}")
+            raise
+        self.impulse_sim.hold_phase = bool(self.impulse_hold.get())
+        self.impulse_make_lines()
+        self.impulse_redraw()
+        self.status.set(
+            f"Impulse sim ready: disks at {self.impulse_sim.speed:g} rad/s "
+            f"({1.0 / self.impulse_sim.period:.2f} Hz) after {settle_periods:g} settle periods. Press Start."
+        )
+        return True
+
+    def impulse_toggle(self) -> None:
+        if self.impulse_sim is None and not self.impulse_reset():
+            return
+        self.impulse_running = not self.impulse_running
+        self.impulse_start.configure(text="Pause" if self.impulse_running else "Start")
+        if self.impulse_running:
+            self.impulse_wall = time.perf_counter()
+            self.impulse_tick()
+
+    def impulse_tick(self) -> None:
+        if not self.impulse_running or self.impulse_sim is None:
+            return
+        now = time.perf_counter()
+        wall = min(now - self.impulse_wall, 0.25)
+        self.impulse_wall = now
+        try:
+            rate = max(0.0, float(self.impulse_rate.get()))
+        except (tk.TclError, ValueError):
+            rate = 0.2
+        try:
+            self.impulse_sim.advance(wall * rate)
+            if now - self.impulse_drawn >= 0.09:  # ~10 fps is plenty for plots; the sim keeps wall pace regardless
+                self.impulse_redraw()
+            self.root.after(15, self.impulse_tick)
+        except tk.TclError:
+            return  # window went away mid-tick
+
+    def impulse_redraw(self) -> None:
+        sim, lines = self.impulse_sim, self.impulse_lines
+        w = sim.window(self.IMPULSE_WINDOW_CYCLES)
+        t = w["t"]
+        ref = w[f"phase:{sim.ref}"]
+        for name in sim.motors:
+            phase, torque, applied = w[f"phase:{name}"], w[f"torque:{name}"], w[f"applied:{name}"]
+            lines[f"torque:{name}"].set_data(*cut_wraps(phase, torque))
+            lines[f"applied:{name}"].set_data(*cut_wraps(phase, np.where(applied != 0.0, applied, np.nan)))
+            lines[f"now:{name}"].set_data([phase[-1]], [torque[-1]])
+            if name != sim.ref:
+                lines[f"rel:{name}"].set_data(t, wrap_deg(phase - ref, 0.0))
+        t_end = max(t[-1], t[0] + 0.5 * sim.period)
+        for side in sim.sides:
+            for key in sim.KINEMATICS:
+                lines[f"{key}:{side}"].set_data(t, w[f"{key}:{side}"])
+                lines[f"ref:{key}:{side}"].set_data(*sim.reference_tiled(f"{key}:{side}", t[0], t_end))
+        for ax in (self.ax_torque, self.ax_rel, *self.ax_kin.values()):
+            if ax is not self.ax_torque:
+                ax.set_xlim(t[0], t_end)
+            ax.relim()
+            ax.autoscale_view(scalex=False)
+        phases = sim.phases()
+        relative = "  ".join(
+            f"{name.replace('_motor_', ' ')} {wrap_deg(phases[name] - phases[sim.ref], 0.0):+.1f}°"
+            for name in sim.motors
+            if name != sim.ref
+        )
+        wings = "   ".join(
+            f"{side}: amp {cyc['amplitude']:.0f}° plane {cyc['plane']:.0f}°"
+            for side in sim.sides
+            for cyc in (sim.stroke_cycle(side),)
+        )
+        self.impulse_readout.set(
+            f"t = {sim.time:7.3f} s   cycle {sim.time / sim.period:5.1f}   "
+            f"phase vs {sim.ref.replace('_motor_', ' ')}:  {relative}   |   stroke {wings}"
+        )
+        self.impulse_canvas_left.draw_idle()
+        self.impulse_canvas_right.draw_idle()
+        self.impulse_drawn = time.perf_counter()
+
+    def impulse_inject(self) -> None:
+        sim = self.impulse_sim
+        if sim is None:
+            self.status.set("Start (or Reset) the impulse sim first.")
+            return
+        try:
+            torque = float(self.impulse_torque.get())
+            duration = float(self.impulse_duration.get())
+        except (tk.TclError, ValueError):
+            self.status.set("Pulse torque and duration must be numbers.")
+            return
+        if duration <= 0:
+            self.status.set("Duration must be positive.")
+            return
+        motors = sim.inject(torque, duration, [name for name, var in self.impulse_targets.items() if var.get()])
+        if not motors:
+            self.status.set("Pick at least one motor to pulse.")
+            return
+        for ax in (self.ax_rel, *self.ax_kin.values()):
+            ax.axvline(sim.time, color="k", ls="--", lw=0.8, alpha=0.5)
+        self.status.set(
+            f"Pulse {torque:+g} mN·m for {duration:g} ms on "
+            f"{', '.join(name.replace('_motor_', ' ') for name in motors)} at t = {sim.time:.3f} s, "
+            f"{sim.ref.replace('_motor_', ' ')} phase {sim.phase_deg(sim.ref):.0f}°."
+        )
+        if not self.impulse_running:
+            self.impulse_redraw()
 
     def build_viewer_tab(self) -> None:
         self.viewer_color = tk.BooleanVar(value=False)
@@ -842,14 +1394,17 @@ class DesignPane:
         )
         if not path:
             return
-        self.tg_var.set(path)
         try:
-            self.control_var.set(str(coupled_control_path(Path(path))))
-            self.refresh_tendon_table()
-            self.on_title_change(design_tab_title(path))
-            self.status.set(f"Design: {Path(path).name} (coupled control loaded)")
+            control = coupled_control_path(Path(path))  # also refuses non-plate-wing birds
         except Exception as exc:
-            self.status.set(f"Loaded morphology, but couldn't resolve coupled control: {exc}")
+            self.status.set(f"Not loaded: {exc}")
+            return
+        self.tg_var.set(path)
+        self.control_var.set(str(control))
+        self.bird = load_morphology(Path(path)).bird
+        self.refresh_tendon_table()
+        self.on_title_change(design_tab_title(path, self.bird))
+        self.status.set(f"Design: {Path(path).name} ({self.bird}; coupled control loaded)")
 
     def choose_control(self) -> None:
         path = filedialog.askopenfilename(
@@ -857,9 +1412,18 @@ class DesignPane:
             initialdir=str(Path(self.control_var.get()).parent),
             filetypes=[("Control", "*.tg")],
         )
-        if path:
-            self.control_var.set(path)
-            self.status.set(f"Control: {Path(path).name}")
+        if not path:
+            return
+        try:
+            control_bird = load_control(Path(path)).bird
+        except Exception as exc:
+            self.status.set(f"Not loaded: {exc}")
+            return
+        if control_bird != self.bird:
+            self.status.set(f"Not loaded: {Path(path).name} is tagged bird = {control_bird}, this design is {self.bird}.")
+            return
+        self.control_var.set(path)
+        self.status.set(f"Control: {Path(path).name}")
 
     def reload_design(self) -> None:
         tg_path = Path(self.tg_var.get())
@@ -938,6 +1502,8 @@ class DesignPane:
         selected = self.tabs.select()
         if selected == str(self.work_tab):
             self.plot_work_loops()
+        elif selected == str(self.impulse_tab):
+            self.impulse_reset()
         elif selected == str(self.wing_path_tab):
             slots = list(self.wing_paths) or ["A"]
             for slot in slots:
@@ -1275,6 +1841,8 @@ class PlotGui:
         self.root.bind_all("<Command-R>", lambda _event: self.reload_design())
         self.root.bind_all("<Command-t>", lambda _event: self.add_design_tab())
         self.root.bind_all("<Command-T>", lambda _event: self.add_design_tab())
+        self.root.bind_all("<Command-i>", lambda _event: self.inject_impulse())
+        self.root.bind_all("<Command-I>", lambda _event: self.inject_impulse())
         self.root.bind_all("<Command-u>", lambda _event: self.update_current_tab_graphs())
         self.root.bind_all("<Command-U>", lambda _event: self.update_current_tab_graphs())
 
@@ -1283,6 +1851,7 @@ class PlotGui:
         file_menu.add_command(label="New morphology tab", accelerator="Cmd-T", command=self.add_design_tab)
         file_menu.add_command(label="Reload current tab", accelerator="Cmd-R", command=self.reload_design)
         file_menu.add_command(label="Update current tab graphs", accelerator="Cmd-U", command=self.update_current_tab_graphs)
+        file_menu.add_command(label="Inject impulse torque", accelerator="Cmd-I", command=self.inject_impulse)
         menu.add_cascade(label="File", menu=file_menu)
         self.root.config(menu=menu)
 
@@ -1293,7 +1862,7 @@ class PlotGui:
         self.design_tabs.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.panes: dict[str, DesignPane] = {}
 
-        self.add_design_tab(ROOT / "design" / "baseline_shoulder.tg", select=True)
+        self.add_design_tab(ROOT / "design" / "shoulder.tg", select=True)
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -1319,9 +1888,14 @@ class PlotGui:
         def rename(title: str, frame: ttk.Frame = frame) -> None:
             self.design_tabs.tab(frame, text=title)
 
-        pane = DesignPane(self.root, frame, self.status, default_tg, rename)
+        try:
+            pane = DesignPane(self.root, frame, self.status, default_tg, rename)
+        except ValueError as exc:  # wrong bird, or an untagged / malformed .tg
+            frame.destroy()
+            self.status.set(f"Not loaded: {exc}")
+            return
         self.panes[str(frame)] = pane
-        self.design_tabs.add(frame, text=design_tab_title(str(default_tg)))
+        self.design_tabs.add(frame, text=design_tab_title(str(default_tg), pane.bird))
         if select:
             self.design_tabs.select(frame)
 
@@ -1339,6 +1913,11 @@ class PlotGui:
         pane = self.active_pane()
         if pane:
             pane.update_current_tab_graphs()
+
+    def inject_impulse(self) -> None:
+        pane = self.active_pane()
+        if pane and pane.tabs.select() == str(pane.impulse_tab):
+            pane.impulse_inject()
 
     def close(self) -> None:
         for pane in self.panes.values():

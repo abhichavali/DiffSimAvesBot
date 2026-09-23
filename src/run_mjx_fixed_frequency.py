@@ -18,6 +18,8 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from compile_tg import compile_tg
+from morphology.model import PLATE_BIRDS, require_bird
+from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime, rollout, wing_pitch
@@ -28,6 +30,7 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     compile_tg(tg_path, scene_path)
+    require_bird(load_morphology(tg_path), *PLATE_BIRDS, tool="run_mjx_fixed_frequency")
 
     model = mujoco.MjModel.from_xml_path(str(scene_path))
     data = mujoco.MjData(model)

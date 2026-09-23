@@ -171,7 +171,8 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
             {"stiffness": float(bs[mids[0]] * math.exp(ml[0])),
              "stiffness_factor": float(math.exp(ml[0])),
              "pretension_factor": float(math.exp(ml[1]))}, indent=2))
-    lines = [f"harmonics = {K}", f"fundamental_frequency = {info['omega']/math.tau:g} Hz",
+    lines = [f"bird = {oc.load_morphology(Path(tg_src)).bird}",
+             f"harmonics = {K}", f"fundamental_frequency = {info['omega']/math.tau:g} Hz",
              f"a0 = {a0:.6g}"]
     for j in range(K):
         lines += [f"a_{j+1} = {a_out[j]:.6g}", f"b_{j+1} = {b_out[j]:.6g}"]

@@ -138,19 +138,31 @@ class CrankDrive:
         left_q, _, right_q, _ = self._lr
         return float(data.qpos[left_q] + data.qpos[right_q]) - self._lr_target
 
+    def capture(self, data) -> None:
+        """Take the phases as they stand now as the ones to hold (apply/trim do this on first use)."""
+        self._target = [float(data.qpos[t1[1]] + data.qpos[t4[1]]) for t1, t4, _ in self._pairs]
+        if self._lr is not None:
+            self._lr_target = float(data.qpos[self._lr[0]] + data.qpos[self._lr[2]])
+
     def apply(self, data, t0: float = 0.0) -> None:
         cmd = self.command(data.time, t0)
-        if self._target is None:
-            self._target = [
-                float(data.qpos[t1[1]] + data.qpos[t4[1]]) for t1, t4, _ in self._pairs
-            ]
-            if self._lr is not None:
-                self._lr_target = float(data.qpos[self._lr[0]] + data.qpos[self._lr[2]])
-        for (t1, t4, gear), target in zip(self._pairs, self._target):
+        for t1, t4, _ in self._pairs:
             data.ctrl[t1[0]] = cmd
+            data.ctrl[t4[0]] = cmd
+        self.trim(data)
+
+    def trim(self, data) -> None:
+        """Hold the phases on top of whatever velocity command ``data.ctrl`` already carries.
+
+        Trims each t4 against q_t1 + q_t4, and the right t1 against q_L_t1 + q_R_t1.
+        Any drive that writes one command per disk can call this after it does.
+        """
+        if self._target is None:
+            self.capture(data)
+        for (t1, t4, gear), target in zip(self._pairs, self._target):
             error = float(data.qpos[t1[1]] + data.qpos[t4[1]]) - target
             # q_dot = gear * ctrl, so d(sum)/dt = gear_t4 * trim.
-            data.ctrl[t4[0]] = cmd - self.GAIN * error / gear
+            data.ctrl[t4[0]] -= self.GAIN * error / gear
         if self._lr is not None:
             # Trim the right t1 the same way, against the L/R sum. The right t4's
             # own loop then follows it, so the shoulder stays internally phased

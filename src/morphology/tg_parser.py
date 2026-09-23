@@ -201,6 +201,7 @@ class _TgParser:
     def __init__(self, text: str) -> None:
         self.lines = [_strip_comment(line) for line in text.splitlines()]
         self.name = "bi-shoulder"
+        self.bird = ""
         self.world: Dict[str, Any] = {}
         self.archetype: Dict[str, Any] = {}
         self.struts: Dict[str, Dict[str, Any]] = {}
@@ -245,6 +246,10 @@ class _TgParser:
 
             if line.startswith("name ="):
                 self.name = line.split("=", 1)[1].strip()
+                continue
+
+            if line.startswith("bird ="):
+                self.bird = line.split("=", 1)[1].split("#", 1)[0].strip()
                 continue
 
             if line == "world:":
@@ -562,6 +567,7 @@ class _TgParser:
 
         return Morphology(
             name=self.name,
+            bird=self.bird,
             world=World(
                 gravity=tuple(float(x) for x in self.world.get("gravity", (0.0, 0.0, -9.81))),
                 timestep=float(self.world.get("timestep", 0.000375)),

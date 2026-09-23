@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from morphology.model import BIRDS
 from morphology.tg_parser import load_morphology
 
 
@@ -15,6 +16,7 @@ class FourierControl:
     a0: float
     a: tuple[float, ...]
     b: tuple[float, ...]
+    bird: str = ""  # one of morphology.model.BIRDS; required in every control .tg
 
     @property
     def omega(self) -> float:
@@ -30,17 +32,31 @@ def load_control_for_morphology(tg_path: Path) -> FourierControl:
     control_path = Path(morph.motors.control_file)
     if not control_path.is_absolute():
         control_path = tg_path.parent / control_path
-    return load_control(control_path)
+    control = load_control(control_path)
+    if control.bird != morph.bird:
+        raise ValueError(
+            f"{tg_path} is tagged bird = {morph.bird} but its control {control_path} is tagged bird = {control.bird}"
+        )
+    return control
 
 
 def load_control(path: Path) -> FourierControl:
     values: dict[str, float] = {}
+    bird = ""
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line or "=" not in line:
             continue
         key, value = (part.strip() for part in line.split("=", 1))
+        if key == "bird":
+            bird = value
+            continue
         values[key] = _parse_scalar(value)
+    if bird not in BIRDS:
+        raise ValueError(
+            f"{path}: missing or unknown bird tag {bird!r}; put `bird = hummer`, "
+            "`bird = swift` or `bird = eagle` at the top of the control .tg"
+        )
 
     harmonics = int(values.get("harmonics", 0))
     if harmonics <= 0:
@@ -56,6 +72,7 @@ def load_control(path: Path) -> FourierControl:
         a0=float(values.get("a0", 0.0)),
         a=a,
         b=b,
+        bird=bird,
     )
 
 

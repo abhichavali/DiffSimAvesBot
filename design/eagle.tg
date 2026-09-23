@@ -1,4 +1,5 @@
 name = aves-eagle
+bird = eagle
 
 # AvesEagle: the hummingbird tensegrity shoulder carrying a three-linkage avian
 # wing (humerus / ulna / manus) instead of the flat plate, stroking side to side

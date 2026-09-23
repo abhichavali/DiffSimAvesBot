@@ -1,4 +1,5 @@
 name = bi-shoulder
+bird = hummer
 
 world:
     gravity    = [0, 0, -9.81]

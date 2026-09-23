@@ -23,16 +23,21 @@ def sync_crank_disks_at_rest(model, data, lag_rad: float | None = None) -> None:
         return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
 
     changed = False
-    # Phasing is created by counter-rotation (the actuator gear), not the initial
-    # angle, so every crank starts from a matched zero-velocity rest. The sigma
-    # mirror swaps stations 1<->4, so the right crank mirroring L_t{a} is R_t{b}
-    # (the other foot): bring it to L's angle so both wings begin from one phase.
-    for left_foot, right_foot in zip(feet, reversed(feet)):
-        left = joint_id(f"L_t{left_foot.station}_disk_hinge")
-        right = joint_id(f"R_t{right_foot.station}_disk_hinge")
+    # R_t{s}_disk is the Y-mirror of L_t{s}_disk (same station -- verified: every
+    # L_/R_ body and site pair sits at mirrored xpos), and its hinge axis mirrors
+    # with it, so the mirrored angle is the NEGATED one. The settle pass already
+    # leaves them that way (+0.330 / -0.330 deg); this just cleans up the creep.
+    # This used to pair L_t{a} with R_t{b} across the sigma station swap (1<->4)
+    # and copy the angle unnegated, which took a mirror-correct rest state and
+    # un-mirrored it: the two wings then traced paths 0.6-0.8% of stroke apart
+    # for the whole run, on top of whatever the .tg baked in. Per-station and
+    # negated, the wingtips agree to solver noise (opt/test_wing_lock.py).
+    for foot in feet:
+        left = joint_id(f"L_t{foot.station}_disk_hinge")
+        right = joint_id(f"R_t{foot.station}_disk_hinge")
         if left < 0 or right < 0:
             continue
-        data.qpos[model.jnt_qposadr[right]] = float(data.qpos[model.jnt_qposadr[left]])
+        data.qpos[model.jnt_qposadr[right]] = -float(data.qpos[model.jnt_qposadr[left]])
         data.qvel[model.jnt_dofadr[left]] = 0.0
         data.qvel[model.jnt_dofadr[right]] = 0.0
         changed = True

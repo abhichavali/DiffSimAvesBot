@@ -8,8 +8,8 @@ from pathlib import Path
 from run_gui import (ROOT, RunConfig, block_of, build_commands, gene_blocks, grouped,
                      parse_tg)
 
-TG = ROOT / "design" / "shoulder.tg"
-CTRL = ROOT / "design" / "control.tg"
+TG = ROOT / "design" / "shoulder.tg"  # the promoted flagship (hovering-it009p); values below are its
+CTRL = ROOT / "design" / "control.tg"  # must be named control.tg: the Fourier group keys on the file stem
 
 
 def test_parse_tg():
@@ -19,7 +19,7 @@ def test_parse_tg():
     assert names["placement.mount_height"] == "258 mm"
     assert names["motors.tendon_stiffness"] == "1000 N/m"
     # inline dict without `=`
-    assert names["motors.disk.crank_throw"] == "23 mm"
+    assert names["motors.disk.crank_throw"] == "22 mm"
     # ...that spans several lines: the continuation members are knobs too
     assert names["motors.disk.outboard"] == "30.625 mm"
     assert names["motors.disk.disk_dy"] == "-20 mm"
@@ -39,7 +39,7 @@ def test_parse_tg():
     assert all("#" not in v for v in names.values())
 
     ctrl = {p.name: p.value for p in parse_tg(CTRL)}
-    assert ctrl["a0"] == "63" and ctrl["b_5"] == "0" and ctrl["harmonics"] == "5"
+    assert ctrl["a0"] == "65" and ctrl["b_5"] == "0" and ctrl["harmonics"] == "5"
 
 
 def test_substitute_rewrites_only_the_named_scalars():
@@ -55,7 +55,7 @@ def test_substitute_rewrites_only_the_named_scalars():
     assert len(changed) == 2, changed          # strut radius line + the disk dict line
     assert "radius: 18.0 mm" in out            # disk.radius untouched by strut.radius
     assert "crank_throw: 25 mm" in out and "pitch: 22 deg" in out
-    assert "crank_throw_t4 = 26 mm" in out     # prefix-sharing key not clobbered
+    assert "crank_throw_t4 = 25 mm" in out     # prefix-sharing key not clobbered
     # re-parsing the result must round-trip the new values
     import tempfile
     with tempfile.TemporaryDirectory() as td:

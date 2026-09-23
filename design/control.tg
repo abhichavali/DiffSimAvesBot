@@ -1,10 +1,7 @@
-# fundamental_frequency is the phase/cycle reference for the plots, not the drive
-# (a0 is the velocity command). With the phase-drift fix (shoulder.tg: 180 deg
-# offset + kv 1.5) the disk settles at ~10.017 Hz under load, so the reference is
-# set to the measured achieved frequency to keep phase-plot cycles overlaid.
+bird = hummer
 harmonics = 5
-fundamental_frequency = 10.017 Hz
-a0 = 63
+fundamental_frequency = 10.345 Hz
+a0 = 65
 a_1 = 0
 b_1 = 0
 a_2 = 0

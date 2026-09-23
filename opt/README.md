@@ -22,6 +22,56 @@ R = wL*PhiL(Lbar) - wtau*Ptau(tau_hat) - wK*Ckin - ws*S - w_lc*C_lc   (maximized
   (below) the design gait is already mostly periodic (`C_lc≈0.25`); a modest weight
   locks it in.
 
+### `--objective` — what actually gets minimized
+
+- **`torque`** (default) — robust peak motor torque, the original behaviour above.
+- **`power`** — robust mean **supplied** motor power `m[8]` (an exact window mean, so
+  unlike an Lp peak it can't be narrowed by duty-cycle tricks), normalized by the
+  baseline. Peak torque drops to a soft ceiling guard (`--tau-guard`, default 4).
+- **`energy`** — robust **specific power** `P/L` [W/N]: the same watts, credited by
+  the lift they buy. `P_obj = (P_worst / L_den) / (P0/L_den0)`, normalized to ~1 at
+  the seed, where `L_den = lift_floor + softplus_hinge(L_worst - lift_floor)`.
+  `P_worst` is the soft-max over the batch/matrix variants and `L_worst` the
+  soft-min, so both extremes push the ratio up — a true worst case.
+
+Why the ratio and not `P - λ·L`: a **linear** credit fixes the exchange rate, so any
+knob that buys lift below `λ` W/N is a score fountain, which is exactly what run 7
+farmed (a0 up, +67 mW of watts booked as "lift"). The ratio prices lift at the
+design's *own current average* `P/L`, so a lift knob only pays if it beats the
+efficiency already achieved, and the reward is self-limiting (`d(P/L)/dL = -P/L²`).
+The denominator is floored at `--lift-floor` so a collapsed stroke can't divide by a
+vanishing lift; below the floor the objective degenerates to plain power with the
+floor wall (`wL·PhiL`) pushing lift back up. Do **not** add `--lift-torque-tradeoff`
+on top — the ratio *is* the trade, and the linear credit would re-open the fountain
+(`make_loss` zeroes `w_gain` off the torque objective for exactly this reason).
+The hinge smooths on `0.002·lift_floor`, not `0.02`: `softplus(0)=0.693`, so a wider
+scale offsets the objective at the floor (the run-9 hinge-normalization bug).
+
+Selection scores and the full-matrix / CPU transfer gates all follow the same metric,
+and under `power`/`energy` a power spread wider than the gap threshold rejects a
+candidate the way a torque spread does. Self-check: `uv run python opt/test_reward.py`.
+
+### `--lock-wings` — one design for both wings
+
+The control signal was always shared (one scalar command drives all four crank
+actuators), but the morphology was not: `structural_tendon_pairs(individual=True)`
+gives each of the 24 structural tendons its own gene, and the seed `.tg` bakes very
+different L/R values on top (`hovering-soft-it009p`: `L_t1_to_t1_2` 184 N/m vs `R`
+341 N/m). Every previous run therefore optimized **two different wings** sharing one
+command — the two wingtips traced paths 6.5% of the stroke apart.
+
+`--lock-wings` geometric-means each L/R tendon pair at load (stiffness is a
+multiplicative knob; rest length is arithmetic) and tunes the 12 **mirrored** pairs —
+24 params instead of 48. With it the two wingtips are mirror-identical to 0.0000 mm
+and the two shoulders carry identical torque. Costs almost nothing: CPU baseline
+62.6 W/N locked vs 63.3 W/N unlocked. Check: `uv run python opt/test_wing_lock.py`.
+
+This also needed a real bug fixed in `src/runtime/crank_sync.py`: the sync paired
+`L_t{a}` with `R_t{b}` across the sigma station swap (1↔4) and copied the angle
+**unnegated**, which took a mirror-correct settled state (+0.330° / −0.330°) and
+un-mirrored it. `R_t{s}_disk` is the Y-mirror of `L_t{s}_disk` at the *same* station,
+so the mirrored angle is the negated one. This changes startup for every design.
+
 ### Aero substep (the CPU↔MJX lift fix)
 
 `--aero-substep` (default **4**) recomputes aero every N steps and zero-order-holds

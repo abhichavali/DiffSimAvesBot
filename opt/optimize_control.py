@@ -46,6 +46,7 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from compile_tg import compile_tg
+from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.crank_sync import sync_crank_disks_at_rest
@@ -54,6 +55,14 @@ from runtime.mjx.rollout import _match_dtypes
 from runtime.wing_pitch_calibration import calibrate_wing_pitch_at_rest
 
 WINGTIP_SITES = ("L_wing_aero_blade_04", "R_wing_aero_blade_04")  # L/R tip, full 3D stroke
+
+# --objective NAME -> position in build_rollout's metrics tuple. Everything here is
+# minimized as (robust value)/(its own baseline), so the seed scores ~1 in each.
+# "energy" (watts per newton) and "swing_rms" (a 50/50 composite) are special-cased
+# in make_loss because they combine two entries.
+OBJ_METRIC_IDX = {"power": 8, "swing": 7, "overlap": 6, "tau_rms": 15,
+                  "power_crest": 16, "lift_ripple": 17}
+OBJ_CHOICES = ("torque", "energy", "swing_rms") + tuple(OBJ_METRIC_IDX)
 G = 9.81
 TAU_CURRICULUM_NM = (0.300, 0.250, 0.200, 0.150, 0.100)  # 300 -> 250 -> 200 -> 150 -> 100 mNm
 
@@ -91,7 +100,8 @@ def set_unsteady_aero(enabled: bool):
 
 
 def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator: str = "euler",
-          phase_lag: float | None = None, timestep_ms: float | None = None):
+          phase_lag: float | None = None, timestep_ms: float | None = None,
+          lock_wings: bool = False):
     """Compile, build a calibrated CPU model/data and the device-side configs.
 
     ``aero_substep`` matches the CPU runtime (4): aero is recomputed every N
@@ -116,10 +126,13 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     model.opt.integrator = _INTEGRATORS[integrator]
     if timestep_ms is not None:  # override the tg's dt (must precede put_model)
         model.opt.timestep = timestep_ms * 1e-3
+    if lock_wings:
+        symmetrize_wings(model)  # BEFORE MjData/put_model: both wings must be one design
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
-    lag = (load_morphology(tg_path).motors.crank_phase_lag_rad
-           if phase_lag is None else phase_lag)
+    morph = load_morphology(tg_path)
+    require_bird(morph, *PLATE_BIRDS, tool="the codesign optimizer")
+    lag = morph.motors.crank_phase_lag_rad if phase_lag is None else phase_lag
     sync_crank_disks_at_rest(model, data, lag)  # main-dialect: sync applies the lag internally
 
     control = load_control_for_morphology(tg_path)
@@ -131,9 +144,36 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
 
     mx = mjx.put_model(model)
     dx0 = mjx.put_data(model, data)
-    tendons = structural_tendon_pairs(model)
+    tendons = structural_tendon_pairs(model, individual=not lock_wings)
     motor_ids = motor_tendon_ids(model)
     return model, mx, dx0, control, drive, pitch, aero, tip_ids, tendons, motor_ids
+
+
+def symmetrize_wings(model) -> int:
+    """Force L/R structural tendons onto one shared design (in place).
+
+    The genome mirrors L=R only as a *factor*; the .tg base it multiplies is not
+    mirrored (hovering-soft-it009p ships L_t1_to_t1_2 = 184 N/m against R's 341),
+    so past runs shipped two different wings driven by one command. Stiffness is a
+    multiplicative knob (the genome is a log-factor), so pairs meet at the GEOMETRIC
+    mean; rest length is a length, so arithmetic. Returns the pair count.
+    """
+    names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, i) for i in range(model.ntendon)]
+    pairs: dict[str, dict[str, int]] = {}
+    for i, n in enumerate(names):
+        if n and n[:2] in ("L_", "R_"):
+            pairs.setdefault(n[2:], {})[n[0]] = i
+    n_sym = 0
+    for d in pairs.values():
+        if "L" not in d or "R" not in d:
+            continue
+        li, ri = d["L"], d["R"]
+        k = math.sqrt(max(model.tendon_stiffness[li], 0.0) * max(model.tendon_stiffness[ri], 0.0))
+        model.tendon_stiffness[li] = model.tendon_stiffness[ri] = k
+        ls = 0.5 * (model.tendon_lengthspring[li] + model.tendon_lengthspring[ri])
+        model.tendon_lengthspring[li] = model.tendon_lengthspring[ri] = ls
+        n_sym += 1
+    return n_sym
 
 
 def structural_tendon_pairs(model, individual: bool = True):
@@ -227,7 +267,7 @@ def build_rollout(mx_base, dx0_base, drive, pitch, aero, tip_ids, omega, K,
                   conv_eps=1e-4, alpha_stall=math.radians(45.0),
                   alpha_smooth=math.radians(3.0), k_max=0.10, k_smooth=0.01,
                   swing_mode="std", stiff_range=None, tune_strokeplane=False,
-                  strokeplane=None, wavelet=None):
+                  strokeplane=None, wavelet=None, extra_outputs=False):
     """Return metrics(theta) -> (Lbar, tau_hat, A_stroke, S, C_lc) as a jittable fn.
 
     ``theta`` packs only the *active* groups, concatenated in this order:
@@ -313,7 +353,11 @@ def build_rollout(mx_base, dx0_base, drive, pitch, aero, tip_ids, omega, K,
         a0 = base_a0 * jnp.exp(ctrl[0])
         a, b = ctrl[1 : 1 + K], ctrl[1 + K :]
         wl_coeff = ctrl[1:]  # wavelet mode: all 2K coeffs are atom amplitudes
-        omega_eff = omega * jnp.exp(f_log)
+        # Crank-LOCKED harmonic clock: a0 (=ctrl[0]) is the crank velocity command,
+        # so it IS the flap frequency; the modulation must ride the same clock or a
+        # faster crank smears the learned waveform across cycles. (Was f_log only,
+        # which silently decoupled the two the moment a0 moved.)
+        omega_eff = omega * jnp.exp(f_log + ctrl[0])
         mx_eff = (perturbed_model(mx, stiff_log, pre_log, motor_log)
                   if (tune_tendons or tune_motor) else mx)
         # Pitch deadband+stiffness as log-factors of the design base (resonant feathering).
@@ -490,9 +534,32 @@ def build_rollout(mx_base, dx0_base, drive, pitch, aero, tip_ids, omega, K,
             conv_err = jnp.sqrt(jnp.mean((qcyc[-1] - qcyc[-2]) ** 2))
         else:
             conv_err = jnp.array(0.0)
-        return (Lbar, tau_hat, A_stroke, S, C_lc, P_inactive, C_overlap,
-                swing, P_supplied, C_valid, alpha_pk, k_eff, conv_err,
-                tau_peak, tau_drift)
+        # Waveform-shape metrics (opt/screen_targets.py ranked these). Cheap, so they
+        # are always computed and APPENDED at indices 15..17 -- every positional index
+        # the rest of the file uses stays put.
+        tau_w = jnp.where(record, tau, 0.0)
+        tau_mean = jnp.sum(tau_w) / n_win
+        tau_rms = jnp.sqrt(jnp.sum(tau_w ** 2) / n_win)
+        p_w = jnp.where(record, p_sup, 0.0)
+        p_mean = jnp.sum(p_w) / n_win
+        p_rms = jnp.sqrt(jnp.sum(p_w ** 2) / n_win)
+        power_crest = p_rms / (p_mean + 1e-9)
+        l_w = jnp.where(record, lift_z, 0.0)
+        l_var = jnp.sum((l_w - Lbar) ** 2 * mask) / n_win     # WITHIN-cycle lift ripple
+        lift_ripple = jnp.sqrt(l_var) / (jnp.abs(Lbar) + 1e-9)
+        if not extra_outputs:
+            return (Lbar, tau_hat, A_stroke, S, C_lc, P_inactive, C_overlap,
+                    swing, P_supplied, C_valid, alpha_pk, k_eff, conv_err,
+                    tau_peak, tau_drift, tau_rms, power_crest, lift_ripple)
+        return dict(lift=Lbar, power=P_supplied, spec_power=P_supplied / (Lbar + 1e-9),
+                    lift_per_watt=Lbar / (P_supplied + 1e-9),
+                    tau_peak=tau_peak, tau_mean=tau_mean, tau_rms=tau_rms,
+                    tau_crest=tau_peak / (tau_mean + 1e-9),      # peak-to-mean
+                    tau_swing=swing,
+                    neg_work_frac=P_inactive,                   # braking / |power|
+                    power_crest=power_crest, lift_ripple=lift_ripple,
+                    lift_cyclevar=C_lc, overlap=C_overlap,
+                    A_stroke=A_stroke, C_valid=C_valid)
 
     return metrics
 
@@ -500,7 +567,7 @@ def build_rollout(mx_base, dx0_base, drive, pitch, aero, tip_ids, omega, K,
 def cpu_validate_design(scene_path, ctrl_params, tendon_arrays, integrator,
                         *, pitch_params=None, strokeplane_params=None, periods=3.0,
                         warmup=2.0, phase_lag=0.0, timestep_ms=None, aero_substep=None,
-                        cycle_stats=False, wavelet=None):
+                        cycle_stats=False, wavelet=None, with_swing=False):
     """Run the design on MuJoCo CPU (numpy aero) -> (mean_lift, peak_torque, mean_supplied_power).
 
     Uses the SAME compiled scene and the SAME tendon arrays the MJX optimizer
@@ -574,6 +641,16 @@ def cpu_validate_design(scene_path, ctrl_params, tendon_arrays, integrator,
         step()
     rec = [step() for _ in range(int(periods * period / model.opt.timestep))]
     L = np.array([r[0] for r in rec]); T = np.array([r[1] for r in rec]); P = np.array([r[2] for r in rec])
+    if with_swing:
+        # Same definition as the MJX metric m[7]: std of the |torque| trace over the
+        # sample window. Appended behind a flag so no existing caller's unpack moves.
+        swing = float(np.std(T))
+        if cycle_stats:
+            spc_ = max(1, int(round(period / model.opt.timestep)))
+            nc_ = max(1, len(T) // spc_)
+            pc_ = [float(np.max(T[i * spc_:min((i + 1) * spc_, len(T))])) for i in range(nc_)]
+            return float(L.mean()), float(T.max()), float(P.mean()), pc_, swing
+        return float(L.mean()), float(T.max()), float(P.mean()), swing
     if cycle_stats:
         # Per-cycle exact peaks over the sample window -- lets callers gate on
         # stationarity (a slow beat shows as a drifting per-cycle peak series).
@@ -601,7 +678,8 @@ def make_loss(metrics, *, lift_floor, lift_cap, lift_smooth, lift_above_weight,
               A_target, tau_max, weights, w_lc, w_power, w_overlap, w_swing,
               lift0=None, tradeoff=None, metrics_impl=None, metrics_rk4=None, w_gap=0.0,
               amp_band_pct=0.02, amp_floor=None, extra_metrics=(), w_valid=0.0,
-              w_drift=0.0):
+              w_drift=0.0, objective="torque", obj_norm=None, L0=None,
+              tau_guard=4.0):
     """Scalar loss = -R, normalized per the design spec, with metrics as aux.
 
     Objective: hold lift above a floor, preserve the flap amplitude (``wK``, the
@@ -620,6 +698,23 @@ def make_loss(metrics, *, lift_floor, lift_cap, lift_smooth, lift_above_weight,
     are smooth (no hard max(0,.) walls) so gradients flow.
     """
     wL, wtau, wK, ws = weights
+    # --objective energy: lift enters the cost DIVISIVELY (P/L), never as a linear
+    # credit. A linear "+lambda*L" fixes the exchange rate, so every knob that buys
+    # lift below lambda W/N is a score fountain -- exactly what run 7 farmed (a0 up,
+    # +67 mW of watts bought as "lift"). The ratio prices lift at the design's OWN
+    # current average P/L, so a lift knob only pays if it beats the efficiency it is
+    # already achieving, and the reward is self-limiting (d(P/L)/dL = -P/L^2).
+    # The denominator is floored at lift_floor (hinge above it only), so a collapsed
+    # stroke cannot divide by a vanishing lift, and below the floor the objective is
+    # plain power with the floor wall (PhiL / Pdrop) pushing lift back up.
+    # softplus(0)=0.693 offsets the hinge AT the floor, so smooth on 0.002*floor
+    # (the run-9 hinge-normalization lesson): 0.14% of the floor, not 1.4%.
+    l_hinge = max(1e-9, 0.002 * lift_floor)
+    lift_den = lambda L: lift_floor + _soft_hinge(L - lift_floor, l_hinge)
+    # Every non-torque objective is the SAME shape: a robust metric divided by its
+    # own baseline, so the seed always scores ~1 and one set of weights works for
+    # all of them. obj_norm comes from main's baseline eval.
+    obj_norm = tuple(max(float(x), 1e-12) for x in (obj_norm or (1.0,)))
     if amp_floor is not None:
         # One-sided amplitude FLOOR [m], absolute (not anchored to the seed's A*,
         # which may itself be collapsed): shrink below it is walled off, growth is
@@ -635,7 +730,8 @@ def make_loss(metrics, *, lift_floor, lift_cap, lift_smooth, lift_above_weight,
     def loss(theta, tau_max, robust_beta):
         base_metrics = metrics(theta)
         (Lbar, tau_hat, A_stroke, S, C_lc, P_inactive, C_overlap, swing, P_supplied,
-         C_valid, alpha_pk, k_eff, conv_err, tau_peak, tau_drift) = base_metrics
+         C_valid, alpha_pk, k_eff, conv_err, tau_peak, tau_drift,
+         tau_rms, power_crest, lift_ripple) = base_metrics
         # Roll the SAME design under the validation variants and optimize the robust
         # envelope. Timestep variants used to affect torque only, which still allowed
         # the optimizer to hide lift/amplitude/swing failures off the trained dt.
@@ -678,15 +774,34 @@ def make_loss(metrics, *, lift_floor, lift_cap, lift_smooth, lift_above_weight,
         tau_peak_hard = jnp.max(jnp.stack([m[13] for m in variant_metrics]))
         drift_hard = jnp.max(jnp.stack([jnp.abs(m[14]) for m in variant_metrics]))
         P_drift = w_drift * drift_hard / tau_max
+        # Robust ENERGY objectives: worst-case (soft-max) supplied power across the
+        # batch/matrix variants, over worst-case (soft-min) lift -- both extremes push
+        # the ratio up, so it is a true worst case. Peak torque drops to a pure ceiling
+        # guard so efficiency can't be bought with a motor-killing spike.
+        if objective != "torque":
+            rob = lambda i: _soft_extreme(jnp.stack([m[i] for m in variant_metrics]),
+                                          robust_beta)
+            over_g = _soft_hinge(tau_used - tau_max, 0.02 * tau_max)
+            guard = tau_guard * over_g**2 / tau_max**2
+            if objective == "energy":       # watts per newton, floored denominator
+                P_obj = (rob(8) / lift_den(lift_used)) / obj_norm[0] + guard
+            elif objective == "swing_rms":  # composite: both torque-shape terms, 50/50
+                P_obj = 0.5 * (rob(7) / obj_norm[0] + rob(15) / obj_norm[1]) + guard
+            else:
+                P_obj = rob(OBJ_METRIC_IDX[objective]) / obj_norm[0] + guard
         if tradeoff is not None:
             # Controlled lift<->torque trade: a `tradeoff`% peak-torque cut is worth a
             # 1% lift drop below baseline; the reverse is gentler: a `tradeoff`%
             # lift gain pays for a 1% torque increase.
-            Ptau = tau_used / tau_max                                  # ~1 at baseline (robust)
+            Ptau = tau_used / tau_max if objective == "torque" else P_obj  # ~1 at baseline
             l_smooth = max(1e-9, 0.02 * abs(lift0))
             Pdrop = _soft_hinge(lift0 - lift_used, l_smooth) / (abs(lift0) + 1e-9)
             Pgain = jnp.maximum(0.0, lift_used - lift0) / (abs(lift0) + 1e-9)
-            R = (-wtau * Ptau - wtau * tradeoff * Pdrop + wtau * Pgain / tradeoff
+            # No linear lift credit off the torque objective: 'power' gives none by
+            # design, 'energy' already credits lift inside P_obj -- paying twice is
+            # the fountain again. The floor penalty (Pdrop) stays either way.
+            w_gain = wtau / tradeoff if objective == "torque" else 0.0
+            R = (-wtau * Ptau - wtau * tradeoff * Pdrop + w_gain * Pgain
                  - w_swing * Pswing - wK * Ckin - ws * S
                  - w_lc * Clc - w_power * P_inactive - w_overlap * C_overlap
                  - w_valid * C_valid_used - Pgap - P_drift)
@@ -702,13 +817,14 @@ def make_loss(metrics, *, lift_floor, lift_cap, lift_smooth, lift_above_weight,
             PhiL = -(below**2 + lift_above_weight * above**2) / max(lift_smooth, 1e-9)**2
             # Peak torque (ROBUST), normalized by the stage ceiling, +4x above it (soft hinge).
             over = _soft_hinge(tau_used - tau_max, 0.02 * tau_max)
-            Ptau = (tau_used**2 + 4.0 * over**2) / tau_max**2
+            Ptau = ((tau_used**2 + 4.0 * over**2) / tau_max**2 if objective == "torque"
+                    else P_obj)
             R = (wL * PhiL - wtau * Ptau - w_swing * Pswing - wK * Ckin - ws * S
                  - w_lc * Clc - w_power * P_inactive - w_overlap * C_overlap
                  - w_valid * C_valid_used - Pgap - P_drift)
         aux = (Lbar, tau_hat, A_stroke, S, Clc, P_inactive, C_overlap, swing, P_supplied, -R,
                tau_i, tau_r, tau_hard, tau_spread, C_valid, alpha_pk, k_eff, conv_err,
-               tau_peak_hard, drift_hard)
+               tau_peak_hard, drift_hard, tau_rms, power_crest, lift_ripple)
         return -R, aux
 
     return jax.jit(jax.jacfwd(loss, argnums=0, has_aux=True))  # (grad, aux) in one fwd sweep
@@ -872,6 +988,47 @@ def main() -> None:
                    help="weight on the two-motor torque-overlap penalty (t1 'blue' vs t4 "
                         "'orange'): cosine similarity of their |torque| traces. Drives each "
                         "motor to peak in the other's trough (anti-phase) to cut wasted work")
+    p.add_argument("--bank-integrators", nargs="+", default=("euler", "implicitfast", "rk4"),
+                   choices=("euler", "implicitfast", "rk4"),
+                   help="integrators in the --rotate-batch bank (default all three). rk4 is "
+                        "4x the physics per step and, inside a jacfwd over the whole genome, "
+                        "took ~50 min just to XLA-compile one batch on a 5070 Ti -- drop it "
+                        "(`--bank-integrators euler implicitfast`) when compile time is the "
+                        "binding constraint. The CPU transfer gate still rolls rk4 (numpy, "
+                        "no compile), so cross-integrator certification is unchanged; only "
+                        "the GRADIENT stops seeing it")
+    p.add_argument("--a0-free", action="store_true",
+                   help="keep a0 (theta[0] = crank speed = flap frequency) live during the "
+                        "--control-after freeze, so only the HARMONICS wait for the unlock. "
+                        "Frequency is the dominant power knob (P~f^3, L~f^2): this gives it "
+                        "the whole run while keeping the pre/post-unlock diff purely about "
+                        "waveform shape")
+    p.add_argument("--objective", choices=OBJ_CHOICES, default="torque",
+                   help="primary minimization target. 'torque' = robust peak motor torque "
+                        "(original behavior). 'power' = robust mean SUPPLIED motor power "
+                        "(m[8], an exact window mean, not an Lp peak). 'energy' = robust "
+                        "SPECIFIC power P/L [W/N]: the same watts, credited by the lift they "
+                        "buy, with the denominator floored at --lift-floor so it cannot be "
+                        "won by not flapping. Under power/energy peak torque is demoted to a "
+                        "soft ceiling guard (--tau-guard); loss, selection scores and the "
+                        "full/cpu transfer gates all follow the chosen metric. "
+                        "'swing' = robust peak-to-peak motor torque swing (m[7]). Picked by "
+                        "opt/screen_targets.py: of every candidate, swing is the one the "
+                        "SHARED FOURIER WAVEFORM both moves hard (3258%/unit vs 203% for a0) "
+                        "and moves in a direction all 6 dt/integrator cells agree on "
+                        "(consensus 0.996). Peak torque has the same authority with "
+                        "consensus 0.39 -- same knob, but each discretization wants it "
+                        "pushed a different way, which is what MJX-overfit looks like from "
+                        "the inside. Power is nearly waveform-deaf (15%/unit).")
+    p.add_argument("--tau-guard", type=float, default=4.0,
+                   help="--objective power/energy only: weight of the soft peak-torque ceiling "
+                        "at the stage tau_max (protects a current-limited motor). "
+                        "0 = torque completely out of the loss")
+    p.add_argument("--lock-wings", action="store_true",
+                   help="one design for BOTH wings: geometric-mean the L/R structural tendon "
+                        "stiffness / rest length at load, and tune the 12 MIRRORED pairs (24 "
+                        "params) instead of 24 independent tendons (48). Without it the two "
+                        "wings drift into different machines sharing one command signal")
     p.add_argument("--lift-torque-tradeoff", type=float, default=None, metavar="N",
                    help="put lift back in the objective as a controlled trade: an N%% peak-torque "
                         "cut is worth a 1%% lift drop below baseline (N=5 -> 5:1). Linear marginal "
@@ -967,7 +1124,7 @@ def main() -> None:
 
     model, mx, dx0, control, drive, pitch, aero, tip_ids, tendons, motor_ids = setup(
         args.tg, args.scene, aero_substep=args.aero_substep, integrator=args.integrator,
-        timestep_ms=args.timestep)
+        timestep_ms=args.timestep, lock_wings=args.lock_wings)
     K = args.harmonics
     wavelet_dict = wavelet_dictionary(2 * K) if args.wavelet else None
     omega = float(control.omega)
@@ -1126,7 +1283,7 @@ def main() -> None:
         full_sp = args.full_sample_periods if args.full_sample_periods else args.sample_periods
         bank = {(ig, dm): _variant_metrics(ig, dm, sample_periods=full_sp,
                                            avg_periods=max(1, int(full_sp)))
-                for ig in ("euler", "implicitfast", "rk4") for dm in dt_bank}
+                for ig in args.bank_integrators for dm in dt_bank}
         bank_jit = {k: jax.jit(f) for k, f in bank.items()}
 
     # theta packs active groups in order:
@@ -1139,6 +1296,14 @@ def main() -> None:
         codesign = jnp.asarray(d.get("genome", d.get("theta")), dtype=jnp.float32)
         want = 2 * K + 1 + 2 * n_tend + 2
         assert codesign.shape[0] >= want, f"init-codesign len {codesign.shape[0]} < {want}"
+        # Every group is sliced BY POSITION, so a genome from the other wing mode
+        # silently decodes as garbage (48 unlocked tendon params read as 24 mirrored
+        # ones = L's stiffness block used as L's pretensions). Only mismatched widths
+        # can be caught, so catch them.
+        assert not args.lock_wings or codesign.shape[0] in (want, want + 10), (
+            f"--lock-wings expects a {want}-param genome (or {want+10} with stroke-plane); "
+            f"got {codesign.shape[0]} -- that looks like an UNLOCKED (48-tendon) genome, "
+            "which would be sliced into the wrong genes")
     if tune_control:
         if codesign is not None:
             # Keep the warm-start a0; in wavelet mode zero the basis coeffs so a
@@ -1180,7 +1345,7 @@ def main() -> None:
     # Baseline A* = stroke amplitude of the seed (prevents collapse); P0 = baseline
     # supplied power (normalizes the power term so it starts at ~1).
     (Lbar0, tau0, A_target, S0, Clc0, Pin0, Ovl0, swing0, P0, Cvalid0, alpha0, k0, conv0,
-     taupk0, drift0) = (float(x) for x in metrics(theta))
+     taupk0, drift0, taurms0, pcrest0, lripple0) = (float(x) for x in metrics(theta))
     print(f"[setup] tune_control={tune_control} tune_tendons={tune_tendons} "
           f"n_tend={n_tend} params={theta.shape[0]} steps={warmup_steps + sample_steps} "
           f"steps/cycle={steps_per_cycle} w_lc={args.w_lc} wK={args.weights[2]}")
@@ -1196,6 +1361,29 @@ def main() -> None:
     # Lift reference for the tradeoff: the FLOOR, not the baseline. Anchoring at
     # baseline lift made every mN below it cost 5:1 -- the optimizer hoarded lift
     # and provably could not reach the soft-tendon corridor (fixed-codesign lesson).
+    # One place decides what --objective means, for the loss AND for every selection
+    # score, so a candidate can never be trained on one quantity and picked on another.
+    _base_row = {"power": P0, "swing": swing0, "overlap": Ovl0, "tau_rms": taurms0,
+                 "power_crest": pcrest0, "lift_ripple": lripple0}
+    if args.objective == "energy":
+        obj_norm = (max(P0, 1e-9) / max(Lbar0, args.lift_floor),)
+    elif args.objective == "swing_rms":
+        obj_norm = (max(swing0, 1e-12), max(taurms0, 1e-12))
+    elif args.objective == "torque":
+        obj_norm = (max(tau0, 1e-12),)
+    else:
+        obj_norm = (max(_base_row[args.objective], 1e-12),)
+
+    def obj_of(row):
+        """Scalar being minimized, from a dict of robust metric values."""
+        if args.objective == "torque":
+            return row["tau"]
+        if args.objective == "energy":
+            return row["power"] / max(row["lift"], args.lift_floor)
+        if args.objective == "swing_rms":
+            return 0.5 * (row["swing"] / obj_norm[0] + row["tau_rms"] / obj_norm[1]) * obj_norm[0]
+        return row[args.objective]
+
     lift_ref = args.lift_floor if args.lift_torque_tradeoff else Lbar0
     loss_kwargs = dict(lift_floor=args.lift_floor, lift_cap=args.lift_cap,
                        lift_smooth=args.lift_smooth, lift_above_weight=args.lift_above_weight,
@@ -1204,7 +1392,9 @@ def main() -> None:
                        w_overlap=args.w_overlap, w_swing=args.w_swing,
                        lift0=lift_ref, tradeoff=args.lift_torque_tradeoff, w_gap=args.w_gap,
                        amp_band_pct=args.amp_band_pct, amp_floor=args.amp_floor,
-                       w_valid=args.w_valid, w_drift=args.w_drift)
+                       w_valid=args.w_valid, w_drift=args.w_drift,
+                       objective=args.objective, obj_norm=obj_norm, L0=Lbar0,
+                       tau_guard=args.tau_guard)
     grad_fn = make_loss(metrics, metrics_impl=metrics_impl, metrics_rk4=metrics_rk4,
                         extra_metrics=tuple(extra_metrics), **loss_kwargs)
 
@@ -1277,7 +1467,9 @@ def main() -> None:
     l_ids = np.asarray(tendons[0])
 
     base_freq = control.fundamental_frequency_hz
-    control_src = Path(load_morphology(args.tg).motors.control_file)
+    _morph = load_morphology(args.tg)
+    bird_line = f"bird = {_morph.bird}"  # every emitted control .tg carries the design's tag
+    control_src = Path(_morph.motors.control_file)
     if not control_src.is_absolute():
         control_src = args.tg.parent / control_src
 
@@ -1309,7 +1501,7 @@ def main() -> None:
             # dictionary so a wavelet-aware certifier can rebuild the waveform.
             coeffs = [float(x) for x in ctrl[1:]]
             centers, sigmas, freqs = wavelet_dictionary(2 * K)
-            lines = [f"basis = wavelet", f"n_atoms = {2 * K}",
+            lines = [bird_line, f"basis = wavelet", f"n_atoms = {2 * K}",
                      f"fundamental_frequency = {freq_hz:g} Hz", f"a0 = {a0 / motor_dir:.6g}"]
             lines += [f"w_{j} = {coeffs[j]:.6g}" for j in range(2 * K)]
             control_text = "\n".join(lines) + "\n"
@@ -1323,7 +1515,7 @@ def main() -> None:
                  "motor_direction": motor_dir, "Lbar": design["Lbar"],
                  "tau_hat": design["tau"]}, indent=2))
         elif tune_control or args.tune_frequency:
-            lines = [f"harmonics = {K}", f"fundamental_frequency = {freq_hz:g} Hz",
+            lines = [bird_line, f"harmonics = {K}", f"fundamental_frequency = {freq_hz:g} Hz",
                      f"a0 = {a0 / motor_dir:.6g}"]
             for j in range(K):
                 lines.append(f"a_{j+1} = {a_out[j] / motor_dir:.6g}")
@@ -1457,7 +1649,7 @@ def main() -> None:
 
     # CPU reference for the baseline: periodic checks score designs on the ROBUST
     # (worse of euler/implicitfast) peak torque, so a euler-hacked gait can't look cheap.
-    cpuL0 = cpuT0 = cpuT0i = cpuT0r = float("nan")
+    cpuL0 = cpuT0 = cpuT0i = cpuT0r = cpu_obj0 = float("nan")
     cpu_best = None
     if args.cpu_every:
         # Startup CPU baseline REMOVED (~45 min of CPU rollouts before training even
@@ -1479,7 +1671,9 @@ def main() -> None:
             for (ig, dm), f in bank_jit.items():
                 m = [float(x) for x in f(theta_v)]
                 rows.append({"integrator": ig, "timestep_ms": dm, "L": m[0], "T": m[13],
-                             "T_lp": m[1], "drift": m[14], "A": m[2], "swing": m[7]})
+                             "T_lp": m[1], "drift": m[14], "A": m[2], "swing": m[7],
+                             "P": m[8], "overlap": m[6], "tau_rms": m[15],
+                             "power_crest": m[16], "lift_ripple": m[17]})
             rob = max(r["T"] for r in rows)
             gap = (rob - min(r["T"] for r in rows)) / max(rob, 1e-9)
             driftmax = max(abs(r["drift"]) for r in rows)
@@ -1498,16 +1692,23 @@ def main() -> None:
     else:
         amp_gate_lo = A_target * (1.0 - args.amp_band_pct)
         amp_gate_hi = A_target * (1.0 + args.amp_band_pct)
-    def score_of(tau_hat, swing, Lbar):
+    # Selection follows --objective, in that metric's own units: worst-case peak
+    # torque [Nm], worst-case supplied power [W], or worst-case specific power [W/N].
+    # obj0 is the baseline in those units, so the lift trade converts at the right scale.
+    obj0 = obj_of({"tau": tau0, "power": P0, "lift": Lbar0, "swing": swing0,
+                   "overlap": Ovl0, "tau_rms": taurms0, "power_crest": pcrest0,
+                   "lift_ripple": lripple0})
+    def score_of(metric, swing, Lbar):
         if not args.single_stage:
-            return tau_hat
-        s = tau_hat + args.score_swing * swing
-        if args.lift_torque_tradeoff:  # convert lift drop into a torque-equivalent at N:1
+            return metric
+        s = metric + args.score_swing * swing
+        if args.lift_torque_tradeoff:  # convert lift drop into an objective-equivalent at N:1
             # Same floor-anchored reference as the loss (see lift_ref above).
             drop = max(0.0, float(lift_ref) - Lbar) / (abs(float(lift_ref)) + 1e-9)
             gain = max(0.0, Lbar - float(lift_ref)) / (abs(float(lift_ref)) + 1e-9)
-            s += args.lift_torque_tradeoff * float(tau0) * drop
-            s -= float(tau0) * gain / args.lift_torque_tradeoff
+            s += args.lift_torque_tradeoff * obj0 * drop
+            if args.objective == "torque":  # power/energy: no linear credit (see make_loss)
+                s -= obj0 * gain / args.lift_torque_tradeoff
         return s
     def is_feasible(Lbar, A_stroke):
         if args.single_stage:
@@ -1570,14 +1771,15 @@ def main() -> None:
             last_good = theta
             if args.control_after and it < args.control_after:
                 if tune_control:
-                    grad = grad.at[:2 * K + 1].set(0.0)  # safer knobs first: tendons/motor only
+                    # safer knobs first: tendons/motor only (--a0-free keeps frequency live)
+                    grad = grad.at[(1 if args.a0_free else 0):2 * K + 1].set(0.0)
                 if tune_sp:
                     grad = grad.at[-10:].set(0.0)  # stroke-plane unlocks with the harmonics
             if tendon_freeze is not None:
                 grad = grad.at[tendon_freeze[0]:tendon_freeze[1]].set(0.0)
             (Lbar, tau_hat, A_stroke, S, Clc, Pin, Ovl, swing, P_sup, loss,
              tau_i, tau_r, tau_rob, tau_spread, Cvalid, alpha_pk, k_eff, conv_err,
-             tau_pk, drift_w) = (float(x) for x in aux)
+             tau_pk, drift_w, taurms, pcrest, lripple) = (float(x) for x in aux)
             t += 1
             m = b1 * m + (1 - b1) * grad
             v = b2 * v + (1 - b2) * grad**2
@@ -1596,12 +1798,20 @@ def main() -> None:
             # Select on the ROBUST peak so the winner is integrator-agnostic by construction.
             # Rotate mode: per-iter metrics only cover the drawn batch (an optimistic
             # subset), so selection happens at the full-matrix checks instead.
-            score = score_of(tau_rob, swing, Lbar)
+            row = {"tau": tau_rob, "power": P_sup, "lift": Lbar, "swing": swing,
+                   "overlap": Ovl, "tau_rms": taurms, "power_crest": pcrest,
+                   "lift_ripple": lripple}
+            score = score_of(obj_of(row), swing, Lbar)
             sel = {"score": score, "tau": tau_rob, "power": P_sup, "swing": swing,
                    "theta": theta_eval, "Lbar": Lbar, "Pin": Pin}
-            if not rotate_fns and is_feasible(Lbar, A_stroke) and score < best["score"]:
+            # Rotate mode normally defers selection to the full-matrix check, because a
+            # per-iteration score only covers the drawn batch. With full checks OFF
+            # (--full-check-every 0) that left NOTHING selecting: `best` kept its seed
+            # theta and every run shipped theta_full.json == the seed, silently.
+            select_here = (not rotate_fns) or not args.full_check_every
+            if select_here and is_feasible(Lbar, A_stroke) and score < best["score"]:
                 best = sel
-            if not rotate_fns and is_feasible(Lbar, A_stroke) and score < stage_best["score"]:
+            if select_here and is_feasible(Lbar, A_stroke) and score < stage_best["score"]:
                 stage_best = sel
             if rotate_fns:
                 tri = (f" [{'/'.join(batch_keys)} "
@@ -1612,11 +1822,33 @@ def main() -> None:
                        if (args.tri_integrator or args.tri_timestep) else "")
             print(f"  it{it:03d} loss={loss:.4f}  L={Lbar*1e3:6.1f}mN  tau={tau_hat*1e3:6.1f}mNm  "
                   f"pk={tau_pk*1e3:6.1f}mNm dr={drift_w*1e3:+5.1f}  "
-                  f"swing={swing*1e3:5.1f}mNm  A={A_stroke*1e3:5.2f}mm  P={P_sup*1e3:5.0f}mW  "
+                  f"swing={swing*1e3:5.1f}mNm  rms={taurms*1e3:5.1f}  pc={pcrest:5.3f}  "
+                  f"lr={lripple:5.3f}  ovl={Ovl:5.3f}  obj={obj_of(row)/max(obj0,1e-12):6.4f}  "
+                  f"A={A_stroke*1e3:5.2f}mm  P={P_sup*1e3:5.0f}mW  "
                   f"S={S:.3g}  Cv={Cvalid:.2g} a={math.degrees(alpha_pk):.0f} k={k_eff:.2g} "
                   f"conv={conv_err:.1e} beta={robust_beta:.0f} Pin={Pin:.3g}{tri}", flush=True)
             if it % 3 == 0:
                 dump(sel, log, out_dir=args.out / "checkpoints" / f"it{it:03d}")
+            if args.control_after and it == args.control_after:
+                # The waveform goes live on the NEXT step, so this is the a0-only
+                # design: the reference every "did harmonics help?" claim is measured
+                # against. A full-matrix row goes with it so the comparison is robust,
+                # not a single-cell reading.
+                pre = dict(sel)
+                if rotate_fns and args.full_check_every:
+                    pr, prob, pgap, plift, pdrift = full_matrix(theta_eval)
+                    pre.update(full_rows=pr, full_robust=prob, full_liftmin=plift,
+                               full_obj=obj_of({"tau": prob, "power": max(r["P"] for r in pr),
+                                                "lift": plift,
+                                                "swing": max(r["swing"] for r in pr),
+                                                "overlap": max(r["overlap"] for r in pr),
+                                                "tau_rms": max(r["tau_rms"] for r in pr),
+                                                "power_crest": max(r["power_crest"] for r in pr),
+                                                "lift_ripple": max(r["lift_ripple"] for r in pr)}))
+                    print(f"    [preharmonics it{it:03d}] robust obj="
+                          f"{pre['full_obj']/max(obj0,1e-12):.4f} x baseline  "
+                          f"liftmin={plift*1e3:.1f} mN", flush=True)
+                dump(pre, log, out_dir=args.out / "preharmonics")
             if (rotate_fns and args.full_check_every
                     and it % args.full_check_every == 0 and train_i > 0):
                 rows, rob, gapf, liftmin, driftf = full_matrix(theta_eval)
@@ -1629,17 +1861,32 @@ def main() -> None:
                     feas = feas and liftmin >= args.lift_floor  # robust-min lift clears the floor
                 stationary = driftf <= args.drift_gate * max(rob, 1e-9)
                 transfers = gapf <= args.full_gap and liftmin >= 0.9 * liftmin0 and stationary
-                scoref = score_of(rob, swmax, liftmin)
+                powf = max(r["P"] for r in rows)
+                # Robust = worst cell for whatever is being minimized (lift is a
+                # floor, so its worst case is the MIN; everything else the MAX).
+                objf = obj_of({"tau": rob, "power": powf, "lift": liftmin, "swing": swmax,
+                               "overlap": max(r["overlap"] for r in rows),
+                               "tau_rms": max(r["tau_rms"] for r in rows),
+                               "power_crest": max(r["power_crest"] for r in rows),
+                               "lift_ripple": max(r["lift_ripple"] for r in rows)})
+                if args.objective != "torque":
+                    # A power/efficiency-hacked cell rejects like a torque-hacked one:
+                    # spread across the matrix must be within the same gap threshold.
+                    pgap = (powf - min(r["P"] for r in rows)) / max(powf, 1e-9)
+                    transfers = transfers and pgap <= args.full_gap
+                scoref = score_of(objf, swmax, liftmin)
                 tag = ("TRANSFERS" if feas else "LIFT/AMP-OUT") if transfers \
                     else (f"HACK(gap {gapf*100:.0f}%)" if gapf > args.full_gap
                           else f"DRIFT({driftf/max(rob,1e-9)*100:.0f}%)")
                 print(f"    [full it{it:03d}] robust={rob*1e3:6.1f} mNm "
                       f"({(rob-rob0)/rob0*100:+.0f}% vs base)  gap={gapf*100:.0f}%  "
-                      f"liftmin={liftmin*1e3:6.1f} mN  drift={driftf*1e3:.1f} mNm  [{tag}]",
-                      flush=True)
+                      f"liftmin={liftmin*1e3:6.1f} mN  P={powf*1e3:5.0f} mW  "
+                      f"P/L={powf/max(liftmin,1e-9):5.1f} W/N ({(objf-obj0)/obj0*100:+.0f}% obj)  "
+                      f"drift={driftf*1e3:.1f} mNm  [{tag}]", flush=True)
                 log[-1].update(full_robust=rob, full_gap=gapf, full_liftmin=liftmin,
-                               full_drift=driftf, full_rows=rows)
-                sel_f = {"score": scoref, "tau": rob, "power": P_sup, "swing": swmax,
+                               full_drift=driftf, full_power=powf, full_obj=objf,
+                               full_rows=rows)
+                sel_f = {"score": scoref, "tau": rob, "power": powf, "swing": swmax,
                          "theta": theta_eval, "Lbar": liftmin, "Pin": Pin}
                 if feas and scoref < best["score"]:
                     best = sel_f
@@ -1657,6 +1904,22 @@ def main() -> None:
                     cpuT0, cpuT0i, cpuT0r, cpuL0 = cpuT, cpuTi, robust, cpuL
                 stationary = cdrift <= args.drift_gate * max(robust, 1e-9)
                 transfers = gap <= args.cpu_gap and stationary
+                cpuP = max(x["P"] for x in cpu_vars)
+                # --objective swing: cpu_validate_design does not compute a swing, so
+                # the CPU side keeps selecting on robust PEAK torque. That is a transfer
+                # guard, not the target -- the swing winner comes from the full-matrix
+                # check (robust_best), which does see m[7] on every bank cell.
+                # cpu_validate_design returns only (lift, peak torque, power), so the
+                # shape objectives have no CPU counterpart: the CPU side keeps
+                # selecting on robust PEAK torque as a transfer guard. The shape
+                # winner comes from the full-matrix check, which sees every metric.
+                cpu_obj = (obj_of({"tau": robust, "power": cpuP, "lift": cpuL})
+                           if args.objective in ("torque", "power", "energy") else robust)
+                if not math.isfinite(cpu_obj0):
+                    cpu_obj0 = cpu_obj
+                if args.objective != "torque":
+                    pgap = (cpuP - min(x["P"] for x in cpu_vars)) / max(cpuP, 1e-9)
+                    transfers = transfers and pgap <= args.cpu_gap
                 dpk = (robust - cpuT0r) / cpuT0r * 100 if cpuT0r else float("nan")
                 tag = "TRANSFERS" if transfers else (
                     f"HACK(gap {gap*100:.0f}%)" if gap > args.cpu_gap
@@ -1665,10 +1928,13 @@ def main() -> None:
                                 for x in cpu_vars)
                 print(f"    [cpu it{it:03d}] mjx={tau_hat*1e3:6.1f}  {desc}  "
                       f"robust={robust*1e3:6.1f} mNm ({dpk:+.0f}% vs base)  "
-                      f"Lmin={cpuL*1e3:6.1f} mN  drift={cdrift*1e3:.1f} mNm  [{tag}]", flush=True)
+                      f"Lmin={cpuL*1e3:6.1f} mN  P={cpuP*1e3:5.0f} mW  "
+                      f"P/L={cpuP/max(cpuL,1e-9):5.1f} W/N "
+                      f"({(cpu_obj-cpu_obj0)/max(cpu_obj0,1e-9)*100:+.0f}% obj)  "
+                      f"drift={cdrift*1e3:.1f} mNm  [{tag}]", flush=True)
                 log[-1].update(cpu_tau=cpuT, cpu_tau_impl=cpuTi, cpu_tau_rk4=cpuTr,
                                cpu_L=cpuL, cpu_gap=gap, cpu_drift=cdrift,
-                               cpu_variants=cpu_vars)
+                               cpu_power=cpuP, cpu_obj=cpu_obj, cpu_variants=cpu_vars)
                 # CPU-selected best: lowest ROBUST peak among MJX-feasible designs that keep
                 # lift AND transfer between integrators (small euler<->implicit gap). The
                 # transfer gate is what stops the optimizer shipping an integrator-hacked gait.
@@ -1676,9 +1942,10 @@ def main() -> None:
                                if (args.single_stage and args.lift_torque_tradeoff is None)
                                else cpuL >= 0.9 * cpuL0)
                 if (is_feasible(Lbar, A_stroke) and cpu_lift_ok and transfers
-                        and robust < cpu_best["tau"]):
-                    cpu_best = {"score": robust, "tau": robust, "swing": swing, "theta": theta_eval,
+                        and cpu_obj < cpu_best["score"]):
+                    cpu_best = {"score": cpu_obj, "tau": robust, "swing": swing, "theta": theta_eval,
                                 "Lbar": Lbar, "Pin": Pin, "mjx_tau": tau_hat, "cpu_L": cpuL,
+                                "cpu_P": cpuP, "cpu_obj": cpu_obj,
                                 "cpu_euler": cpuT, "cpu_impl": cpuTi, "cpu_rk4": cpuTr, "cpu_gap": gap}
         stage_dir = args.out / f"stage_{round(tau_max*1e3)}mNm"
         dump(stage_best, log, out_dir=stage_dir)  # per-stage design for the demo

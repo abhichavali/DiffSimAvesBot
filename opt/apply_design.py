@@ -44,7 +44,11 @@ def write_design(run_dir: pathlib.Path, base_shoulder_tg: pathlib.Path,
     # The optimizer's baseline is effective pretension 1.0 (original scene had no
     # springlength); use that so designs are referenced to the same baseline.
     base = base.replace("pretension: 0.827", "pretension: 1.0")
-    out_control.write_text((run_dir / "control_optimized.tg").read_text())
+    control = (run_dir / "control_optimized.tg").read_text()
+    if not re.search(r"(?m)^bird\s*=", control):  # run dirs from before the tag: inherit the base's
+        bird = re.search(r"(?m)^bird\s*=\s*(\w+)", base).group(1)
+        control = f"bird = {bird}\n" + control
+    out_control.write_text(control)
 
     tj = run_dir / "tendon_optimized.json"
     if not tj.exists():  # control-only run: base topology at pretension 1.0
