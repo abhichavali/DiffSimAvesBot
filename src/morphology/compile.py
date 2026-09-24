@@ -1,9 +1,10 @@
 """The morphology compiler: Morphology -> CompiledMorphology -> MJCF string.
 
-compile_morphology derives the left shoulder (strut pair, rest poses, motor
-anchors, the 12 posed structural tendons, crank disks and, for the eagle, the
-wrist tensegrity) and y-mirrors it into the right one. compile_to_mjcf emits a
-probe scene, measures the motor tendons on it, and emits the final scene.
+compile_file is the entry point: parse a .tg and return the scene XML, writing
+nothing. compile_morphology derives the left shoulder (strut pair, rest poses,
+motor anchors, the 12 posed structural tendons, crank disks and, for the eagle,
+the wrist tensegrity) and y-mirrors it into the right one. compile_to_mjcf emits
+a probe scene, measures the motor tendons on it, and emits the final scene.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import math
+from pathlib import Path
 from typing import Dict
 
 import numpy as np
@@ -36,6 +38,8 @@ from morphology.geometry import (
 from morphology.model import Morphology
 from morphology.motor_tendons import measure_motor_tendon_ranges
 from morphology.tendon_net import derive_tendon_length, expand_sigma_tendons
+from morphology.tg_parser import load_morphology
+from morphology.wing_geometry import ROOT
 
 _IDENTITY_QUAT = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
 
@@ -76,6 +80,15 @@ def compile_morphology(morph: Morphology) -> CompiledMorphology:
         wrist=_compile_wrist(morph, mobile_geom, mobile_pos, mobile_quat),
     )
     return CompiledMorphology(morph=morph, shoulders=(left, _mirror_shoulder(left, morph)))
+
+
+def compile_file(tg_path: str | Path, *, color_structural_tendons: bool = False) -> str:
+    """The MJCF scene for a .tg file. A relative meshdir is taken from the repo
+    root and written out absolute, so the XML loads from wherever it is saved."""
+    morph = load_morphology(tg_path)
+    if not Path(morph.world.meshdir).is_absolute():
+        morph.world.meshdir = str((ROOT / morph.world.meshdir).resolve())
+    return compile_to_mjcf(morph, color_structural_tendons=color_structural_tendons)
 
 
 def compile_to_mjcf(morph: Morphology, *, color_structural_tendons: bool = False) -> str:

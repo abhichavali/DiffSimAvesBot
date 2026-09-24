@@ -28,6 +28,7 @@ from morphology.mjcf_parts import (
 )
 from morphology.motor_tendons import MotorTendonRange
 from morphology.tendon_net import anchor_node_name, resolve_material_props
+from morphology.wing_geometry import load_wing_geometry_from_stl, wing_mesh_path
 
 MATPLOTLIB_BLUE_RGBA = "0.12156862745098039 0.4666666666666667 0.7058823529411765 1"
 MATPLOTLIB_ORANGE_RGBA = "1.0 0.4980392156862745 0.054901960784313725 1"
@@ -164,10 +165,6 @@ def _emit_shoulder(worldbody: ET.Element, shoulder: CompiledShoulder, morph) -> 
 
 def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> None:
     """The hummer's flat plate wing on its pitch hinge, with the aero blade sites."""
-    # Deferred import: wing_geometry -> morphology_runtime -> morphology.compile
-    # -> emit_mjcf would cycle at module level.
-    from morphology.wing_geometry import _resolve_wing_mesh_path, load_wing_geometry_from_stl
-
     scale = morph.world.scale
     rod = morph.wing.rod_length * scale
     arm = morph.wing.mount_arm * scale
@@ -295,8 +292,8 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> None:
     # blade-element model assumes for its levers: (i+0.5)/N * STL span,
     # measured from the root site, unscaled (the mesh is not world-scaled).
     num_blades = morph.wing.aero.blades
-    mesh_path = _resolve_wing_mesh_path(morph.wing.mesh_file, morph.world.meshdir)
-    wing_length = load_wing_geometry_from_stl(mesh_path, num_blades=num_blades).length
+    mesh_path = wing_mesh_path(morph.wing.mesh_file, morph.world.meshdir)
+    wing_length = load_wing_geometry_from_stl(mesh_path, num_blades).length
     blade_span = wing_length / num_blades
     for blade_index in range(num_blades):
         pos_z = (blade_index + 0.5) * blade_span
