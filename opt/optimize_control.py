@@ -21,12 +21,12 @@ sys.path.insert(0, str(ROOT / "src"))
 from codesign import train  # noqa: E402
 from codesign.loss import OBJ_CHOICES  # noqa: E402
 from codesign.rig import INTEGRATORS  # noqa: E402
-from design_paths import LEGACY_BASELINE_TG  # noqa: E402
+from design_paths import DEFAULT_HUMMER_TG  # noqa: E402
 
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--tg", type=Path, default=LEGACY_BASELINE_TG)
+    p.add_argument("--tg", type=Path, default=DEFAULT_HUMMER_TG)
     p.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     p.add_argument("--harmonics", type=int, default=5, help="K Fourier harmonics")
     p.add_argument("--wavelet", action="store_true",

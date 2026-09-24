@@ -45,7 +45,7 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 # logical design name -> current .tg path. Move a design: change its path here only.
 PATHS = {
     "shoulder": "designs/hummer/hover/shoulder.tg",  # runtime / viewer / GUI default
-    "baseline": "designs/hummer/legacy-baseline/shoulder.tg",  # optimizer / run_fixed_frequency default
+    "baseline": "designs/hummer/legacy-baseline/shoulder.tg",  # compile_tg / run_fixed_frequency default
     "eagle": "designs/eagle/shoulder.tg",
     "soft_it009p": "designs/hummer/hover-soft-it009p/shoulder.tg",  # harmonics + stroke plane
     "tuned": "designs/hummer/hover/shoulder.tg",  # was a byte-identical copy of `shoulder`

@@ -27,11 +27,11 @@ uv run python opt/optimize_control.py --tg designs/hummer/hover-soft-it009p/shou
 ```
 It only proves the pipeline runs: on 0.2-period windows the metrics are meaningless
 (a ~37000 mNm `tau_hat` baseline, `best tau=inf`, `swing=nan` are expected).
-The default `--tg` (`designs/hummer/legacy-baseline`) is NOT a hover design (negative
-lift): pass a hover `.tg`. Always pass `--timestep` when using `--cpu-timestep-factors`
-(without it the factors silently check the base dt again). On a GPU box rsync the repo
-over and use `uv run --no-sync` (plain `uv run` re-syncs and drops CUDA jax). The full
-campaign commands are in `docs/ROBUST_CODESIGN_METHODOLOGY.md` section 6.
+The default `--tg` is the codesign seed, `designs/hummer/hover`. Always pass
+`--timestep` when using `--cpu-timestep-factors` (without it the factors silently check
+the base dt again). On a GPU box rsync the repo over and use `uv run --no-sync` (plain
+`uv run` re-syncs and drops CUDA jax). The full campaign commands are in
+`docs/ROBUST_CODESIGN_METHODOLOGY.md` section 6.
 
 Compile time is the number of distinct graphs: one `jacfwd` per loss (per rotating batch
 with `--rotate-batch`, the slowest, and slower still with rk4 in it), one forward per
