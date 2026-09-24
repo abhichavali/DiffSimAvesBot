@@ -7,12 +7,12 @@ lines below them. `#` starts a comment.
 
 Literals carry units: mm, cm, g and ms are scaled to SI here; m, s, kg, N/m and
 rad are taken as written. `deg` is NOT converted by the lexer -- each key
-decides: disk tilt/pitch treat any number above 3 as degrees, crank_phase_lag
-and the wing pitch angles convert when their literal says deg, the eagle's
-bones/cables/feathers (and wrist, except its stations) always do, and station
-angles and arrange.angle stay in degrees by design. Missing keys take the
-model's defaults; unknown keys are ignored except in the eagle's wing sections
-(bones, wrist, cables, feathers), which reject them.
+decides: every angle converts when its literal says deg (disk tilt/pitch/
+crank_phase, crank_phase_lag, attach_along_edge, the wing pitch angles and the
+eagle's bones/cables/feathers/wrist), and station angles and arrange.angle stay
+in degrees by design. Missing keys take the model's defaults; unknown keys are
+ignored except in the eagle's wing sections (bones, wrist, cables, feathers),
+which reject them.
 """
 
 from __future__ import annotations
@@ -175,11 +175,6 @@ def _radians(value: Any) -> Any:
     return math.radians(float(value))
 
 
-def _deg_if_large(value: Any) -> Any:
-    """Disk tilt/pitch: a number above 3 is taken as degrees, whatever its unit says."""
-    return math.radians(value) if isinstance(value, (int, float)) and value > 3.0 else value
-
-
 def _floats(raw: Dict[str, Any], default: Any, names: str) -> Dict[str, float]:
     """{name: float(raw[name])} for each space-separated name, else `default`'s value."""
     return {n: float(raw.get(n, getattr(default, n))) for n in names.split()}
@@ -318,6 +313,9 @@ class _TgParser:
                     text += " " + self.lines[self.i].strip()
                     self.i += 1
                 self.disk.update(_parse_brace_dict(text))
+                for k in ("tilt", "pitch", "crank_phase"):
+                    if re.search(rf"\b{k}\s*:[^,}}]*\bdeg\b", text, re.I):
+                        self.disk[k] = math.radians(self.disk[k])
                 continue
             drive = _DRIVE_RE.match(line)
             if drive:
@@ -333,9 +331,10 @@ class _TgParser:
                 self.per_foot[key][int(name.strip()[len(key):])] = float(_parse_quantity(value.strip()))
                 continue
             value = line.split("=", 1)[1].strip()
-            if key in ("crank_phase_lag", "drive_phase_offset"):
-                lag = float(_parse_scalar(value))
-                self.motors["crank_phase_lag"] = math.radians(lag) if _DEG_RE.search(line) else lag
+            if key in ("crank_phase_lag", "drive_phase_offset", "attach_along_edge"):
+                angle = float(_parse_scalar(value))
+                key = "crank_phase_lag" if key == "drive_phase_offset" else key
+                self.motors[key] = math.radians(angle) if _DEG_RE.search(line) else angle
             elif key == "control":
                 self.motors[key] = str(_parse_scalar(value))
             else:
@@ -356,7 +355,8 @@ class _TgParser:
             if _DEG_RE.search(val) and (
                 section in ("bones", "cables", "feathers")
                 or (section == "wrist" and key != "stations")  # stations stay in degrees
-                or (section == "pitch" and key in ("free_angle", "upstroke_pitch", "downstroke_pitch"))
+                or (section == "pitch" and key in ("free_angle", "upstroke_pitch", "downstroke_pitch",
+                                                   "initial", "range"))
             ):
                 parsed = _radians(parsed)
             (self.wing if section is None else self.wing_sections[section])[key] = parsed
@@ -371,8 +371,6 @@ class _TgParser:
         if not isinstance(arc_rod, dict) or not isinstance(rung_rod, dict):
             raise ValueError("archetype arc_rod and rung_rod must be brace dicts")
         angle_deg = float(self.arrange.get("angle", 0.0))
-        tilt = _deg_if_large(self.disk.get("tilt", DiskSpec.tilt_rad))
-        pitch = _deg_if_large(self.disk.get("pitch", DiskSpec.pitch_rad))
         if len(self.generators) != 6:
             raise ValueError(f"Expected 6 tendon generators, got {len(self.generators)}")
 
@@ -421,8 +419,8 @@ class _TgParser:
             ),
             motors=Motors(
                 disk=DiskSpec(
-                    tilt_rad=float(tilt),
-                    pitch_rad=float(pitch),
+                    tilt_rad=float(disk.get("tilt", DiskSpec.tilt_rad)),
+                    pitch_rad=float(disk.get("pitch", DiskSpec.pitch_rad)),
                     ctrlrange=tuple(float(x) for x in disk.get("ctrl", DiskSpec.ctrlrange)),
                     solreflimit=tuple(float(x) for x in disk.get("solref", DiskSpec.solreflimit)),
                     crank_throw=float(disk["crank_throw"]) if "crank_throw" in disk else None,
@@ -432,7 +430,7 @@ class _TgParser:
                 feet=tuple(
                     MotorFoot(
                         station=station,
-                        attach_along_edge_rad=m.get("attach_along_edge", 1.2),  # not MotorFoot's 0.0
+                        attach_along_edge_rad=m.get("attach_along_edge", MotorFoot.attach_along_edge_rad),
                         attach_radius=m.get("attach_radius", 1.0),
                         crank_throw=self.per_foot["crank_throw_t"].get(station),
                         foot_outset=self.per_foot["foot_outset_t"].get(station),
