@@ -6,12 +6,12 @@ in free hover -- with gravity matched to the mean flap lift it still tumbles to
 90-180 deg within ~15 wingbeats at every timestep (0.13-0.40 ms), because our
 quasi-static wings can't do the within-wingbeat modulation a real hummingbird
 stabilizes with. So the flapping supplies the hover LIFT (gravity-matched) and
-the trained policy supplies the flight-control authority the mechanism lacks: a
-stabilizing wrench on the airframe -- attitude torque (3) + vertical thrust trim
-(1) -- as a function of the (low-passed) body state:
+the policy supplies the flight-control authority the mechanism lacks: a bounded
+6-DOF stabilizing wrench on the airframe as a function of the (low-passed) body
+state (runtime.hover_control):
 
-    u = K @ [pos_err(3), linvel(3), att_err(3), angvel(3)] + b   (4,)
-    tau = tau_max*tanh(u[:3])   Fz = fz_max*tanh(u[3])
+    u = K @ scaled [pos_err(3), linvel(3), att_err(3), angvel(3)] + b   (6,)
+    force = f_max*tanh(u[:3]) (world)   tau = tau_max*tanh(u[3:]) (body)
 
 `i don't care if this transfers past the mujoco visualizer`: gravity is scaled
 to the flap lift, the solver runs at iterations=1, and the stabilizer is a
@@ -19,11 +19,15 @@ virtual body wrench -- all fine for a viewer demo, none physical.
 
 The controller itself (features, wrench, PD init) is runtime.hover_control; this
 file is the model build and the BPTT trainer. The trainer does not work (gradients
-explode through the unstable rollout, docs/flight_demos.org): the shipped policy in
-designs/hummer/hover/hover_policy/ is a sweep-tuned PD.
+explode through the unstable rollout, docs/flight_demos.org). The shipped policy in
+designs/hummer/hover/hover_policy/ is a sweep-tuned PD, not a trainer output:
+policy_best.npz is exactly runtime.hover_control.pd_init_theta(cfg, **pd_gains) with
+hover_meta.json's f_max/tau_max/pd_gains (this CLI's defaults and --pd-init gains
+differ, and it writes no pd_gains).
 
-    .venv/bin/python opt/hover_policy.py --tg designs/hummer/hover/shoulder.tg \
+    uv run python opt/hover_policy.py --tg designs/hummer/hover/shoulder.tg \
         --iters 300 --out opt/runs_hover
+    uv run mjpython src/view_hover.py --run opt/runs_hover   # view it (default --run: the shipped PD)
 """
 from __future__ import annotations
 
