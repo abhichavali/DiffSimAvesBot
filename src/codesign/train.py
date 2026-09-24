@@ -62,6 +62,12 @@ def robust_row(rows, rob, liftmin) -> dict:
             "lift_ripple": max(r["lift_ripple"] for r in rows)}
 
 
+def unscored(theta, **extra) -> dict:
+    """A candidate slot nothing has been selected into yet (tau = inf)."""
+    return {"score": math.inf, "tau": math.inf, "swing": float("nan"), "theta": theta,
+            "Lbar": float("nan"), **extra}
+
+
 def run(cfg) -> None:
     set_unsteady_aero(cfg.added_mass)  # default OFF -> MJX==CPU
     rig = setup(cfg.tg, cfg.scene, aero_substep=cfg.aero_substep, integrator=cfg.integrator,
@@ -240,16 +246,10 @@ def run(cfg) -> None:
     # CPU gate baselines: the first in-loop check seeds them (a startup CPU eval cost
     # ~45 min on a design whose numbers are already known).
     cpuL0 = cpuT0 = cpuT0r = cpu_obj0 = float("nan")
-    cpu_best = None
-    if cfg.cpu_every:
-        cpu_best = {"score": math.inf, "tau": math.inf, "swing": float("nan"),
-                    "theta": theta, "Lbar": float("nan"), "Pin": float("nan"), "mjx_tau": float("nan")}
+    cpu_best = unscored(theta) if cfg.cpu_every else None
     # Full-matrix gate (rotate mode): the first in-loop check seeds rob0/liftmin0.
-    robust_best = None
+    robust_best = unscored(theta) if cfg.rotate_batch else None
     rob0 = liftmin0 = float("nan")
-    if cfg.rotate_batch:
-        robust_best = {"score": math.inf, "tau": math.inf, "swing": float("nan"),
-                       "theta": theta, "Lbar": float("nan"), "Pin": float("nan")}
 
     log = []
     # Selection (--single-stage): lowest objective (+ swing) keeping the baseline flap
@@ -286,8 +286,7 @@ def run(cfg) -> None:
             return ok
         return Lbar >= cfg.lift_floor
 
-    best = {"score": math.inf, "tau": math.inf, "power": math.inf, "swing": float("nan"),
-            "theta": theta, "Lbar": float("nan"), "Pin": float("nan")}
+    best = unscored(theta)
     if cfg.single_stage:
         curriculum = (m0.tau_hat,)  # peak torque normalized by the baseline
     else:
@@ -297,8 +296,7 @@ def run(cfg) -> None:
     for stage_i, tau_max in enumerate(curriculum):
         print(f"\n=== stage tau_max = {tau_max*1e3:.0f} mNm ===")
         # Per-stage winner: saved to its own subdir so the demo has one design per stage.
-        stage_best = {"score": math.inf, "tau": math.inf, "power": math.inf, "swing": float("nan"),
-                      "theta": theta, "Lbar": float("nan"), "Pin": float("nan")}
+        stage_best = unscored(theta)
         lr_cur = cfg.lr  # halved on each divergence
         last_good = theta  # last theta that produced a finite gradient
         for it in range(cfg.iters_per_stage):
@@ -360,8 +358,8 @@ def run(cfg) -> None:
                    "overlap": a.C_overlap, "tau_rms": a.tau_rms, "power_crest": a.power_crest,
                    "lift_ripple": a.lift_ripple}
             score = score_of(obj_of(row), a.swing, a.Lbar)
-            sel = {"score": score, "tau": a.tau_robust, "power": a.P_supplied, "swing": a.swing,
-                   "theta": theta_eval, "Lbar": a.Lbar, "Pin": a.P_inactive}
+            sel = {"score": score, "tau": a.tau_robust, "swing": a.swing, "theta": theta_eval,
+                   "Lbar": a.Lbar}
             # Rotate mode selects at the full-matrix check (a batch is an optimistic
             # subset) -- unless full checks are off, when nothing else would select.
             select_here = (not rotate_fns) or not cfg.full_check_every
@@ -388,15 +386,12 @@ def run(cfg) -> None:
             if cfg.control_after and it == cfg.control_after:
                 # The waveform goes live on the NEXT step, so this is the a0-only design:
                 # the reference every "did harmonics help?" claim is measured against.
-                pre = dict(sel)
                 if rotate_fns and cfg.full_check_every:
                     pr, prob, _, plift, _ = full_matrix(bank_jit, theta_eval)
-                    pre.update(full_rows=pr, full_robust=prob, full_liftmin=plift,
-                               full_obj=obj_of(robust_row(pr, prob, plift)))
                     print(f"    [preharmonics it{it:03d}] robust obj="
-                          f"{pre['full_obj']/max(obj0,1e-12):.4f} x baseline  "
+                          f"{obj_of(robust_row(pr, prob, plift))/max(obj0,1e-12):.4f} x baseline  "
                           f"liftmin={plift*1e3:.1f} mN", flush=True)
-                dump(pre, log, out_dir=cfg.out / "preharmonics")
+                dump(sel, log, out_dir=cfg.out / "preharmonics")
             if (rotate_fns and cfg.full_check_every
                     and it % cfg.full_check_every == 0 and train_i > 0):
                 rows, rob, gapf, liftmin, driftf = full_matrix(bank_jit, theta_eval)
@@ -427,8 +422,8 @@ def run(cfg) -> None:
                 log[-1].update(full_robust=rob, full_gap=gapf, full_liftmin=liftmin,
                                full_drift=driftf, full_power=powf, full_obj=objf,
                                full_rows=rows)
-                sel_f = {"score": scoref, "tau": rob, "power": powf, "swing": swmax,
-                         "theta": theta_eval, "Lbar": liftmin, "Pin": a.P_inactive}
+                sel_f = {"score": scoref, "tau": rob, "swing": swmax, "theta": theta_eval,
+                         "Lbar": liftmin}
                 if feas and scoref < best["score"]:
                     best = sel_f
                 if feas and scoref < stage_best["score"]:
@@ -480,9 +475,8 @@ def run(cfg) -> None:
                 if (is_feasible(a.Lbar, a.A_stroke) and cpu_lift_ok and transfers
                         and cpu_obj < cpu_best["score"]):
                     cpu_best = {"score": cpu_obj, "tau": robust, "swing": a.swing, "theta": theta_eval,
-                                "Lbar": a.Lbar, "Pin": a.P_inactive, "mjx_tau": a.tau_hat, "cpu_L": cpuL,
-                                "cpu_P": cpuP, "cpu_obj": cpu_obj,
-                                "cpu_euler": cpuT, "cpu_impl": cpuTi, "cpu_rk4": cpuTr, "cpu_gap": gap}
+                                "Lbar": a.Lbar, "cpu_euler": cpuT, "cpu_impl": cpuTi,
+                                "cpu_rk4": cpuTr, "cpu_gap": gap}
         stage_dir = cfg.out / f"stage_{round(tau_max*1e3)}mNm"
         dump(stage_best, log, out_dir=stage_dir)
         dump(best, log)  # running global best (interrupt-safe)
@@ -519,10 +513,9 @@ def run(cfg) -> None:
     # The CPU-selected best is the honest, integrator-robust winner.
     if cpu_best is not None and math.isfinite(cpu_best["tau"]):
         dump(cpu_best, log, out_dir=cfg.out / "cpu_best")
-        _rk4 = cpu_best.get("cpu_rk4", cpu_best["cpu_impl"])
         print(f"\ncpu-selected best: robust tau={cpu_best['tau']*1e3:.1f} mNm "
               f"(euler {cpu_best['cpu_euler']*1e3:.1f}/impl {cpu_best['cpu_impl']*1e3:.1f}/"
-              f"rk4 {_rk4*1e3:.1f})  L={cpu_best['Lbar']*1e3:.1f} mN  "
+              f"rk4 {cpu_best['cpu_rk4']*1e3:.1f})  L={cpu_best['Lbar']*1e3:.1f} mN  "
               f"(from cpu baseline {cpuT0r*1e3:.1f} mNm)  ->  {cfg.out / 'cpu_best'}")
         report["cpu_best"] = {"robust_peak_Nm": cpu_best["tau"], "cpu_gap": cpu_best["cpu_gap"],
                               "cpu": validate_design(cpu_best["theta"], "cpu_best")}
