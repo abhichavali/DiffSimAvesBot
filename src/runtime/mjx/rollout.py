@@ -1,11 +1,17 @@
 """MJX drive + one physics step in the CPU runtime's order, and a plain design-drive rollout.
 
-physics_step() is the step every MJX rollout shares with the CPU loop in
-``realtime.RealtimeSync.step_and_sync``: zero ``qfrc_applied``, set the motor ``ctrl``,
-add the dead-zone pitch torque (:mod:`runtime.mjx.wing_pitch`), add the blade-element
-aero force (:mod:`runtime.mjx.aero_runtime`), then ``mjx.step``. simulate() runs it
-over the design's Fourier drive (the MJX twin of run_mjx_fixed_frequency);
-codesign.metrics runs it under a learned command.
+physics_step() is the step every MJX rollout shares. It mirrors the canonical CPU step,
+``runtime.sim.PlateWingSim``: zero ``qfrc_applied``, set the motor ``ctrl``, add the
+dead-zone pitch torque (:mod:`runtime.mjx.wing_pitch`) and the blade-element aero
+force (:mod:`runtime.mjx.aero_runtime`), then ``mjx.step``. PlateWingSim adds aero
+before pitch; with just those two terms on a zeroed ``qfrc_applied`` the order is
+exact either way (a + p == p + a), but a third term such as a body wrench must come
+after both, as PlateWingSim and opt/hover_policy add it.
+
+codesign.metrics runs physics_step under a learned command, run_mjx_fixed_frequency
+under its own scan (step drive, lift recording). simulate() runs it over the design's
+ramped Fourier drive with aero every step; only the golden harness calls it, as its
+MJX reference rollout (mjx/simulate).
 
 Autodiff: differentiate with **forward mode** (``jax.jacfwd``). MJX's Newton/CG
 solver steps with a ``lax.while_loop``, which reverse mode (``jax.grad``) cannot
@@ -24,9 +30,6 @@ import mujoco.mjx as mjx
 from runtime.crank import CRANK_ACTUATORS
 from runtime.mjx import aero_runtime, wing_pitch
 from runtime.mjx.wing_pitch import WingPitchConfig
-
-_PITCH_JOINTS = ("L_wing_pitch", "R_wing_pitch")
-
 
 class DriveConfig(NamedTuple):
     """Velocity-actuator drive from the design Fourier control signal."""
@@ -63,17 +66,6 @@ def drive_ctrl(ctrl_like: jax.Array, t: jax.Array, cfg: DriveConfig) -> jax.Arra
     base = cfg.a0 + jnp.sum(cfg.a * jnp.cos(harmonics * phase) + cfg.b * jnp.sin(harmonics * phase))
     command = base * ramp
     return jnp.zeros_like(ctrl_like).at[cfg.flap_actuator_ids].set(command)
-
-
-def pitch_centers(model: mujoco.MjModel, data: mujoco.MjData) -> list[float]:
-    """The settled wing-pitch angles: the dead-zone centers of the pitch spring."""
-    centers: list[float] = []
-    for name in _PITCH_JOINTS:
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-        if jid < 0:
-            continue
-        centers.append(float(data.qpos[model.jnt_qposadr[jid]]))
-    return centers
 
 
 def match_dtypes(tree, ref_tree):
@@ -119,7 +111,7 @@ def simulate(model: mujoco.MjModel, data: mujoco.MjData, morph, control, n_steps
     The pitch dead zone is centered on ``data``'s settled pitch angles.
     """
     drive_cfg = build_drive_config(model, morph, control)
-    pitch_cfg = wing_pitch.build_wing_pitch_config(model, morph, pitch_centers(model, data))
+    pitch_cfg = wing_pitch.build_wing_pitch_config(model, morph, data)
     aero_cfg = aero_runtime.build_aero_config(model, morph)
 
     def run(mx, dx):

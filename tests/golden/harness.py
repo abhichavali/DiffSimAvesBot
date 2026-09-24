@@ -247,7 +247,10 @@ def mjx_aero_wrench(model, datas):
 
 
 def mjx_pitch_qfrc(model, qpos, qvel, centers):
-    cfg = _mjx_pitch.build_wing_pitch_config(model, design_morph(), centers)
+    data = mujoco.MjData(model)  # the dead-zone centers, as the rest pose build_wing_pitch_config reads
+    for side, center in zip("LR", centers):
+        data.qpos[model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_wing_pitch")]] = center
+    cfg = _mjx_pitch.build_wing_pitch_config(model, design_morph(), data)
     return _mjx_pitch.wing_pitch_qfrc(jnp.asarray(qpos), jnp.asarray(qvel), cfg)
 
 

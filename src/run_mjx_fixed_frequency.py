@@ -47,7 +47,7 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
     mx = mjx.put_model(model)
     dx = mjx.put_data(model, data)
     drive = rollout.build_drive_config(model, morph, control, ramp_duration=0.0)
-    pitch = wing_pitch.build_wing_pitch_config(model, morph, rollout.pitch_centers(model, data))
+    pitch = wing_pitch.build_wing_pitch_config(model, morph, data)
     aero = aero_runtime.build_aero_config(model, morph)
 
     def step(carry, record):

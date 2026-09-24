@@ -74,7 +74,7 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
 
     control = load_control_for_morphology(tg_path)
     drive = rollout.build_drive_config(model, morph, control, ramp_duration=0.0)
-    pitch = wing_pitch.build_wing_pitch_config(model, morph, rollout.pitch_centers(model, data))
+    pitch = wing_pitch.build_wing_pitch_config(model, morph, data)
     aero = aero_runtime.build_aero_config(model, morph, substep=aero_substep)
     tip_ids = jnp.asarray([mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, s)
                            for s in WINGTIP_SITES], dtype=jnp.int32)

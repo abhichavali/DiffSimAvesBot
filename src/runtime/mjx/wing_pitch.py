@@ -11,15 +11,15 @@ leveled-neutral rest:
 
 where ``dev = qpos - center``. It is branch-free (``clip``/``sign``), so it is
 fully ``jit``/``vmap``-able and differentiable for use inside an ``mjx.step``
-rollout. The CPU loop zeroes ``qfrc_applied`` each step then accumulates this and
-the aero force into it (see ``realtime.RealtimeSync.step_and_sync``); :func:`apply`
-mirrors that by *adding* to the current ``qfrc_applied``, so the rollout must
-zero (or freshly build) ``qfrc_applied`` before composing force sources.
+rollout. The CPU step (``runtime.sim.PlateWingSim``) zeroes ``qfrc_applied`` each
+step then accumulates the aero force and this into it; :func:`apply` mirrors that by
+*adding* to the current ``qfrc_applied``, so the rollout must zero (or freshly build)
+``qfrc_applied`` before composing force sources (``rollout.physics_step`` does).
 """
 
 from __future__ import annotations
 
-from typing import NamedTuple, Sequence
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -46,23 +46,23 @@ class WingPitchConfig(NamedTuple):
     damping: jax.Array  # scalar float — velocity damping applied everywhere
 
 
-def build_wing_pitch_config(model: mujoco.MjModel, morph, centers: Sequence[float]) -> WingPitchConfig:
+def build_wing_pitch_config(model: mujoco.MjModel, morph, data: mujoco.MjData) -> WingPitchConfig:
     """Resolve the pitch joints on a CPU model into a JAX-ready config for ``morph.wing.pitch``.
 
-    ``centers`` is the settled rest angle per joint (``rollout.pitch_centers`` after
-    ``calibrate_wing_pitch_at_rest``).
+    Each dead zone is centered on the joint's angle in ``data``: the settled rest pose
+    (``runtime.sim.rest_state``).
     """
     pitch = morph.wing.pitch
     qpos_adr: list[int] = []
     dof_adr: list[int] = []
     resolved_centers: list[float] = []
-    for idx, name in enumerate(_JOINTS):
+    for name in _JOINTS:
         joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         if joint_id < 0:
             continue
         qpos_adr.append(int(model.jnt_qposadr[joint_id]))
         dof_adr.append(int(model.jnt_dofadr[joint_id]))
-        resolved_centers.append(float(centers[idx]))
+        resolved_centers.append(float(data.qpos[qpos_adr[-1]]))
 
     return WingPitchConfig(
         qpos_adr=jnp.asarray(qpos_adr, dtype=jnp.int32),

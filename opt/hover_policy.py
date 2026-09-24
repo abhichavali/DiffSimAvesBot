@@ -235,7 +235,7 @@ def main():
         args.tg, scene, dt_ms=args.dt_ms, gravity=grav, aero_substep=args.aero_substep)
     cfg = cfg0._replace(f_max=args.f_max, tau_max=args.tau_max)
 
-    pitch_cfg = mwp.build_wing_pitch_config(model, morph, mroll.pitch_centers(model, data))
+    pitch_cfg = mwp.build_wing_pitch_config(model, morph, data)
     aero_cfg = aero_runtime.build_aero_config(model, morph, substep=args.aero_substep)
     mx = mjx.put_model(model)
     dx0 = mjx.put_data(model, data)
