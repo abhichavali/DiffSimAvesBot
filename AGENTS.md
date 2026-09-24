@@ -1,88 +1,36 @@
-# Agent instructions for this repository
+# Agent guide for DiffSimAvesBot
 
-These instructions apply to all coding agents (Cursor, Claude, Gemini, Copilot, etc.) working in this repo.
+The canonical instructions for every coding agent (Claude, Codex, Cursor, Copilot, Gemini, ...)
+working in this repo. `CLAUDE.md` imports this file; keep tool-specific notes out of here.
 
-## Environment & tooling
+## What this is
 
-- Python is managed with **`uv`** (no manual venv activation needed).
-  - Install/sync: `uv sync`
-  - Run a script: `uv run python <script>`
-  - Add a dependency: `uv add <package-name>`
-- MuJoCo viewer runs on macOS need **`mjpython`**. It lives in `.venv/bin` (so `uv run
-  mjpython`, not bare `mjpython`), and with uv's standalone Python it cannot find
-  `libpython` until you point it there:
-  - `DYLD_LIBRARY_PATH=$(uv run python -c 'import sys;print(sys.base_prefix)')/lib uv run mjpython src/view_fixed_frequency.py`
-  - Headless paths need no mjpython: `view_eagle --gif`, `src/demos/render_*.py`, the
-    golden viewer item. The design-inspector GUI's Viewer tab sets the variable itself.
+A tensegrity flapping-wing robot in simulation. A `.tg` design (morphology + Fourier
+crank-velocity control) compiles to MuJoCo XML and runs on a CPU reference simulator
+(numpy quasi-steady blade-element aero), on a differentiable JAX/MJX port of it, and
+under gradient and evolutionary co-design that tunes the control and the tendon net.
 
-## Common commands
+Pipeline: `designs/<bird>/<name>/{shoulder,control}.tg` -> `src/morphology` (parser +
+compiler) -> MJCF -> `src/runtime` (CPU step; `mjx/` port) -> `src/codesign` + `opt/`.
 
-Tools default `--scene` to the repo-root `scene.xml`: pass `--scene <tmp path>` when
-running tools concurrently, or they overwrite each other's scene.
+## Layout
 
-- **Compile** a design (`.tg` DSL → MuJoCo XML):
-  - `uv run python src/compile_tg.py --tg designs/hummer/hover/shoulder.tg --out scene.xml`
-  - With no `--tg` it compiles `designs/hummer/legacy-baseline/` (the June demo baseline, not a hover design).
-- **Headless CPU run** (compiles, simulates, prints lift stats):
-  - `uv run python src/run_fixed_frequency.py --tg designs/hummer/hover/shoulder.tg --periods 5`
-  - MJX lift stats: `uv run python src/run_mjx_fixed_frequency.py --periods 5` (same
-    default design and printout; the numbers differ only by CPU vs MJX).
-- **Viewer**: `mjpython src/view_fixed_frequency.py [--tg path/to/shoulder.tg]` (see
-  above for the full mjpython command; hover demos: `src/view_hover.py`, eagle:
-  `src/view_eagle.py`).
-- **Certify** a design (CPU worst-case peak torque, `docs/ROBUST_CODESIGN_METHODOLOGY.md`
-  section 12): `uv run python opt/design_io.py designs/hummer/hover --integrator euler implicitfast rk4 --periods 24`
-  plus the same at `--timestep 0.03` (euler, implicitfast); the worst peak printed is the number.
-- **Tests**: `uv run pytest -q` (unit tests + the golden quick tier).
-- **Behavior check**: `uv run python -m tests.golden check [--quick]` must stay all-PASS
-  after any refactor; see the docstring at the top of `tests/golden/harness.py`. When code
-  or designs move, edit only the harness's ADAPTER section. `capture` rewrites
-  `tests/golden/baseline.json`: run it only for a deliberate, reviewed behavior change, in
-  its own commit.
-- **Renders**: headless MP4 demos in `src/demos/render_*.py` (`--self-check` asserts
-  without rendering). The `render_antiphase` and `render_bilateral_control` self-checks
-  and the `render_configs --config collision|ceiling --dry-run` runs already fail their
-  asserts; compare them before/after, do not expect PASS.
-
-No automated lint suite is configured.
-
-## High-level architecture
-
-The pipeline is **`designs/<bird>/<name>/{shoulder,control}.tg` → parser → compiler → MuJoCo simulation**.
-
-- `designs/` — the committed designs; **`designs/README.md`** lists each one (what it
-  is, lineage, key numbers, which tool defaults to it). `shoulder.tg` is the whole
-  morphology, `control.tg` the Fourier crank-velocity command beside it.
-- `src/design_paths.py` — tool-default design paths (`DEFAULT_HUMMER_TG`,
-  `HOVER_BASE_TG`, `LEGACY_BASELINE_TG`, `EAGLE_TG`). Nothing reads a design from the
-  environment: every tool takes `--tg` and hands the parsed `Morphology` down.
-- `src/morphology/` — the compiler (start at `compile.compile_file`): `tg_parser.py`
-  (`.tg` → the `Morphology` dataclasses of `model.py`), `geometry.py` / `tendon_net.py`
-  (strut poses, the 12 σ tendons) → `compile.py` (→ `compiled.py`), `motor_tendons.py`
-  (crank tendon ranges, measured on a probe scene), `emit_mjcf.py` / `emit_eagle.py` /
-  `mjcf_parts.py` (the XML), `wing_geometry.py` (the wing mesh's pose, and the aero
-  strips measured from the posed mesh)
-- `src/compile_tg.py` — compile CLI (`compile_tg(tg, out)` is what every tool calls)
-- `src/runtime/` — CPU simulation runtime: `sim.py` (`PlateWingSim` / `rest_state`, the
-  plate-wing step every CPU loop uses, and the canonical force order), `aero.py`
-  (quasi-steady blade-element aero, the numpy reference; also the one home of the aero
-  coefficients, side signs and `set_unsteady_aero`), `control_signal.py`, `crank.py`,
-  `wing_pitch.py`, `disk_orientation.py` (stroke-plane steering, `StrokePlaneSignal`),
-  `hover_control.py` (free-flight hover wrench), `eagle_drive.py` / `eagle_poses.py` /
-  `wing_cables.py` (eagle wing), `realtime.py` (viewer pacing). Everything takes the
-  `Morphology` the scene was compiled from.
-- `src/run_fixed_frequency.py`, `src/view_fixed_frequency.py`, `src/view_hover.py`,
-  `src/view_eagle.py` — CPU runners/viewers; `src/flying.py` — MJCF surgery that turns
-  the bench scene into a free-flying airframe (obstacles, ceiling, bird skin);
-  `src/demos/render_*.py` — headless MP4 renders
-- `src/runtime/mjx/` — **JAX/MJX port** of the simulation (GPU, jittable, differentiable). See the MJX section below.
-- `src/codesign/` — the co-design library (`rig`, `genome`, `metrics`, `loss`, `train`,
-  `cpu_check`, `artifacts`); `opt/` — its CLIs (`optimize_control.py`,
-  `evolve_codesign.py`, `hover_policy.py`, ...). See `opt/README.md`.
-- `plot_fixed_frequency_gui.py` — the Tk design inspector; `src/gui/` — its simulations.
-- `tests/` — pytest suite; `tests/golden/` — the golden behavior harness.
-- `docs/ROBUST_CODESIGN_METHODOLOGY.md` — how designs are certified (CPU peak torque;
-  section 12 is the current doctrine, the rest is the campaign log).
+| path | purpose | start at |
+|---|---|---|
+| `designs/` | committed designs: `shoulder.tg` = the whole morphology, `control.tg` = the crank command | `designs/README.md` (every design, lineage, certified numbers, which tool defaults to it) |
+| `src/design_paths.py` | tool-default designs | `DEFAULT_HUMMER_TG` (hummer/hover), `HOVER_BASE_TG`, `LEGACY_BASELINE_TG`, `EAGLE_TG` |
+| `src/morphology/` | `.tg` -> MJCF compiler | `compile.compile_file`; `tg_parser.load_morphology` -> `model.py` dataclasses; `geometry.py`/`tendon_net.py` (strut poses, 12 sigma tendons); `motor_tendons.py`; `emit_mjcf.py`/`emit_eagle.py`/`mjcf_parts.py`; `wing_geometry.py` (posed wing mesh -> aero strips, hinge offset) |
+| `src/compile_tg.py` | compile CLI | `compile_tg(tg, out)`, what every tool calls |
+| `src/runtime/` | CPU runtime (the reference) | `sim.py` (`PlateWingSim`, `rest_state`: the canonical step and force order); `aero.py` (blade-element aero, the one home of aero coefficients and `set_unsteady_aero`); `control_signal.py`, `crank.py`, `wing_pitch.py`, `disk_orientation.py`, `hover_control.py`, `eagle_*.py`, `wing_cables.py`, `realtime.py` |
+| `src/runtime/mjx/` | JAX/MJX port (jit/vmap, differentiable) | `aero.py`, `aero_runtime.py` (`aero_wrench`), `rollout.py` (`physics_step`, `build_drive_config`, `simulate`) |
+| `src/codesign/` | co-design library | `rig`, `genome`, `metrics` (`build_rollout`), `loss`, `train`, `cpu_check`, `artifacts` (design dirs: write + read back) |
+| `opt/` | co-design CLIs | `optimize_control.py`, `evolve_codesign.py`, `hover_policy.py`, `design_io.py` (CPU replay/certify), `run_gui.py`; see `opt/README.md` |
+| `src/*.py` | runners and viewers | `run_fixed_frequency.py`, `run_mjx_fixed_frequency.py`, `view_fixed_frequency.py`, `view_hover.py`, `view_eagle.py`; `flying.py` (bench scene -> free-flying airframe) |
+| `src/demos/` | headless MP4 renders | `render_*.py` (`--self-check` asserts without rendering) |
+| `plot_fixed_frequency_gui.py`, `src/gui/` | Tk design inspector and its simulations | |
+| `tests/`, `tests/golden/` | pytest suite; golden behavior harness | `tests/golden/harness.py` docstring |
+| `docs/` | `ROBUST_CODESIGN_METHODOLOGY.md` (certification; section 12 is the doctrine, the rest a campaign log), `flight_demos.org` (free-flight hover demos) | |
+| `assets/wing.stl` | the wing mesh the aero strips are measured from | |
 
 Names that mislead:
 
@@ -94,45 +42,146 @@ Names that mislead:
 | `opt/design_io.py` | CPU replay / certification of a design dir |
 | `*_fixed_frequency` | run under the design's own control signal (harmonics included) |
 
-## Codebase conventions
+## Commands
 
-- Semantic tendon anchors: `M[station][face]` / `F[station][face]` in `.tg`; compiled to legacy node names (`t1`, `t1_2`, …) in MJCF.
-- Six σ-generators expand to 12 structural tendons. The R-side geometry is an exact
-  mirror of L; tendon materials need not be (`overrides:` are per tendon, and the
-  flagship's L and R differ).
-- Quaternions follow MuJoCo's **w-first** ordering: `[w, x, y, z]`.
-- Structural tendon rest lengths are **derived** from posed anchor distance × pretension — never hand-written.
-- Do not hand-edit a compiled `scene.xml` for design changes; edit the `.tg` and recompile.
-- Preferred execution: `uv` for compile scripts, `mjpython` for viewer-based MuJoCo runs on macOS.
+Python is managed with `uv`: `uv sync`, `uv run python <script>`, `uv add <pkg>`. No lint
+suite is configured. Every tool takes `--tg` and `--help`.
 
-## MJX / GPU
+```bash
+uv run python src/compile_tg.py --tg designs/hummer/hover/shoulder.tg --out scene.xml
+uv run python src/run_fixed_frequency.py --tg designs/hummer/hover/shoulder.tg --periods 5   # CPU lift stats
+uv run python src/run_mjx_fixed_frequency.py --tg designs/hummer/hover/shoulder.tg --periods 5  # same, on MJX
+uv run python opt/design_io.py designs/hummer/hover --integrator euler   # CPU replay: lift / peak torque / power
+uv run python plot_fixed_frequency_gui.py         # design inspector (Tk)
+uv run python opt/optimize_control.py --help       # gradient co-design; see opt/README.md
+uv run pytest -q                                   # unit tests + the golden quick tier (~50 s)
+uv run python -m tests.golden check [--quick]      # behavior check (see below)
+```
 
-The simulation is also ported to **MJX** (`src/runtime/mjx/`): a pure-JAX rollout
-that is `jit`/`vmap`-able and differentiable for gradient-based optimization. The
-CPU path is unchanged and is the reference the port is validated against.
+- `compile_tg.py` with no `--tg` compiles `designs/hummer/legacy-baseline/` (the June
+  demo baseline, not a hover design). Everything else defaults to `designs/hummer/hover`.
+- **Certify** a design (CPU worst-case peak torque, methodology section 12): run
+  `opt/design_io.py <dir> --integrator euler implicitfast rk4 --periods 24` and the same
+  with `--timestep 0.03 --integrator euler implicitfast`; the worst peak printed is the
+  number. Compare lift per passive-pitch mode (see Gotchas).
+- **Viewers** (`src/view_fixed_frequency.py`, `src/view_hover.py`, `src/view_eagle.py`)
+  need `mjpython` on macOS; see Gotchas for the command. Headless alternatives:
+  `view_eagle.py --gif out/eagle.gif`, `src/demos/render_*.py`.
+- **Renders**: `src/demos/render_*.py --self-check`. The `render_antiphase` and
+  `render_bilateral_control` self-checks and `render_configs --config collision|ceiling
+  --dry-run` already fail their asserts; compare before/after, do not expect PASS.
+- Tools default `--scene` to the repo-root `scene.xml`: pass `--scene <tmp path>` when
+  running tools concurrently, or they overwrite each other's scene.
 
-- **Modules**: `wing_pitch.py`, `aero.py` (blade strips; coefficients from
-  `runtime.aero.AeroParams`), `aero_runtime.py` (`aero_wrench`), `rollout.py`
-  (`physics_step`, `build_drive_config`; `simulate(...)` is the golden harness's reference
-  rollout). The config builders take the `Morphology`; `codesign.rig.setup` wires them
-  for the optimizer, and `codesign.metrics.build_rollout` is the differentiable rollout.
-- **Autodiff**: forward mode (`jax.jacfwd`) works as-is; reverse mode (`jax.grad`)
-  cannot trace MJX's solver `while_loop` unless `model.opt.iterations == 1`
-  (`opt/hover_policy.py` does that). **Geometry params (radius/attach/offsets) are not
-  differentiable** (host-side compiler).
-- **Batched**: `jax.vmap` a rollout over a swept param for parallel GPU runs.
-- **Tests**: `uv run pytest -q`; full behavior check: `uv run python -m tests.golden check`.
-- **GPU server**: no box is live. `docs/ROBUST_CODESIGN_METHODOLOGY.md` section 8 has the
-  vast.ai setup (rsync to `/workspace/DiffSimAvesBot/`; the repo is private, so no
-  `git clone`). On the box always `uv run --no-sync`: plain `uv run` re-syncs and drops
-  the CUDA jax.
+## Conventions
+
+- **Designs**: a design is a directory `designs/<bird>/<name>/` with `shoulder.tg` and the
+  `control.tg` it names (`control = control.tg`, resolved beside it; a relative
+  `meshdir = assets` resolves against the repo root). Add a design as a new dir and a row
+  in `designs/README.md`; point tool defaults at it only through `src/design_paths.py`.
+  Nothing reads a design from the environment: tools take `--tg` and pass the parsed
+  `Morphology` down.
+- **Bird tags**: every `.tg` starts with `bird = hummer` (plate wing) or `bird = eagle`
+  (three-linkage bone wing). Tools refuse a design of the wrong bird and a control of
+  another bird (`require_bird`).
+- **Strict `.tg` parser**: unknown keys, unparseable lines, brace parts without `:` and
+  overrides that name no tendon all raise. Literals carry their unit: `mm`, `cm`, `g`, `ms`
+  are scaled to SI; an angle converts to radians when its literal says `deg` (station
+  angles and `arrange.angle` stay degrees by design; see the `tg_parser.py` docstring).
+  Keys old files carry that nothing reads (`force_scale`, `body_torque`, `cop`, disk
+  `outboard`, ...) are accepted and ignored so old files still parse.
+- **Tendons**: `M[station][face]` / `F[station][face]` anchors in `.tg` compile to legacy
+  node names (`t1`, `t1_2`, ...). Six sigma-generators expand to 12 structural tendons; the
+  R-side geometry mirrors L exactly, materials need not (`overrides:` are per tendon; the
+  flagship's L and R differ). Structural rest lengths are **derived** from posed anchor
+  distance x pretension, never hand-written.
+- **Quaternions** are MuJoCo **w-first**: `[w, x, y, z]`.
+- **Harmonic clock**: `data.time` is reset to 0 after the rest settle, so the control's
+  harmonics start at rollout start. CPU replay and export use the MJX rollout's
+  crank-locked clock (`Genes.clock_factor()` = exp(f_log + a0_log)). Old claims that
+  "harmonics are dt-specialized" were this clock bug.
+- **Aero** follows the mounted wing mesh (strips, per-strip hinge offset, root offset come
+  from `wing_geometry.py`); lift follows the chordwise flow whichever edge leads; aero is
+  recomputed every `aero_substep` (default 4) steps and its generalized force held in
+  between, identically on CPU and MJX. Keep the CPU (`runtime/aero.py`) and MJX
+  (`runtime/mjx/aero.py`) implementations consistent: change both or neither.
+- Do not hand-edit a compiled `scene.xml`; edit the `.tg` and recompile.
+- Commits: one change per commit, imperative subject in the repo's style (`git log`).
+
+## Behavior contract: the golden harness
+
+`tests/golden/` recomputes every piece of repo behavior (parse, compile, CPU rollouts,
+aero, MJX, the optimizer CLI) and compares it with `tests/golden/baseline.json`: exactly
+for CPU/numpy, within `JAX_RTOL` for JAX/MJX. The harness docstring is the contract.
+
+- `uv run python -m tests.golden check [--quick] [-k PATTERN]` diffs against the
+  baseline; `--quick` skips the JIT-heavy full tier (`mjx/*`, `optimizer/cli`), and
+  `uv run pytest -q` runs the quick tier. After any refactor, `check` (full) must be
+  all-PASS.
+- `capture [--quick] [-k PATTERN]` merges recomputed items into `baseline.json`. A
+  recapture is legitimate only for a deliberate, reviewed behavior change (a physics fix,
+  a design edit): recapture just the affected items with `-k`, in the commit that makes
+  the change, and list which items moved and by how much in the commit body. Never
+  recapture to make a refactor pass.
+- When code or designs **move**, edit only the harness's ADAPTER section (imports, thin
+  wrappers, and `PATHS`, which maps logical design names like `shoulder`, `baseline`,
+  `eagle`, `soft_it009p` to their current `.tg` paths). Baseline keys are logical names,
+  never paths.
+
+## Gotchas
+
+- **mjpython on macOS**: the MuJoCo viewers need `mjpython`, which lives in `.venv/bin`
+  (so `uv run mjpython`), and with uv's standalone Python it cannot find `libpython`
+  ("failed to dlopen ... libpython3.12.dylib") until you point it there:
+  `DYLD_LIBRARY_PATH=$(uv run python -c 'import sys;print(sys.base_prefix)')/lib uv run mjpython src/view_fixed_frequency.py`.
+  The GUI's Viewer tab sets the variable itself.
+- **Tk (GUIs)**: if `tk.Tk()` fails with "Can't find a usable init.tcl" (sandboxed shells),
+  export `TCL_LIBRARY=$B/lib/tcl8.6` and `TK_LIBRARY=$B/lib/tk8.6` with
+  `B=$(uv run python -c 'import sys;print(sys.base_prefix)')`.
+- **Parallel runs on one design**: `codesign.rig.setup` holds `opt/.compile.lock` (flock)
+  across compile + load, but `opt/design_io.py` / `artifacts.reconstruct_design` write
+  `_recon_scene.xml` inside the design dir with no lock. Two `design_io` processes on the
+  same design dir (e.g. the two certification commands) race on that file: run them one
+  after the other, or on a copy of the dir. Likewise pass distinct `--scene` paths.
+- **JIT cost**: every MJX entry point pays an XLA compile first (a few seconds for
+  `run_mjx_fixed_frequency`, ~10-20 s per golden full-tier item on a laptop CPU, minutes
+  for a tri-integrator / rotating-batch optimizer setup); a new shape, integrator, dt or
+  `vmap` width recompiles. Iterate with CPU tools and `golden check --quick`.
+- **GPU box** (vast.ai; setup in methodology section 8; rsync, the repo is private): run
+  `.venv/bin/python ...` (or `uv run --no-sync`), never plain `uv run`: it re-syncs and
+  drops the CUDA jax. `pkill -f '[o]ptimize_control'`, not `pkill -f optimize_control`
+  (that kills your own ssh session).
+- **Reverse-mode autodiff**: `jax.jacfwd` works as-is; `jax.grad` cannot trace MJX's
+  solver `while_loop` unless `model.opt.iterations == 1` (`opt/hover_policy.py` does).
+  Geometry (radius / attach / offsets) is compiled host-side and is not differentiable.
+- **Passive pitch is bistable** on the seed `designs/hummer/hover`: it settles into a
+  ~190 mN or a ~210 mN lift mode depending on dt and integrator. Compare per-cycle lift
+  or per mode, never one mean against another. At the viewer/GUI cadence (0.13 ms, aero
+  substep 4) the seed's passive pitch is not periodic at all; 0.06 and 0.03 ms are fine.
+- **Stale numbers**: the 2026-09 aero fixes cut the seed's lift from ~363 to ~187-210 mN
+  and raised its certified peak from 174.7 to 193.1 mNm; `legacy-baseline` now has
+  positive lift (~110 mN). Any older lift/peak (methodology campaign log, pre-fix rows of
+  `designs/README.md`, "negative lift" claims) is history: re-run `design_io` first.
 
 ## Known bugs (left unfixed on purpose: each fix changes outputs)
 
-- Codesign: see `opt/README.md` "Known issues".
-- Morphology: the R fixed strut keeps the L site quats.
-- GUI: `run_gui`'s `RunConfig.loss` is never read; a leaked `mkdtemp`.
-- `opt/hover_policy.py` writes no `pd_gains` into `hover_meta.json` (descriptive; nothing reads it).
+Keep this list and `opt/README.md` "Known issues" in sync.
+
+- Codesign (details in `opt/README.md` "Known issues"): the `--lift-floor` default
+  (300 mN, also `run_gui`'s `lift_floor`) is unreachable now that the seed lifts 187-210 mN,
+  so it binds from the first step; MJX sizes its warmup/sample windows by the design
+  period, not the crank-locked one (1.5% mean-power gap at a0_log = 0.05); `--wavelet`
+  writes a `control.tg` no runtime tool loads; the validity-penalized Adam stage was
+  removed (`C_valid` is logged, not in the loss).
 - `designs/hummer/hover/hover_policy/hover_meta.json` gravity (5.27 m/s^2) and its policy
   predate the 2026-09 aero fixes; the leveled bench now lifts ~219 mN (~3.0 m/s^2), so
   `view_hover` flies an overweight bird until `opt/hover_policy.py` is re-run.
+- GUI plot cache (`src/gui/sims.py` `cached_sim`): the `src/` mtime is read per call but
+  the code is imported once, so editing physics with the GUI open and pressing Cmd-U
+  stores old-code results under the new key. Restart the GUI after physics edits, or
+  `rm -r .gui_plot_cache`.
+- Morphology: the R fixed strut keeps the L site quats (cosmetic).
+- GUI: `run_gui`'s `RunConfig.loss` is never read; the design inspector leaks one
+  `mkdtemp` scene dir per tab.
+- `opt/hover_policy.py` writes no `pd_gains` into `hover_meta.json` (descriptive; nothing
+  reads it).
