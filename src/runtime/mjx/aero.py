@@ -131,11 +131,14 @@ def aero_strip(
     FDi = q * _cd(alpha, p) * span_chord * dir_drag
     FLi = q * _cl(alpha, p) * span_chord * dir_lift
 
-    r_cof_trans = x_rot - (p.ct1 * jnp.abs(alpha) / _PI + p.ct2)
+    # Far edge leading: the CoP and the 3/4-chord point are measured from it (x -> 1 - x).
+    hinge_leads = chord_sign == sLift
+    x_cop = p.ct1 * jnp.abs(alpha) / _PI + p.ct2
+    r_cof_trans = x_rot - jnp.where(hinge_leads, x_cop, 1.0 - x_cop)
     r_cof_trans = jnp.clip(r_cof_trans, x_rot - 1.0, x_rot) * chord
 
     # --- Rotational circulation force ---
-    circulation_rot = _PI * (0.75 - x_rot) * chord**2 * omega_w[1]
+    circulation_rot = _PI * (jnp.where(hinge_leads, 0.75, 0.25) - x_rot) * chord**2 * omega_w[1]
     f_rot_x = p.c4 * jnp.abs(rle) * (1.0 / num_blade) * rho * circulation_rot * norm_v
     F_rot_i = jnp.stack([f_rot_x, jnp.zeros_like(f_rot_x), jnp.zeros_like(f_rot_x)])
 

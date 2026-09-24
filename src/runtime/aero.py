@@ -174,7 +174,12 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     FDi = q * _cd(alpha, a, b, c, d) * chord * (Rw / NumBlade) * dir_drag
     FLi = q * _cl(alpha, e, f, g, h) * chord * (Rw / NumBlade) * dir_lift
 
-    r_cof_trans = x_rot - (ct1 * abs(alpha) / np.pi + ct2)
+    # The CoP and the rotational lift's 3/4-chord point are measured from the edge
+    # that leads. When that is the far edge (vz against sLift), x -> 1 - x in chords
+    # from the hinge edge.
+    hinge_leads = chord_sign == sLift
+    x_cop = ct1 * abs(alpha) / np.pi + ct2
+    r_cof_trans = x_rot - (x_cop if hinge_leads else 1 - x_cop)
     r_cof_trans = min(max(r_cof_trans, x_rot - 1), x_rot)  # np.clip, minus its overhead
     r_cof_trans *= chord
 
@@ -182,7 +187,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # Rotational aerodynamic force
     # --------------------------------------------------------
 
-    Circulation_rot = np.pi * (0.75 - x_rot) * (chord ** 2) * omega_w[1]
+    Circulation_rot = np.pi * ((0.75 if hinge_leads else 0.25) - x_rot) * (chord ** 2) * omega_w[1]
     F_rot_i = c4 * abs(rle) * (1 / NumBlade) * np.array([rho * Circulation_rot * norm_v, 0, 0])
 
     # --------------------------------------------------------
