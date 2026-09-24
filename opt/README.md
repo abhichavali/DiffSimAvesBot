@@ -120,7 +120,8 @@ way a torque spread does. Self-check: `uv run pytest -q tests/test_reward.py`.
   run integrator (+ implicitfast/rk4 in tri/rotate mode, + `--cpu-timestep-factors`);
   within `--cpu-gap` and stationary it can become `cpu_best/`.
 - `--control-after N` freezes the control genes (all but a0 with `--a0-free`) and the
-  stroke plane for the first N iterations of each stage and snapshots `preharmonics/`.
+  stroke plane for the first N iterations of each stage and snapshots `preharmonics/`
+  (and the `*_preharmonics` bests) at the first stage's unlock.
 - `--lock-wings` geometric-means each L/R tendon pair at load and tunes 12 mirrored
   pairs instead of 24 independent tendons, so both wings stay one design. Check:
   `uv run pytest -q tests/test_wing_lock.py`.
@@ -134,7 +135,7 @@ the first one that exists.
 ## Outputs (`--out`, default `opt/runs/`)
 
 Each design dir (the run root = running best, `stage_<N>mNm/`, `checkpoints/itNNN/`
-every 3 iterations, `cpu_best/`, `robust_best/`, `*preharmonics/`) holds `shoulder.tg`
+every 3 iterations counted across stages, `cpu_best/`, `robust_best/`, `*preharmonics/`) holds `shoulder.tg`
 (control repointed), `control.tg`, `theta_full.json` (the raw theta: an
 `--init-codesign` seed), `theta_best.json`, `tendon_optimized.json`,
 `motor_tendon_optimized.json`, `pitch_optimized.json`, `strokeplane_optimized.json` and

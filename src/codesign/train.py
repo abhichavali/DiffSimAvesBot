@@ -399,7 +399,8 @@ def run(cfg) -> None:
             ) * beta_frac
             # Phase boundary: snapshot the certified winners of the tendon/motor-only phase
             # before the harmonics move ("what did harmonics buy" = diff vs *_preharmonics).
-            if cfg.control_after and it == cfg.control_after:
+            # First stage only: every later stage starts from harmonics that already moved.
+            if cfg.control_after and stage_i == 0 and it == cfg.control_after:
                 if robust_best is not None and math.isfinite(robust_best["tau"]):
                     dump(robust_best, log, out_dir=cfg.out / "robust_best_preharmonics")
                 if cpu_best is not None and math.isfinite(cpu_best["tau"]):
@@ -472,9 +473,9 @@ def run(cfg) -> None:
                   f"A={m.A_stroke*1e3:5.2f}mm  P={m.P_supplied*1e3:5.0f}mW  "
                   f"S={m.S:.3g}  Cv={m.C_valid:.2g} a={math.degrees(m.alpha_pk):.0f} k={m.k_eff:.2g} "
                   f"conv={m.conv_err:.1e} beta={robust_beta:.0f} Pin={m.P_inactive:.3g}{tri}", flush=True)
-            if it % 3 == 0:
-                dump(sel, log, out_dir=cfg.out / "checkpoints" / f"it{it:03d}")
-            if cfg.control_after and it == cfg.control_after:
+            if train_i % 3 == 0:  # keyed by the run-wide iteration: stages must not overwrite
+                dump(sel, log, out_dir=cfg.out / "checkpoints" / f"it{train_i:03d}")
+            if cfg.control_after and stage_i == 0 and it == cfg.control_after:
                 # The waveform goes live on the NEXT step, so this is the a0-only design:
                 # the reference every "did harmonics help?" claim is measured against.
                 if rotate_fns and cfg.full_check_every:
