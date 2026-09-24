@@ -10,7 +10,7 @@
 The skin runs the opposite fade to render_configs.py: it starts nearly invisible
 (bare tensegrity joint) and fills in as the flight progresses.
 
-Reuses render_configs for the scene build / ffmpeg pipe; the aero, control,
+Scene build, ffmpeg pipe and attitude PD come from common.py; the aero, control,
 crank-sync, pitch and disk-orientation runtimes are the same ones the viewer uses.
 """
 
@@ -31,8 +31,17 @@ if str(SRC) not in sys.path:
 import mujoco  # noqa: E402
 
 import flying  # noqa: E402
+from common import (  # noqa: E402
+    ACTUATORS,
+    airframe_xml,
+    attitude_pd,
+    ffmpeg_pipe,
+    lift_free_bodies,
+    save_still,
+    scene_option,
+    smoothstep,
+)
 from morphology.tg_parser import load_morphology  # noqa: E402
-from render_configs import ACTUATORS, _ffmpeg, _save_still, build_model  # noqa: E402
 from runtime.aero import AeroBladeRuntime  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
     eval_control,
@@ -45,19 +54,9 @@ from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 from runtime.realtime import get_actuator_id  # noqa: E402
 from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest  # noqa: E402
 
-# The nose points +x (bird_head_geom at x=+0.14, tail at -0.09) and the wings
-# span +-y, so "forward" is +x, the stroke plane tilts about y (disk pitch), and a
-# positive rotation about +y is nose-down (the forward lean of cruising flight).
-PITCH_AXIS = np.array([0.0, 1.0, 0.0])
-
 # Skin materials, faded together so the whole bird materializes over the joint.
 # (torso ends translucent so the mechanism still shows through at the end).
 SKIN_MATS = {"bird_body_mat": 0.75, "bird_mat": 1.0, "bird_wing_mat": 1.0}
-
-
-def smoothstep(x: float) -> float:
-    x = min(1.0, max(0.0, x))
-    return x * x * (3.0 - 2.0 * x)
 
 
 class Schedule:
@@ -113,8 +112,8 @@ class Schedule:
 
 
 def render(args):
-    model = build_model("flying", args.tg, args.scene,
-                        skinned=True, bird_assets=args.bird_assets)
+    model = mujoco.MjModel.from_xml_string(
+        flying.add_visual_bird(airframe_xml(args.tg, args.scene), assets_dir=args.bird_assets))
     morph = load_morphology(args.tg)
     control = load_control_for_morphology(args.tg)
     sched = Schedule(args)
@@ -122,10 +121,7 @@ def render(args):
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
-    for j in range(model.njnt):
-        if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:
-            data.qpos[int(model.jnt_qposadr[j]) + 2] += args.lift
-    mujoco.mj_forward(model, data)
+    lift_free_bodies(model, data, args.lift)
 
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
@@ -143,10 +139,6 @@ def render(args):
     z0 = float(data.subtree_com[airframe_bid][2])
     prev_z = [z0]
     dt = float(model.opt.timestep)
-    qconj = np.zeros(4)
-    q_tgt = np.zeros(4)
-    q_err = np.zeros(4)
-    att_err = np.zeros(3)
     x_ref = [float(data.subtree_com[airframe_bid][0])]
 
     def force_hook():
@@ -180,16 +172,8 @@ def render(args):
         ])
         # Attitude PD toward a commanded lean (upright hovering, nose-down once
         # moving forward). Without it the forward stroke-plane tilt pitches the
-        # airframe past 90 deg and it tumbles. Free-joint angular qvel is
-        # body-local, mj_applyFT wants a world torque -> rotate it out.
-        rot = np.asarray(data.xmat[airframe_bid]).reshape(3, 3)
-        mujoco.mju_axisAngle2Quat(q_tgt, PITCH_AXIS, sched.lean(t))
-        mujoco.mju_negQuat(qconj, data.xquat[airframe_bid])
-        mujoco.mju_mulQuat(q_err, q_tgt, qconj)
-        mujoco.mju_quat2Vel(att_err, q_err, 1.0)
-        tau = args.level_kp * att_err - args.level_kd * (
-            rot @ data.qvel[air_dofadr + 3 : air_dofadr + 6]
-        )
+        # airframe past 90 deg and it tumbles.
+        tau = attitude_pd(data, airframe_bid, air_dofadr, sched.lean(t), args.level_kp, args.level_kd)
         mujoco.mj_applyFT(model, data, f, tau, com, airframe_bid, data.qfrc_applied)
 
         # Drive: normal flap, then fade to zero. ctrl 0 leaves the velocity servos
@@ -208,17 +192,13 @@ def render(args):
     cam.trackbodyid = airframe_bid
     cam.azimuth = args.azimuth
     cam.elevation = args.elevation
-    scn_opt = mujoco.MjvOption()
-    for gi in range(len(scn_opt.geomgroup)):
-        scn_opt.geomgroup[gi] = 1 if gi <= 2 else 0
-    for si in range(len(scn_opt.sitegroup)):
-        scn_opt.sitegroup[si] = 0
+    scn_opt = scene_option()
 
     steps_per_frame = max(1, round((args.realtime_factor / args.fps) / dt))
     n_frames = int(sched.total / args.realtime_factor * args.fps)
     args.out.mkdir(parents=True, exist_ok=True)
     mp4 = args.out / f"{args.name}.mp4"
-    proc = _ffmpeg(mp4, args.width, args.height, args.fps)
+    proc = ffmpeg_pipe(mp4, args.width, args.height, args.fps)
     still_frames = {int(n_frames * f) for f in args.still_fracs}
 
     print(f"[{args.name}] {n_frames} frames, {sched.total:.2f}s sim "
@@ -244,7 +224,7 @@ def render(args):
         px = renderer.render()
         proc.stdin.write(px.tobytes())
         if frame in still_frames:
-            _save_still(args.out / f"{args.name}_f{frame:04d}.png", px)
+            save_still(args.out / f"{args.name}_f{frame:04d}.png", px)
         if frame % 15 == 0:
             # signed nose-down lean: z-component of the body x axis in world.
             lean = math.degrees(math.asin(max(-1.0, min(1.0, -data.xmat[airframe_bid][6]))))

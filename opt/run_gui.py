@@ -393,7 +393,7 @@ class OptGui(ttk.Frame):
         self.log.configure(yscrollcommand=sb.set)
 
     # -- config / actions
-    def config(self) -> RunConfig:
+    def run_config(self) -> RunConfig:
         get = lambda k: self.cfg_vars[k][0].get()
         cast = lambda k: self.cfg_vars[k][1](get(k))
         wired = {n for names in self.blocks.values() for n in names}
@@ -427,7 +427,7 @@ class OptGui(ttk.Frame):
 
     def _preview(self) -> None:
         try:
-            cfg = self.config()
+            cfg = self.run_config()
             self._write("")
             for label, argv in build_commands(cfg):
                 self._write(f"[{label}] " + " ".join(argv))
@@ -439,7 +439,7 @@ class OptGui(ttk.Frame):
 
     def _save(self) -> None:
         try:
-            cfg = self.config()
+            cfg = self.run_config()
             cfg.out.mkdir(parents=True, exist_ok=True)
             path = cfg.out / "run_config.json"
             path.write_text(cfg.to_json())
@@ -452,7 +452,7 @@ class OptGui(ttk.Frame):
             self._write("[error] a run is already going -- Stop it first")
             return
         try:
-            cfg = self.config()
+            cfg = self.run_config()
             stages = build_commands(cfg)
         except Exception as e:
             self._write(f"[error] {e}")

@@ -1,15 +1,18 @@
+"""Headless CPU lift statistics for a plate-wing design under its own control signal.
+
+    uv run python src/run_fixed_frequency.py [--tg designs/hummer/legacy-baseline/shoulder.tg] [--periods 5]
+
+Compiles the .tg, rests and crank-syncs it, ramps the drive in over the warmup
+periods, then prints the mean/RMS/min/max summed aerodynamic lift (N) over the
+sampled periods. ``run_mjx_fixed_frequency.py`` prints the same lines from MJX.
+"""
+
 from __future__ import annotations
 
 import argparse
 import math
 import os
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
 import mujoco
 import numpy as np
@@ -24,11 +27,12 @@ from runtime.morphology_runtime import LEGACY_BASELINE_TG
 from runtime.realtime import get_actuator_id
 from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
 
-
+ROOT = Path(__file__).resolve().parent.parent
 ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 
 
-def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) -> None:
+def lift_trace(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float):
+    """The CPU drive loop: (control, per-step summed lift in N over the sampled periods)."""
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     compile_tg(tg_path, scene_path)
@@ -66,6 +70,10 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
         step()
 
     lifts = np.array([step() for _ in range(math.ceil(periods * period / model.opt.timestep))])
+    return control, lifts
+
+
+def print_lift_stats(control, periods: float, lifts: np.ndarray) -> None:
     print(f"control_fundamental_frequency_hz {control.fundamental_frequency_hz:.6g}")
     print(f"control_harmonics {control.harmonics}")
     print(f"periods {periods:.6g}")
@@ -74,6 +82,11 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
     print(f"rms_lift_N {float(np.sqrt(np.mean(lifts * lifts))):.9g}")
     print(f"min_lift_N {float(lifts.min()):.9g}")
     print(f"max_lift_N {float(lifts.max()):.9g}")
+
+
+def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) -> None:
+    control, lifts = lift_trace(tg_path, scene_path, periods, warmup_periods)
+    print_lift_stats(control, periods, lifts)
 
 
 def main() -> None:

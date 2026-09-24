@@ -1,20 +1,24 @@
+"""Passive MuJoCo viewer for a plate-wing design under its own control signal.
+
+    mjpython src/view_fixed_frequency.py [--tg ... --control ... --scene ... --speed 0.2 --color]
+
+The design inspector's Viewer tab launches this with those flags. A learned
+stroke-plane signal (strokeplane_optimized.json beside the .tg) is applied
+automatically; --stroke-plane-demo sweeps the disk mount in a circle instead.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
 import math
 import os
-import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
 import mujoco
 import mujoco.viewer
+import numpy as np
 
 from compile_tg import compile_tg
 from morphology.model import PLATE_BIRDS, require_bird
@@ -27,7 +31,7 @@ from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.realtime import RealtimeSync, get_actuator_id
 from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
 
-
+ROOT = Path(__file__).resolve().parent.parent
 ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 
 
@@ -79,8 +83,6 @@ def main() -> None:
         pitch0 = morph.motors.disk.pitch_rad
         # Round-trip check: at the baseline angles we must reproduce the
         # compiled body_quat exactly (guards the euler-seq/mirror convention).
-        import numpy as np
-
         body_ids = [bid for bid, _ in disk_orient.bodies]
         compiled_quats = model.body_quat[body_ids].copy()
         disk_orient.set(tilt0, pitch0)

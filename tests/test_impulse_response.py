@@ -9,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-from plot_fixed_frequency_gui import ImpulseSim, cut_wraps, wrap_deg
+from gui.impulse import ImpulseSim, cut_wraps, wrap_deg
+from morphology.tg_parser import load_morphology
 
 ROOT = Path(__file__).resolve().parent.parent
 TG = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
@@ -93,7 +94,7 @@ def test_feedforward_alone_reproduces_the_stroke(tmp_path):
 
 def test_hold_phase_pins_the_lag_and_lets_a_pulse_step_decay(tmp_path):
     """The plain drive lets t4 walk off t1; CrankDrive's trim holds it and pulls a kicked crank back."""
-    lag = math.degrees(ImpulseSim(TG, tmp_path / "a.xml", CONTROL, 1.0).morph.motors.crank_phase_lag_rad)
+    lag = math.degrees(load_morphology(TG).motors.crank_phase_lag_rad)
     free = ImpulseSim(TG, tmp_path / "free.xml", CONTROL, settle_periods=1.0)
     held = ImpulseSim(TG, tmp_path / "held.xml", CONTROL, settle_periods=1.0)
     held.hold_phase = True

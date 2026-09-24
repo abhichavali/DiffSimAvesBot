@@ -42,7 +42,7 @@ def test_parse_tg():
     assert ctrl["a0"] == "65" and ctrl["b_5"] == "0" and ctrl["harmonics"] == "5"
 
 
-def test_substitute_rewrites_only_the_named_scalars():
+def test_substitute_rewrites_only_the_named_scalars(tmp_path):
     from tg_scalars import substitute
     from evolve_codesign import geom_value
 
@@ -57,11 +57,9 @@ def test_substitute_rewrites_only_the_named_scalars():
     assert "crank_throw: 25 mm" in out and "pitch: 22 deg" in out
     assert "crank_throw_t4 = 25 mm" in out     # prefix-sharing key not clobbered
     # re-parsing the result must round-trip the new values
-    import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td) / "v.tg"
-        p.write_text(out)
-        got = {q.name: q.number for q in parse_tg(p)}
+    p = tmp_path / "v.tg"
+    p.write_text(out)
+    got = {q.name: q.number for q in parse_tg(p)}
     assert got["strut.radius"] == 52.0 and got["motors.disk.crank_throw"] == 25.0
     assert got["motors.disk.radius"] == 18.0
 
@@ -131,34 +129,31 @@ def test_build_commands():
     assert "--tendon-params" not in ds
 
 
-def test_top_n_fans_out():
-    import tempfile
+def test_top_n_fans_out(tmp_path):
+    out = tmp_path
+    stages = dict(build_commands(cfg(out=out, top_n=3)))
+    assert list(stages) == ["GA", "diff-sim seed_1", "diff-sim seed_2", "diff-sim seed_3"]
+    ga = stages["GA"]
+    assert ga[ga.index("--n-seeds") + 1] == "3", "GA must materialize what diff-sim consumes"
+    for rank in (1, 2, 3):
+        o = stages[f"diff-sim seed_{rank}"]
+        o = o[o.index("--out") + 1]
+        assert o.endswith(f"adam/seed_{rank}"), o  # runs must not clobber each other
+    # before the GA runs there is no seed_1/, so rank 1 falls back to the
+    # every-generation checkpoint (what an interrupted run leaves behind)
+    s1 = stages["diff-sim seed_1"]
+    assert s1[s1.index("--init-codesign") + 1].endswith("ga/best_genome.json")
 
-    with tempfile.TemporaryDirectory() as td:
-        out = Path(td)
-        stages = dict(build_commands(cfg(out=out, top_n=3)))
-        assert list(stages) == ["GA", "diff-sim seed_1", "diff-sim seed_2", "diff-sim seed_3"]
-        ga = stages["GA"]
-        assert ga[ga.index("--n-seeds") + 1] == "3", "GA must materialize what diff-sim consumes"
-        for rank in (1, 2, 3):
-            o = stages[f"diff-sim seed_{rank}"]
-            o = o[o.index("--out") + 1]
-            assert o.endswith(f"adam/seed_{rank}"), o  # runs must not clobber each other
-        # before the GA runs there is no seed_1/, so rank 1 falls back to the
-        # every-generation checkpoint (what an interrupted run leaves behind)
-        s1 = stages["diff-sim seed_1"]
-        assert s1[s1.index("--init-codesign") + 1].endswith("ga/best_genome.json")
-
-        # once the GA has materialized its seeds, every rank resolves to its own
-        for rank in (1, 2, 3):
-            d = out / "ga" / f"seed_{rank}"
-            d.mkdir(parents=True)
-            (d / "codesign_seed.json").write_text("{}")
-        stages = dict(build_commands(cfg(out=out, top_n=3)))
-        for rank in (1, 2, 3):
-            argv = stages[f"diff-sim seed_{rank}"]
-            seed = argv[argv.index("--init-codesign") + 1]
-            assert seed.endswith(f"ga/seed_{rank}/codesign_seed.json"), seed
+    # once the GA has materialized its seeds, every rank resolves to its own
+    for rank in (1, 2, 3):
+        d = out / "ga" / f"seed_{rank}"
+        d.mkdir(parents=True)
+        (d / "codesign_seed.json").write_text("{}")
+    stages = dict(build_commands(cfg(out=out, top_n=3)))
+    for rank in (1, 2, 3):
+        argv = stages[f"diff-sim seed_{rank}"]
+        seed = argv[argv.index("--init-codesign") + 1]
+        assert seed.endswith(f"ga/seed_{rank}/codesign_seed.json"), seed
 
     # GA off: top-N is meaningless, exactly one cold-start run
     solo = build_commands(cfg(run_ga=False, top_n=4))
