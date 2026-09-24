@@ -14,16 +14,16 @@ trace unless ``model.opt.iterations == 1``.
 
 from __future__ import annotations
 
-from typing import Callable, NamedTuple, Sequence
+from typing import Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
 import mujoco
 import mujoco.mjx as mjx
 
+from runtime.crank import CRANK_ACTUATORS
 from runtime.mjx import aero_runtime, wing_pitch
 from runtime.mjx.wing_pitch import WingPitchConfig
-from runtime.runtime_config import get_control_parameters
 
 _PITCH_JOINTS = ("L_wing_pitch", "R_wing_pitch")
 
@@ -39,31 +39,17 @@ class DriveConfig(NamedTuple):
     ramp_duration: float
 
 
-def build_drive_config(
-    model: mujoco.MjModel,
-    *,
-    ramp_duration: float | None = None,
-) -> DriveConfig:
-    """Resolve flap actuators from the control parameters."""
-    control = get_control_parameters()
-    names: Sequence[str] = control["flap_actuator_names"]
-
-    ids: list[int] = []
-    for name in names:
-        aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
-        if aid < 0:
-            continue
-        ids.append(aid)
-
+def build_drive_config(model: mujoco.MjModel, morph, control, *, ramp_duration: float = 2.0) -> DriveConfig:
+    """The crank actuators and ``control`` (a FourierControl) signed by ``morph``'s motor direction."""
+    ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in CRANK_ACTUATORS]
+    direction = morph.motors.motor_direction
     return DriveConfig(
-        flap_actuator_ids=jnp.asarray(ids, dtype=jnp.int32),
-        omega=float(control["control_frequency_rad_s"]),
-        a0=float(control["control_a0"]),
-        a=jnp.asarray(control["control_a"]),
-        b=jnp.asarray(control["control_b"]),
-        ramp_duration=float(
-            control["ramp_duration"] if ramp_duration is None else ramp_duration
-        ),
+        flap_actuator_ids=jnp.asarray([i for i in ids if i >= 0], dtype=jnp.int32),
+        omega=float(control.omega),
+        a0=float(direction * control.a0),
+        a=jnp.asarray(tuple(direction * value for value in control.a)),
+        b=jnp.asarray(tuple(direction * value for value in control.b)),
+        ramp_duration=float(ramp_duration),
     )
 
 
@@ -125,15 +111,16 @@ def physics_step(mx, dx, ctrl, pitch_cfg: WingPitchConfig, aero_qfrc: Callable):
     return mjx.step(mx, dx), aux
 
 
-def simulate(model: mujoco.MjModel, data: mujoco.MjData, n_steps: int):
-    """Put a settled CPU model/data on device and run ``n_steps`` of the design drive,
-    aero recomputed every step. Returns ``(final_data, qpos trajectory)``.
+def simulate(model: mujoco.MjModel, data: mujoco.MjData, morph, control, n_steps: int):
+    """Put a settled CPU model/data on device and run ``n_steps`` of the design drive
+    (``morph`` + its ``control``), aero recomputed every step. Returns
+    ``(final_data, qpos trajectory)``.
 
     The pitch dead zone is centered on ``data``'s settled pitch angles.
     """
-    drive_cfg = build_drive_config(model)
-    pitch_cfg = wing_pitch.config_from_runtime(model, centers=pitch_centers(model, data))
-    aero_cfg = aero_runtime.build_aero_config(model)
+    drive_cfg = build_drive_config(model, morph, control)
+    pitch_cfg = wing_pitch.build_wing_pitch_config(model, morph, pitch_centers(model, data))
+    aero_cfg = aero_runtime.build_aero_config(model, morph)
 
     def run(mx, dx):
         def step(carry, _):

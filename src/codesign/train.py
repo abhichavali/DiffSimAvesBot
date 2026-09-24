@@ -30,7 +30,6 @@ from codesign.loss import LossAux, make_loss, objective_norm, objective_value, v
 from codesign.metrics import Metrics, build_rollout
 from codesign.rig import (flap_t1_mask, set_unsteady_aero, setup, step_counts, strokeplane_info,
                           variant)
-from morphology.tg_parser import load_morphology
 
 TAU_CURRICULUM_NM = (0.300, 0.250, 0.200, 0.150, 0.100)  # 300 -> 250 -> 200 -> 150 -> 100 mNm
 ADAM_B1, ADAM_B2, ADAM_EPS = 0.9, 0.999, 1e-8
@@ -72,8 +71,7 @@ def run(cfg) -> None:
     set_unsteady_aero(cfg.added_mass)  # default OFF -> MJX==CPU
     rig = setup(cfg.tg, cfg.scene, aero_substep=cfg.aero_substep, integrator=cfg.integrator,
                 timestep_ms=cfg.timestep, lock_wings=cfg.lock_wings)
-    model, control, drive = rig.model, rig.control, rig.drive
-    morph = load_morphology(cfg.tg)
+    model, control, drive, morph = rig.model, rig.control, rig.drive, rig.morph
     genome = Genome(K=cfg.harmonics, n_tend=int(np.asarray(rig.tendons[0]).shape[0]),
                     control=not cfg.freeze_control, frequency=cfg.tune_frequency,
                     tendons=cfg.tune_tendons, pitch=cfg.tune_pitch, motor=cfg.tune_motor_tendons,
@@ -103,7 +101,7 @@ def run(cfg) -> None:
                         sample_periods=cfg.sample_periods, avg_periods=3, qvel_noise=None):
         """Rollout of the SAME design under (integrator, timestep dt_s [s]): the robustness
         variants, rotating batch members, full-matrix cells and holdout cells."""
-        mx_v, aero_v = variant(model, integ, dt_s, cfg.aero_substep)
+        mx_v, aero_v = variant(rig, integ, dt_s, cfg.aero_substep)
         dx = rig.dx0 if qvel_noise is None else rig.dx0.replace(
             qvel=rig.dx0.qvel + jnp.asarray(qvel_noise, dtype=rig.dx0.qvel.dtype))
         return rollout(rig._replace(mx=mx_v, aero=aero_v, dx0=dx),

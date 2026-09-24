@@ -25,9 +25,7 @@ import jax
 import jax.numpy as jnp
 import mujoco
 
-from runtime.runtime_config import load_runtime_config
-
-_DEFAULT_JOINTS = ("L_wing_pitch", "R_wing_pitch")
+_JOINTS = ("L_wing_pitch", "R_wing_pitch")
 
 
 class WingPitchConfig(NamedTuple):
@@ -48,69 +46,33 @@ class WingPitchConfig(NamedTuple):
     damping: jax.Array  # scalar float — velocity damping applied everywhere
 
 
-def build_wing_pitch_config(
-    model: mujoco.MjModel,
-    *,
-    upstroke_pitch: float,
-    downstroke_pitch: float,
-    upstroke_stiffness: float,
-    downstroke_stiffness: float,
-    damping: float,
-    centers: Sequence[float] | None = None,
-    joint_names: Sequence[str] = _DEFAULT_JOINTS,
-) -> WingPitchConfig:
-    """Resolve joint addresses on a CPU model into a JAX-ready config.
+def build_wing_pitch_config(model: mujoco.MjModel, morph, centers: Sequence[float]) -> WingPitchConfig:
+    """Resolve the pitch joints on a CPU model into a JAX-ready config for ``morph.wing.pitch``.
 
-    ``centers`` is the leveled rest angle per joint (from
-    ``calibrate_wing_pitch_at_rest`` on CPU at build time). If omitted, the
-    model's ``qpos0`` for each joint is used.
+    ``centers`` is the settled rest angle per joint (``rollout.pitch_centers`` after
+    ``calibrate_wing_pitch_at_rest``).
     """
+    pitch = morph.wing.pitch
     qpos_adr: list[int] = []
     dof_adr: list[int] = []
     resolved_centers: list[float] = []
-    for idx, name in enumerate(joint_names):
+    for idx, name in enumerate(_JOINTS):
         joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         if joint_id < 0:
             continue
-        qadr = int(model.jnt_qposadr[joint_id])
-        qpos_adr.append(qadr)
+        qpos_adr.append(int(model.jnt_qposadr[joint_id]))
         dof_adr.append(int(model.jnt_dofadr[joint_id]))
-        if centers is None:
-            resolved_centers.append(float(model.qpos0[qadr]))
-        else:
-            resolved_centers.append(float(centers[idx]))
+        resolved_centers.append(float(centers[idx]))
 
     return WingPitchConfig(
         qpos_adr=jnp.asarray(qpos_adr, dtype=jnp.int32),
         dof_adr=jnp.asarray(dof_adr, dtype=jnp.int32),
         center=jnp.asarray(resolved_centers, dtype=jnp.float32),
-        upstroke_pitch=jnp.asarray(float(upstroke_pitch), dtype=jnp.float32),
-        downstroke_pitch=jnp.asarray(float(downstroke_pitch), dtype=jnp.float32),
-        upstroke_stiffness=jnp.asarray(float(upstroke_stiffness), dtype=jnp.float32),
-        downstroke_stiffness=jnp.asarray(float(downstroke_stiffness), dtype=jnp.float32),
-        damping=jnp.asarray(float(damping), dtype=jnp.float32),
-    )
-
-
-def config_from_runtime(
-    model: mujoco.MjModel,
-    *,
-    centers: Sequence[float] | None = None,
-    joint_names: Sequence[str] = _DEFAULT_JOINTS,
-) -> WingPitchConfig:
-    """Build a config using the design params from ``load_runtime_config``."""
-    params = (load_runtime_config() or {}).get("wing_pitch_parameters", {})
-    fallback_free_angle = float(params.get("free_angle", 0.0))
-    fallback_stiffness = float(params.get("limit_stiffness", 0.5))
-    return build_wing_pitch_config(
-        model,
-        upstroke_pitch=float(params.get("upstroke_pitch", fallback_free_angle)),
-        downstroke_pitch=float(params.get("downstroke_pitch", fallback_free_angle)),
-        upstroke_stiffness=float(params.get("upstroke_stiffness", fallback_stiffness)),
-        downstroke_stiffness=float(params.get("downstroke_stiffness", fallback_stiffness)),
-        damping=float(params.get("limit_damping", 0.0005)),
-        centers=centers,
-        joint_names=joint_names,
+        upstroke_pitch=jnp.asarray(float(pitch.upstroke_pitch_rad), dtype=jnp.float32),
+        downstroke_pitch=jnp.asarray(float(pitch.downstroke_pitch_rad), dtype=jnp.float32),
+        upstroke_stiffness=jnp.asarray(float(pitch.upstroke_stiffness), dtype=jnp.float32),
+        downstroke_stiffness=jnp.asarray(float(pitch.downstroke_stiffness), dtype=jnp.float32),
+        damping=jnp.asarray(float(pitch.damping), dtype=jnp.float32),
     )
 
 

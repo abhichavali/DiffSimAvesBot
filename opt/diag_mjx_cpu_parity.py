@@ -86,9 +86,8 @@ def main() -> None:
     args = ap.parse_args()
 
     set_unsteady_aero(False)
-    model, mx, dx, _control, drive, pitch, aero, _tip_ids, _tendons, _motor_ids = setup(
-        args.tg, args.scene, aero_substep=args.aero_substep, integrator=args.integrator
-    )
+    rig = setup(args.tg, args.scene, aero_substep=args.aero_substep, integrator=args.integrator)
+    model, mx, dx, drive, pitch, aero = rig.model, rig.mx, rig.dx0, rig.drive, rig.pitch, rig.aero
     cpu, cpu_pre = make_cpu(model, args.tg, args.aero_substep)
     mjx_pre = make_mjx_pre(mx, drive, pitch, aero, args.aero_substep)
     state = maero.init_aero_state(aero)

@@ -75,8 +75,8 @@ def main():
 
     if not args.summary_only:
         scene = ROOT / "opt" / "scene_h1_sweep.xml"
-        _, _, _, control, drive, *_ = setup(args.tg, scene)  # compiles the scene once
-        a0, omega = float(drive.a0), float(control.omega)
+        rig = setup(args.tg, scene)  # compiles the scene once
+        a0, omega = float(rig.drive.a0), float(rig.control.omega)
         lag = load_morphology(args.tg).motors.crank_phase_lag_rad
         grid = [(0.0, 0.0)] + [(d, 360.0 * k / args.phases)
                                for d in args.depths for k in range(args.phases)]

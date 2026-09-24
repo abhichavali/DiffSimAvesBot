@@ -48,6 +48,7 @@ import flying  # noqa: E402
 from codesign.rig import compile_lock  # noqa: E402
 from compile_tg import compile_tg  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
+from runtime.control_signal import load_control_for_morphology  # noqa: E402
 from runtime.hover_control import (N_CTRL, N_FEAT, HoverCfg, hover_features,  # noqa: E402
                                    level_stroke_plane, pd_init_theta, policy_commands)
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
@@ -75,11 +76,12 @@ def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_sub
     level_stroke_plane(model)  # pure vertical stroke -> hover in place, no fwd thrust
 
     data = rest_state(model, morph)
+    drive = mroll.build_drive_config(model, morph, load_control_for_morphology(tg_path))
 
     jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, flying.AIRFRAME_FREEJOINT)
-    cfg = HoverCfg(a0=float(mroll.build_drive_config(model).a0), f_max=0.0, tau_max=0.0,
+    cfg = HoverCfg(a0=float(drive.a0), f_max=0.0, tau_max=0.0,
                    qadr=int(model.jnt_qposadr[jid]), dofadr=int(model.jnt_dofadr[jid]))
-    return model, data, morph, cfg
+    return model, data, morph, drive, cfg
 
 
 def measure_mean_lift(tg_path: Path, scene_bench: Path, *, ncyc=6) -> float:
@@ -92,7 +94,7 @@ def measure_mean_lift(tg_path: Path, scene_bench: Path, *, ncyc=6) -> float:
     m.opt.integrator = 0
     level_stroke_plane(m)  # match the leveled config the free model flies with
     sim = PlateWingSim(m, morph)
-    drive = mroll.build_drive_config(m)
+    drive = mroll.build_drive_config(m, morph, load_control_for_morphology(tg_path))
     a0, omega = float(drive.a0), float(drive.omega)
     spc = int((2 * math.pi / omega) / m.opt.timestep)
     lifts = [sim.step(a0) for _ in range(ncyc * spc)]
@@ -229,20 +231,19 @@ def main():
 
     grav = args.gravity
     if grav is None:
-        model0, data0, morph0, cfg0 = build_free_model(
+        model0, *_ = build_free_model(
             args.tg, scene, dt_ms=args.dt_ms, gravity=9.81, aero_substep=args.aero_substep)
         mass = float(np.sum(model0.body_mass))
         L0 = measure_mean_lift(args.tg, bench)
         grav = L0 / mass
         print(f"[hover] mean lift {L0*1e3:.1f} mN / mass {mass*1e3:.1f} g -> gravity {grav:.3f} m/s^2", flush=True)
 
-    model, data, morph, cfg0 = build_free_model(
+    model, data, morph, drive, cfg0 = build_free_model(
         args.tg, scene, dt_ms=args.dt_ms, gravity=grav, aero_substep=args.aero_substep)
     cfg = cfg0._replace(f_max=args.f_max, tau_max=args.tau_max)
 
-    drive = mroll.build_drive_config(model)
-    pitch_cfg = mwp.config_from_runtime(model, centers=mroll.pitch_centers(model, data))
-    aero_cfg = aero_runtime.build_aero_config(model, substep=args.aero_substep)
+    pitch_cfg = mwp.build_wing_pitch_config(model, morph, mroll.pitch_centers(model, data))
+    aero_cfg = aero_runtime.build_aero_config(model, morph, substep=args.aero_substep)
     mx = mjx.put_model(model)
     dx0 = mjx.put_data(model, data)
     com0 = jnp.asarray(np.array(data.qpos[cfg.qadr : cfg.qadr + 3]))

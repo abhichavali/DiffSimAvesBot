@@ -75,18 +75,18 @@ from codesign.rig import (motor_tendon_ids, set_unsteady_aero, setup,  # noqa: E
 from compile_tg import compile_tg  # noqa: E402
 from gui.sims import data_by_phase  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
-from morphology.wing_geometry import load_default_wing_geometry as wing_geometry  # noqa: E402
-from runtime.aero import RHO_AIR, AeroBladeRuntime as CpuAero, aerodynamics as cpu_aero_strip  # noqa: E402
+from morphology.wing_geometry import load_wing_geometry  # noqa: E402
+from runtime.aero import DEFAULT_AERO_SUBSTEP, RHO_AIR, AeroBladeRuntime as CpuAero  # noqa: E402
+from runtime.aero import aerodynamics as cpu_aero_strip  # noqa: E402
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor  # noqa: E402
-from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
+from runtime.crank import CRANK_ACTUATORS, sync_crank_disks_at_rest  # noqa: E402
 from runtime.mjx import aero as _mjx_aero, aero_runtime as _mjx_aero_rt  # noqa: E402
 from runtime.mjx import rollout as _mjx_rollout, wing_pitch as _mjx_pitch  # noqa: E402
 from runtime.morphology_runtime import load_design_morphology  # noqa: E402
-from runtime.runtime_config import get_control_parameters, load_runtime_config  # noqa: E402
 from runtime.wing_pitch import WingPitchLimiter as CpuPitch, calibrate_wing_pitch_at_rest  # noqa: E402
 
-mjx_aero_wing, mjx_drive_config = _mjx_aero.aero_wing, _mjx_rollout.build_drive_config
-mjx_simulate = _mjx_rollout.simulate
+mjx_aero_wing = _mjx_aero.aero_wing
+_design = None  # the design use_design() last named; the runtime wrappers below are handed it
 
 
 def tg(name: str) -> Path:
@@ -94,7 +94,9 @@ def tg(name: str) -> Path:
 
 
 def use_design(name: str, scene: Path | None = None) -> None:
-    """The runtime finds the active design via env vars + an lru_cache; point them at `name`."""
+    """Name the design the wrappers below (rest_state, CpuAero, mjx_*, ...) run."""
+    global _design
+    _design = name
     os.environ["MORPHOLOGY_PATH"] = str(tg(name))
     if scene is not None:
         os.environ["MUJOCO_XML_PATH"] = str(scene)
@@ -103,6 +105,18 @@ def use_design(name: str, scene: Path | None = None) -> None:
 
 def parse(name: str):
     return load_morphology(tg(name)), load_control_for_morphology(tg(name))
+
+
+def wing_geometry():
+    return load_wing_geometry(parse(_design)[0])
+
+
+def mjx_drive_config(model):
+    return _mjx_rollout.build_drive_config(model, *parse(_design))
+
+
+def mjx_simulate(model, data, n_steps: int):
+    return _mjx_rollout.simulate(model, data, *parse(_design), n_steps)
 
 
 def compile_model(name: str, scene: Path) -> mujoco.MjModel:
@@ -118,7 +132,26 @@ def rest_state(model, data, lag=None) -> None:
 
 
 def runtime_config() -> dict:
-    return {"runtime": load_runtime_config(), "control": get_control_parameters()}
+    """The design as the MJX configs once read it (the deleted runtime/runtime_config.py)."""
+    morph, control = parse(_design)
+    p, direction = morph.wing.pitch, morph.motors.motor_direction
+    runtime = {
+        "aero": {"num_blades": morph.wing.aero.blades, "substep": DEFAULT_AERO_SUBSTEP, "mirror_wings": False},
+        "wing_pitch_parameters": {
+            "upstroke_pitch": p.upstroke_pitch_rad, "downstroke_pitch": p.downstroke_pitch_rad,
+            "upstroke_stiffness": p.upstroke_stiffness, "downstroke_stiffness": p.downstroke_stiffness,
+            "free_angle": p.upstroke_pitch_rad, "limit_stiffness": p.upstroke_stiffness,
+            "limit_damping": p.damping, "initial_pitch_angle": p.initial_rad},
+        "assets": {"meshes": [{"file": morph.wing.mesh_file}]},
+        "compiler": {"meshdir": morph.world.meshdir},
+        "motors": {"crank_phase_lag_rad": morph.motors.crank_phase_lag_rad,
+                   "tendon_rest_length": morph.motors.tendon_rest_length},
+    }
+    drive = {
+        "control_frequency_rad_s": control.omega, "control_a0": direction * control.a0,
+        "control_a": tuple(direction * v for v in control.a), "control_b": tuple(direction * v for v in control.b),
+        "ramp_duration": 2.0, "flap_actuator_names": list(CRANK_ACTUATORS)}
+    return {"runtime": runtime, "control": drive}
 
 
 def cpu_validate(scene, ctrl, tendons, integrator, *, pitch_params=None, strokeplane_params=None,
@@ -195,7 +228,7 @@ def eagle_run(name: str, scene: Path, steps: int):
 
 def mjx_aero_wrench(model, datas):
     """aero_wrench jitted as the rollout runs it; the aero state (added-mass FD) carries across calls."""
-    cfg = _mjx_aero_rt.build_aero_config(model, substep=1)
+    cfg = _mjx_aero_rt.build_aero_config(model, parse(_design)[0], substep=1)
     f = jax.jit(lambda m, d, s: _mjx_aero_rt.aero_wrench(m, d, cfg, s))
     mx, s, out = mjx.put_model(model), _mjx_aero_rt.init_aero_state(cfg), []
     for data in datas:
@@ -205,7 +238,7 @@ def mjx_aero_wrench(model, datas):
 
 
 def mjx_pitch_qfrc(model, qpos, qvel, centers):
-    cfg = _mjx_pitch.config_from_runtime(model, centers=centers)
+    cfg = _mjx_pitch.build_wing_pitch_config(model, parse(_design)[0], centers)
     return _mjx_pitch.wing_pitch_qfrc(jnp.asarray(qpos), jnp.asarray(qvel), cfg)
 
 

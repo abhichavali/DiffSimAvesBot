@@ -44,6 +44,7 @@ class Rig(NamedTuple):
     tip_ids: jnp.ndarray  # [L_tip, R_tip] site ids
     tendons: tuple  # structural_tendon_pairs(...)
     motor_ids: jnp.ndarray
+    morph: object  # the design's Morphology
 
 
 def set_unsteady_aero(enabled: bool):
@@ -97,24 +98,25 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     data = rest_state(model, morph, phase_lag)
 
     control = load_control_for_morphology(tg_path)
-    drive = rollout.build_drive_config(model, ramp_duration=0.0)
-    pitch = wing_pitch.config_from_runtime(model, centers=rollout.pitch_centers(model, data))
-    aero = aero_runtime.build_aero_config(model, substep=aero_substep)
+    drive = rollout.build_drive_config(model, morph, control, ramp_duration=0.0)
+    pitch = wing_pitch.build_wing_pitch_config(model, morph, rollout.pitch_centers(model, data))
+    aero = aero_runtime.build_aero_config(model, morph, substep=aero_substep)
     tip_ids = jnp.asarray([mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, s)
                            for s in WINGTIP_SITES], dtype=jnp.int32)
     return Rig(model, mjx.put_model(model), mjx.put_data(model, data), control, drive, pitch,
                aero, tip_ids, structural_tendon_pairs(model, individual=not lock_wings),
-               motor_tendon_ids(model))
+               motor_tendon_ids(model), morph)
 
 
-def variant(model, integrator: str, dt: float, aero_substep: int):
-    """(mx, aero config) for ``model`` under another integrator and timestep [s].
+def variant(rig: Rig, integrator: str, dt: float, aero_substep: int):
+    """(mx, aero config) for ``rig.model`` under another integrator and timestep [s].
 
     The model itself is left as it was."""
+    model = rig.model
     saved = model.opt.integrator, model.opt.timestep
     model.opt.integrator, model.opt.timestep = INTEGRATORS[integrator], dt
     try:
-        return mjx.put_model(model), aero_runtime.build_aero_config(model, substep=aero_substep)
+        return mjx.put_model(model), aero_runtime.build_aero_config(model, rig.morph, substep=aero_substep)
     finally:
         model.opt.integrator, model.opt.timestep = saved
 

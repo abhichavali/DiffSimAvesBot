@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import mujoco
 import numpy as np
 
-from morphology.wing_geometry import load_wing_geometry_from_stl, wing_mesh_path
+from morphology.wing_geometry import load_wing_geometry
 from runtime.morphology_runtime import load_design_morphology
 
 
@@ -251,8 +251,7 @@ class AeroBladeRuntime:
             morph = load_design_morphology()
         self.num_blades = int(morph.wing.aero.blades)
         self.substep = max(1, int(DEFAULT_AERO_SUBSTEP if substep is None else substep))
-        mesh = wing_mesh_path(morph.wing.mesh_file, morph.world.meshdir)
-        self.geometry = load_wing_geometry_from_stl(mesh, num_blades=self.num_blades)
+        self.geometry = load_wing_geometry(morph)
         self.dt = float(model.opt.timestep)
         self.wings = [
             self._resolve_wing(model, "L"),

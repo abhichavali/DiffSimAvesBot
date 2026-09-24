@@ -29,8 +29,8 @@ import jax.numpy as jnp
 import mujoco
 import mujoco.mjx as mjx
 
+from morphology.wing_geometry import load_wing_geometry
 from runtime.mjx.aero import RHO_AIR, AeroParams, aero_wing, aero_wing_diagnostics
-from morphology.wing_geometry import load_default_wing_geometry
 
 # Match the CPU runtime: quasi-steady by default. set_unsteady_aero(True) opts
 # into the explicit finite-difference added-mass hack for diagnostics.
@@ -66,16 +66,16 @@ class AeroState(NamedTuple):
 
 def build_aero_config(
     model: mujoco.MjModel,
+    morph,
     *,
     params: AeroParams = AeroParams(),
-    num_blades: int | None = None,
     rho: float = RHO_AIR,
     dt: float | None = None,
     substep: int = 1,
     sides: Sequence[str] = _DEFAULT_SIDES,
 ) -> AeroConfig:
-    """Resolve aero sites, body ids, and wing geometry into a JAX-ready config."""
-    geom = load_default_wing_geometry(num_blades=num_blades)
+    """Resolve aero sites, body ids, and ``morph``'s wing geometry into a JAX-ready config."""
+    geom = load_wing_geometry(morph)
     num_blade = int(len(geom.chords))
 
     def site_id(name: str) -> int:

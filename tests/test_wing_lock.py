@@ -66,8 +66,10 @@ def test_lock_wings(tg: Path = TG):
     # earlier test in this process loaded so aero/pitch read `tg`.
     from runtime.morphology_runtime import load_design_morphology
     load_design_morphology.cache_clear()
-    free_model, *_, free_tendons, _ = setup(tg, SCENE, lock_wings=False)
-    lock_model, _, _, control, *_, lock_tendons, _ = setup(tg, SCENE, lock_wings=True)
+    free = setup(tg, SCENE, lock_wings=False)
+    lock = setup(tg, SCENE, lock_wings=True)
+    free_model, free_tendons = free.model, free.tendons
+    lock_model, control, lock_tendons = lock.model, lock.control, lock.tendons
 
     n_free, n_lock = int(np.asarray(free_tendons[0]).shape[0]), int(np.asarray(lock_tendons[0]).shape[0])
     assert n_lock * 2 == n_free, f"lock must halve the tendon genome: {n_free} -> {n_lock}"

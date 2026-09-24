@@ -17,8 +17,6 @@ from pathlib import Path
 
 import numpy as np
 
-from runtime.morphology_runtime import load_design_morphology
-
 ROOT = Path(__file__).resolve().parents[2]
 _STL_RECORD = np.dtype([("normal", "<f4", 3), ("vertices", "<f4", (3, 3)), ("attr", "<u2")])
 
@@ -38,16 +36,10 @@ def wing_mesh_path(mesh_file: str, meshdir: str) -> Path:
     return ROOT / meshdir / mesh_file
 
 
-def load_default_wing_geometry(
-    num_blades: int | None = None,
-    config_path: str | os.PathLike[str] | None = None,
-) -> WingGeometry:
-    """Wing geometry of the active design (runtime.morphology_runtime, MORPHOLOGY_PATH)."""
-    del config_path
-    morph = load_design_morphology()
-    if num_blades is None:
-        num_blades = morph.wing.aero.blades
-    return load_wing_geometry_from_stl(wing_mesh_path(morph.wing.mesh_file, morph.world.meshdir), num_blades)
+def load_wing_geometry(morph) -> WingGeometry:
+    """``morph``'s wing mesh cut into its ``wing.aero.blades`` strips."""
+    return load_wing_geometry_from_stl(wing_mesh_path(morph.wing.mesh_file, morph.world.meshdir),
+                                       int(morph.wing.aero.blades))
 
 
 def load_wing_geometry_from_stl(mesh_path: str | os.PathLike[str], num_blades: int) -> WingGeometry:
