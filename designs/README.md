@@ -10,7 +10,10 @@ the constants in `src/design_paths.py` (`DEFAULT_HUMMER_TG`, ...).
 Peak torque is the CPU certification number: worst case over integrators/dt, exact
 per-cycle peaks (see `docs/ROBUST_CODESIGN_METHODOLOGY.md` section 12). Reproduce it
 with `opt/design_io.py <dir> --periods 24` (its docstring has the two doctrine
-commands); the seed `hummer/hover` certifies at 174.3 mNm that way.
+commands); the seed `hummer/hover` certifies at 187.8 mNm (lift 235 mN) that way.
+The key numbers in the table were certified while the aero's lift ignored which wing
+edge leads; following the chordwise flow cut lift 35-38% and raised peak torque 8-11%,
+so re-run `design_io` before comparing against them.
 The harmonic designs (`hover-soft-it009p`, `it018`, `it021-harmonic`, `tuned-dt-hacked`)
 were certified before the rest settle reset the clock; their `control.tg` harmonics
 are rotated so dt 0.06 ms replays unchanged, and other dts now match it.

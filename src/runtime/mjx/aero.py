@@ -9,8 +9,8 @@ and applied at each blade site by the MJX runtime layer.
 Two design choices serve the autodiff goal:
 
 * Branch-free. The ``norm_v == 0`` guard, the ``rdi`` span cutoff, the
-  ``lift_sign`` flip, and the CoP clip are all expressed with ``where``/``clip``
-  so the function is smooth enough to ``jit``/``vmap``/``grad``.
+  ``lift_sign``/``chord_sign`` flips, and the CoP clip are all expressed with
+  ``where``/``clip`` so the function is smooth enough to ``jit``/``vmap``/``grad``.
 * The Sane & Dickinson polar coefficients (and the other empirical constants)
   are ``runtime.aero.AeroParams``, the one table both models read.
 
@@ -121,7 +121,9 @@ def aero_strip(
     dir_drag = -dir_vle
     dir_drag = dir_drag.at[1].set(0.0)
     lift_sign = jnp.where(vle[0] >= 0.0, 1.0, -1.0)
-    dir_lift = _ry_apply(-lift_sign * _PI / 2.0, dir_vle)
+    # Lift flips with the chordwise flow (see the numpy model); sLift breaks the vz == 0 tie.
+    chord_sign = jnp.where(vle[2] == 0.0, sLift, jnp.sign(vle[2]))
+    dir_lift = chord_sign * _ry_apply(-lift_sign * _PI / 2.0, dir_vle)
 
     # --- Translational lift & drag ---
     q = 0.5 * rho * norm_v**2
@@ -161,14 +163,14 @@ def aero_strip(
     # --- Sums (force in root frame, pure chordwise pitching moment) ---
     force = (
         FDi
-        + sLift * FLi
+        + FLi
         + F_add_i
         + sRot * F_rot_i
         + jnp.stack([Fik_lt, jnp.zeros_like(Fik_lt), jnp.zeros_like(Fik_lt)])
         + F_add2_vec
     )
     torque = (
-        jnp.cross(jnp.array([0.0, 0.0, sCof * r_cof_trans]), FDi + sLift * FLi)
+        jnp.cross(jnp.array([0.0, 0.0, sCof * r_cof_trans]), FDi + FLi)
         + jnp.cross(jnp.array([0.0, 0.0, sCof * r_cof_add]), F_add_i + F_add2_vec)
         + jnp.cross(jnp.array([0.0, 0.0, sCof * r_cof_rot]), sRot * F_rot_i)
         + jnp.stack([jnp.zeros_like(Tik_lt), Tik_lt, jnp.zeros_like(Tik_lt)])

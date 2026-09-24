@@ -147,11 +147,15 @@ uv run python opt/design_io.py opt/runs/cpu_best --integrator euler implicitfast
 
 `design_io.py` also replays a committed design dir on its own `control.tg`; with
 `--periods 24` it runs the certification doctrine of `docs/ROBUST_CODESIGN_METHODOLOGY.md`
-section 12 (see its docstring). The seed `designs/hummer/hover` certifies at 174.3 mNm
-worst case this way (section 12's 174.7 came from the campaign's own scripts).
+section 12 (see its docstring). The seed `designs/hummer/hover` certifies at 187.8 mNm
+worst case this way, at 235 mN lift (section 12's 174.7 mNm / 358-364 mN came from the
+campaign's own scripts, on the aero whose lift ignored which wing edge leads).
 
 ## Known issues (kept as-is for now; each fix changes outputs)
 
+- `--lift-floor` (and `run_gui`'s `lift_floor`) default to 300 mN, picked when the aero's
+  lift ignored which wing edge leads. The seed now makes 235 mN, so the floor binds from
+  the first step; pick a new one before the next run.
 - MJX sizes its warmup/sample windows by the design period, not the crank-locked one
   (step counts are static, a0_log is not), so once a0 moves its window is not whole flap
   cycles while the CPU gate's is: at a0_log = 0.05, mean power reads 1.5% apart.

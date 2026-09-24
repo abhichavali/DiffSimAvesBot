@@ -77,7 +77,7 @@ RHO_AIR = 1.1839
 
 # Left and right wings differ ONLY by a fixed set of mirror sign flips (the MJX
 # port reads this same table):
-#   Fik  rotational-drag chordwise force   lift  FLi sign in the force/torque sums
+#   Fik  rotational-drag chordwise force   lift  sign(vz) when the hinge edge leads
 #   rot  F_rot sign in the sums            addo  rotational added-mass (lamda_xo) sign
 #   add2 F_add2 sign                       cof   chordwise CoP lever-arm sign
 _SIDE_SIGNS = {
@@ -144,7 +144,8 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
 
     # Velocity direction & folded angle of attack in [0, pi/2] (arctan2 of
     # absolute components is robust to vz == 0; lift/drag *direction* is set
-    # separately below, so quadrant folding is fine for a symmetric section).
+    # separately below from the signs of vx and vz, so folding is fine for a
+    # symmetric section).
     norm_v = np.sqrt(vle.dot(vle))  # np.linalg.norm's own formula
     if norm_v != 0:
         dir_vle = vle / norm_v
@@ -158,7 +159,11 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
 
     # Non-zero sign so vx == 0 does not collapse the +-90 deg rotation to identity.
     lift_sign = 1.0 if vle[0] >= 0 else -1.0
-    dir_lift = _LIFT_ROTATION[lift_sign] @ dir_vle
+    # Flat-plate lift is the part of the normal force perpendicular to v whichever
+    # edge leads, so it flips with the chordwise flow vz. sLift is vz's sign when
+    # the hinge edge leads; it only breaks the vz == 0 tie.
+    chord_sign = sLift if vle[2] == 0 else (1.0 if vle[2] > 0 else -1.0)
+    dir_lift = chord_sign * (_LIFT_ROTATION[lift_sign] @ dir_vle)
 
     # --------------------------------------------------------
     # Translational lift & drag
@@ -199,12 +204,12 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # Including rle here too would double-count it.
     # --------------------------------------------------------
 
-    Fi = (FDi + sLift * FLi + F_add_i + sRot * F_rot_i) \
+    Fi = (FDi + FLi + F_add_i + sRot * F_rot_i) \
          + np.array([Fik_lt, 0, 0]) \
          + np.array([F_add2_i, 0, 0])
 
     Taui = (
-        _cross((0.0, 0.0, sCof * r_cof_trans), FDi + sLift * FLi)
+        _cross((0.0, 0.0, sCof * r_cof_trans), FDi + FLi)
         + _cross((0.0, 0.0, sCof * r_cof_add), F_add_i + np.array([F_add2_i, 0, 0]))
         + _cross((0.0, 0.0, sCof * r_cof_rot), sRot * F_rot_i)
         + np.array([0, Tik_lt, 0])
