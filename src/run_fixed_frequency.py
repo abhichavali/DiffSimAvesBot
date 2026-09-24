@@ -20,15 +20,11 @@ import numpy as np
 from compile_tg import compile_tg
 from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
-from runtime.aero import AeroBladeRuntime
-from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
-from runtime.crank import sync_crank_disks_at_rest
+from runtime.control_signal import drive_command, load_control_for_morphology
 from runtime.morphology_runtime import LEGACY_BASELINE_TG
-from runtime.realtime import get_actuator_id
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
+from runtime.sim import PlateWingSim
 
 ROOT = Path(__file__).resolve().parent.parent
-ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 
 
 def lift_trace(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float):
@@ -40,31 +36,16 @@ def lift_trace(tg_path: Path, scene_path: Path, periods: float, warmup_periods: 
     morph = load_morphology(tg_path)
     require_bird(morph, *PLATE_BIRDS, tool="run_fixed_frequency")
     model = mujoco.MjModel.from_xml_path(str(scene_path))
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
+    sim = PlateWingSim(model, morph)
+    data = sim.data
 
     control = load_control_for_morphology(tg_path)
     period = control.period
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
-    actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]
     drive_start = data.time
     ramp_seconds = warmup_periods * period
 
     def step() -> float:
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
-        ramp = ramp_factor(data.time, drive_start, ramp_seconds)
-        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
-        for aid in actuator_ids:
-            if aid >= 0:
-                data.ctrl[aid] = base_ctrl
-        lift = sum(float(np.sum([f[2] for f in (wing.cached_forces or [])])) for wing in aero.wings)
-        mujoco.mj_step(model, data)
-        return lift
+        return sim.step(drive_command(control, morph.motors.motor_direction, data.time, drive_start, ramp_seconds))
 
     for _ in range(math.ceil(warmup_periods * period / model.opt.timestep)):
         step()
