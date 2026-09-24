@@ -1,17 +1,17 @@
 """Render ONE multimodal clip: hover -> forward flight -> glide.
 
-  1. hover    — level stroke plane (disk pitch 0), full flapping, station keeping.
-  2. cruise   — the stroke plane tilts forward and a soft speed servo brings the
-                airframe up to cruise; flapping continues.
+  1. hover    — level stroke plane (disk pitch 0), full flapping.
+  2. cruise   — the stroke plane tilts forward; flapping continues.
   3. glide    — the motor drive fades out, the cranks damp to a stop so the wings
-                settle extended, the stroke plane swings to 90 deg forward, and
-                the bird sinks slowly on the airflow over the wings.
+                settle extended, and the stroke plane swings to 90 deg forward.
+
+Free flight is uncontrolled until the closed-loop hover policy drives it.
 
 The skin runs the opposite fade to render_configs.py: it starts nearly invisible
 (bare tensegrity joint) and fills in as the flight progresses.
 
-Scene build, ffmpeg pipe and attitude PD come from common.py; the aero, control,
-crank-sync, pitch and disk-orientation runtimes are the same ones the viewer uses.
+Scene build and ffmpeg pipe come from common.py; the aero, control, crank-sync,
+pitch and disk-orientation runtimes are the same ones the viewer uses.
 """
 
 from __future__ import annotations
@@ -20,8 +20,6 @@ import argparse
 import math
 import sys
 from pathlib import Path
-
-import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -33,7 +31,6 @@ import mujoco  # noqa: E402
 import flying  # noqa: E402
 from common import (  # noqa: E402
     airframe_xml,
-    attitude_pd,
     ffmpeg_pipe,
     lift_free_bodies,
     save_still,
@@ -79,30 +76,6 @@ class Schedule:
     def drive(self, dt: float) -> float:
         return 1.0 - smoothstep((dt - self.t_glide) / self.a.stop_seconds)
 
-    def speed_target(self, dt: float) -> float:
-        return self.a.cruise_speed * smoothstep((dt - self.t_fwd) / self.transition)
-
-    def lean(self, dt: float) -> float:
-        """Commanded body pitch: slightly nose-up hovering, nose-down once moving."""
-        h, c = self.a.hover_lean, self.a.cruise_lean
-        return h + (c - h) * smoothstep((dt - self.t_fwd) / self.transition)
-
-    def bob(self, dt: float):
-        """Station-keeping wander (sway, rise) in metres, in phase with the drive.
-
-        The physical bob at stroke frequency is a fraction of a millimetre, so it
-        reads as a bird welded to an invisible floor. This is the slow hunting a
-        hovering bird actually shows; it dies with the motors at the glide.
-        """
-        e = self.drive(dt)
-        w = 2.0 * math.pi * self.a.bob_hz
-        return (self.a.sway_amp * e * math.sin(0.61 * w * dt),
-                self.a.bob_amp * e * math.sin(w * dt))
-
-    def sink(self, dt: float) -> float:
-        """Metres of altitude given up so far (glide only)."""
-        return self.a.sink_rate * max(0.0, dt - self.t_glide)
-
     def skin_alpha(self, dt: float) -> float:
         return smoothstep(dt / (self.a.fill_frac * self.total))
 
@@ -126,41 +99,8 @@ def render(args):
     airframe_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, flying.AIRFRAME_BODY)
     air_dofadr = int(model.jnt_dofadr[
         mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, flying.AIRFRAME_FREEJOINT)])
-    m_total = float(model.body_subtreemass[airframe_bid])
-    g = float(-model.opt.gravity[2])
     z0 = float(data.subtree_com[airframe_bid][2])
-    prev_z = [z0]
     dt = float(model.opt.timestep)
-    x_ref = [float(data.subtree_com[airframe_bid][0])]
-
-    def assist(_m, _d):
-        t = data.time - drive_start
-        # Flight assist at the airframe COM (no spurious torque): weight cancel +
-        # altitude hold about a sinking setpoint, and a soft speed servo forward.
-        # ponytail: this is the "artificially controlled" part -- the stroke plane
-        # tilt tells the story, the servo guarantees the shot.
-        com = np.asarray(data.subtree_com[airframe_bid])
-        vz = (float(com[2]) - prev_z[0]) / dt
-        prev_z[0] = float(com[2])
-        vel = data.qvel[air_dofadr : air_dofadr + 3]
-        # Track a moving setpoint, not just a speed: a pure velocity servo settles
-        # at a standing offset against the flapping thrust, so "hover" crept
-        # forward at ~0.6 m/s. The integrated reference pins station keeping.
-        x_ref[0] += sched.speed_target(t) * dt
-        sway, rise = sched.bob(t)
-        f = np.array([
-            m_total * (args.pos_gain * (x_ref[0] - float(com[0]))
-                       + args.speed_gain * (sched.speed_target(t) - float(vel[0]))),
-            m_total * (args.pos_gain * (sway - float(com[1]))
-                       - args.speed_gain * float(vel[1])),
-            m_total * g + args.z_k * (z0 + rise - sched.sink(t) - float(com[2]))
-            - args.z_c * vz,
-        ])
-        # Attitude PD toward a commanded lean (upright hovering, nose-down once
-        # moving forward). Without it the forward stroke-plane tilt pitches the
-        # airframe past 90 deg and it tumbles.
-        tau = attitude_pd(data, airframe_bid, air_dofadr, sched.lean(t), args.level_kp, args.level_kd)
-        mujoco.mj_applyFT(model, data, f, tau, com, airframe_bid, data.qfrc_applied)
 
     def physics_step():
         t = data.time - drive_start
@@ -169,7 +109,7 @@ def render(args):
         # as pure dampers, so the cranks coast to a stop and the tendon net pulls
         # the wings back out to their extended rest pose.
         env = ramp_factor(data.time, drive_start, ramp_seconds) * sched.drive(t)
-        sim.step(env * motor_dir * eval_control(control, data.time), assist)
+        sim.step(env * motor_dir * eval_control(control, data.time))
 
     mats = {n: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, n) for n in SKIN_MATS}
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
@@ -218,7 +158,7 @@ def render(args):
                   f"x={data.subtree_com[airframe_bid][0]:+.3f} "
                   f"vx={data.qvel[air_dofadr]:+.2f} "
                   f"dz={data.subtree_com[airframe_bid][2] - z0:+.4f} "
-                  f"lean={lean:+.0f}deg(cmd {math.degrees(sched.lean(t)):+.0f})", flush=True)
+                  f"lean={lean:+.0f}deg", flush=True)
     proc.stdin.close()
     proc.wait()
     renderer.close()
@@ -230,20 +170,12 @@ def self_check(args):
     s = Schedule(args)
     deg = math.degrees
     assert deg(s.stroke_pitch(0.0)) == 0.0 and s.drive(0.0) == 1.0, "hover: level + flapping"
-    assert s.speed_target(s.t_fwd) == 0.0, "hover: station keeping"
-    assert s.lean(s.t_fwd) == args.hover_lean < args.cruise_lean, "hover leans back of cruise"
-    assert s.bob(0.0) == (0.0, 0.0), "bob starts at zero -- no startup jump"
-    rise = [s.bob(0.02 * i)[1] for i in range(int(s.t_fwd / 0.02))]
-    assert max(rise) > 0.9 * args.bob_amp and min(rise) < -0.9 * args.bob_amp, "hover bobs"
     mid = s.t_glide - args.cruise / 2
     assert abs(deg(s.stroke_pitch(mid)) - 30.0) < 1e-6, "cruise: 30 deg forward tilt"
-    assert abs(s.lean(mid) - args.cruise_lean) < 1e-9, "cruise: leaning forward"
-    assert abs(s.speed_target(mid) - args.cruise_speed) < 1e-9 and s.drive(mid) == 1.0
+    assert s.drive(mid) == 1.0, "cruise: still flapping"
     end = s.total
     assert abs(deg(s.stroke_pitch(end)) - 90.0) < 1e-6, "glide: stroke plane 90 deg"
-    assert s.drive(end) == 0.0 and s.sink(end) > 0.0, "glide: motors off, sinking"
-    assert s.sink(s.t_glide) == 0.0, "no sink before the glide"
-    assert s.bob(end) == (0.0, 0.0), "glide: bob off with the motors"
+    assert s.drive(end) == 0.0, "glide: motors off"
     assert s.skin_alpha(0.0) == 0.0 and s.skin_alpha(end) == 1.0, "skin fades in"
     print("render_flight_phases self-check OK")
 
@@ -257,7 +189,7 @@ def main():
     p.add_argument("--out", type=Path, default=ROOT / "out")
     p.add_argument("--bird-assets", default=flying.BIRD_ASSETS_DIR)
     # phase durations, sim seconds
-    p.add_argument("--hover", type=float, default=1.4, help="~2 bob cycles at --bob-hz")
+    p.add_argument("--hover", type=float, default=1.4)
     p.add_argument("--transition", type=float, default=0.8)
     p.add_argument("--cruise", type=float, default=2.2)
     p.add_argument("--glide", type=float, default=4.0)
@@ -266,25 +198,8 @@ def main():
     p.add_argument("--tilt90-seconds", type=float, default=0.5,
                    help="time to swing the stroke plane from cruise tilt to 90 deg")
     p.add_argument("--stop-seconds", type=float, default=0.25, help="motor fade-out (s)")
-    p.add_argument("--cruise-speed", type=float, default=1.5, help="forward cruise speed (m/s)")
-    p.add_argument("--speed-gain", type=float, default=20.0, help="speed servo gain (1/s)")
-    p.add_argument("--pos-gain", type=float, default=80.0, help="station-keeping gain (1/s^2)")
-    p.add_argument("--sink-rate", type=float, default=0.08, help="glide descent (m/s)")
-    p.add_argument("--cruise-lean", type=float, default=math.radians(22.0),
-                   help="commanded nose-down body pitch at cruise (rad)")
-    p.add_argument("--hover-lean", type=float, default=math.radians(-6.0),
-                   help="commanded body pitch while hovering (rad, negative = nose up)")
-    p.add_argument("--bob-amp", type=float, default=0.018, help="hover bob amplitude (m)")
-    p.add_argument("--sway-amp", type=float, default=0.008, help="hover lateral wander (m)")
-    p.add_argument("--bob-hz", type=float, default=1.5, help="hover bob rate (Hz)")
-    p.add_argument("--z-k", type=float, default=20.0)
-    p.add_argument("--z-c", type=float, default=0.6)
-    # kp has to beat the flapping pitch-up moment or the commanded lean never lands:
-    # at 0.3 the body drooped 11 deg nose-down whatever was asked of it.
-    p.add_argument("--level-kp", type=float, default=0.9, help="attitude spring (N m/rad)")
-    p.add_argument("--level-kd", type=float, default=0.05, help="attitude damping (N m s/rad)")
-    # taller hover = more altitude to spend on the glide (sink_rate * glide)
-    p.add_argument("--lift", type=float, default=0.55)
+    p.add_argument("--lift", type=float, default=0.55,
+                   help="initial airframe height above the compiled pose (m)")
     # skin fade-IN (opposite of render_configs)
     p.add_argument("--alpha0", type=float, default=0.05)
     p.add_argument("--fill-frac", type=float, default=0.8,

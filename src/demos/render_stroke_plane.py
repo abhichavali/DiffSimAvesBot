@@ -18,8 +18,7 @@ make the cause and the effect visible at once:
 No force arrows: they overshot the wings and tangled with the trails, and this
 clip is about the path, not the load.
 
-The assist holds altitude and attitude ONLY. x/y are free, so a tilted stroke
-plane genuinely flies the bird somewhere -- that translation is the point.
+Free flight is uncontrolled until the closed-loop hover policy drives it.
 """
 
 from __future__ import annotations
@@ -42,7 +41,6 @@ import mujoco  # noqa: E402
 import flying  # noqa: E402
 from common import (  # noqa: E402
     airframe_xml,
-    attitude_pd,
     captioner,
     draw_trail,
     ffmpeg_pipe,
@@ -157,10 +155,6 @@ def render(args):
         mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, flying.AIRFRAME_FREEJOINT)])
     tip_ids = tip_site_ids(sim.aero)
 
-    m_total = float(model.body_subtreemass[airframe_bid])
-    g = float(-model.opt.gravity[2])
-    z0 = float(data.subtree_com[airframe_bid][2])
-    prev_z = [z0]
     dt = float(model.opt.timestep)
     psi = [0.0]  # accumulated drive phase (rad)
 
@@ -171,18 +165,6 @@ def render(args):
     keep = int(args.trail_pts * args.trail_cycles)
     trail = {s: deque(maxlen=keep) for s in tip_ids}
     step_n = [0]
-
-    def assist(_m, _d):
-        com = np.asarray(data.subtree_com[airframe_bid])
-        vz = (float(com[2]) - prev_z[0]) / dt
-        prev_z[0] = float(com[2])
-        # Weight cancel + altitude hold ONLY. No x/y station keeping: a tilted
-        # stroke plane is supposed to take the bird somewhere, and hiding that
-        # under a position servo would hide the entire point of the clip.
-        f = np.array([0.0, 0.0,
-                      m_total * g + args.z_k * (z0 - float(com[2])) - args.z_c * vz])
-        tau = attitude_pd(data, airframe_bid, air_dofadr, args.body_lean, args.level_kp, args.level_kd)
-        mujoco.mj_applyFT(model, data, f, tau, com, airframe_bid, data.qfrc_applied)
 
     def physics_step():
         t = data.time - drive_start
@@ -200,7 +182,7 @@ def render(args):
             rot_t = np.asarray(data.xmat[airframe_bid]).reshape(3, 3).T
             for side, sid in tip_ids.items():
                 trail[side].append(rot_t @ (np.asarray(data.site_xpos[sid]) - com))
-        sim.step(base, assist)
+        sim.step(base)
 
     renderer = mujoco.Renderer(model, height=args.height, width=args.width,
                                max_geom=args.max_geom)
@@ -334,14 +316,8 @@ def main():
                         "without the disk competing with the wingtip trails")
     p.add_argument("--plane-rgba", type=lambda s: [float(x) for x in s.split(",")],
                    default=[0.98, 0.86, 0.20, 0.30])
-    # assist
-    p.add_argument("--z-k", type=float, default=20.0)
-    p.add_argument("--z-c", type=float, default=0.6)
-    p.add_argument("--level-kp", type=float, default=0.9)
-    p.add_argument("--level-kd", type=float, default=0.05)
-    p.add_argument("--body-lean", type=float, default=0.0,
-                   help="commanded body pitch (rad); 0 keeps the body a flat reference")
-    p.add_argument("--lift", type=float, default=0.45)
+    p.add_argument("--lift", type=float, default=0.45,
+                   help="initial airframe height above the compiled pose (m)")
     # camera / output
     p.add_argument("--azimuth", type=float, default=118.0)
     p.add_argument("--elevation", type=float, default=-8.0)
