@@ -9,7 +9,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from morphology.emit_mjcf import _color_to_rgba
+from morphology.mjcf_parts import color_to_rgba
 from morphology.compile import compile_morphology
 from morphology.emit_mjcf import emit_mjcf
 from morphology.model import TendonDefaults, TendonMaterial, TendonNet
@@ -17,10 +17,10 @@ from morphology.tendon_net import resolve_material_props
 from morphology.tg_parser import _parse_brace_dict, _parse_material_dict, load_morphology
 
 
-def test_color_to_rgba():
-    assert _color_to_rgba("1 0 0 1") == "1 0 0 1"        # rgba passthrough
-    assert _color_to_rgba("0.5 0.5 0.5") == "0.5 0.5 0.5 1"  # alpha padded
-    assert _color_to_rgba("00ff00") == "0.0 1.0 0.0 1"   # 6-digit hex (no '#')
+def testcolor_to_rgba():
+    assert color_to_rgba("1 0 0 1") == "1 0 0 1"        # rgba passthrough
+    assert color_to_rgba("0.5 0.5 0.5") == "0.5 0.5 0.5 1"  # alpha padded
+    assert color_to_rgba("00ff00") == "0.0 1.0 0.0 1"   # 6-digit hex (no '#')
 
 
 def test_parse_material_dict():
