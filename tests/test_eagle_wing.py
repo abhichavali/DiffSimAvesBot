@@ -22,14 +22,8 @@ import pytest
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
-from runtime.crank import sync_crank_disks_at_rest
-from runtime.eagle_drive import (
-    CrankDrive,
-    calibrate_stroke,
-    calibrated_drive,
-    check_stable,
-    wing_plane_roll,
-)
+from runtime.crank import CrankDrive, check_stable, sync_crank_disks_at_rest
+from runtime.eagle_drive import calibrate_stroke, calibrated_drive, wing_plane_roll
 from runtime.eagle_poses import elbow_sweep, elbow_targets, glide_pose
 
 ROOT = Path(__file__).resolve().parent.parent

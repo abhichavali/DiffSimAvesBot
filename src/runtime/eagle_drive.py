@@ -26,8 +26,6 @@ import mujoco
 import numpy as np
 
 from runtime.control_signal import FourierControl
-# TEMP re-export: remove after integration (view_eagle, the GUI and tests/test_eagle_wing
-# import CrankDrive and check_stable from here; their home is runtime.crank).
 from runtime.crank import CrankDrive, check_stable, crank_period, sync_crank_disks_at_rest
 
 PHASE_JOINT = "L_t1_disk_hinge"

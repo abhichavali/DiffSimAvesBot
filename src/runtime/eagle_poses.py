@@ -13,7 +13,8 @@ import math
 import mujoco
 import numpy as np
 
-from runtime.eagle_drive import check_stable, wing_plane_roll
+from runtime.crank import check_stable
+from runtime.eagle_drive import wing_plane_roll
 
 
 def elbow_targets(model, fraction: float) -> dict[int, float]:

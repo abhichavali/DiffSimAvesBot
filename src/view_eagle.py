@@ -24,8 +24,8 @@ from compile_tg import compile_tg
 from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
-from runtime.crank import sync_crank_disks_at_rest
-from runtime.eagle_drive import CrankDrive, calibrated_drive, check_stable
+from runtime.crank import CrankDrive, check_stable, sync_crank_disks_at_rest
+from runtime.eagle_drive import calibrated_drive
 from runtime.eagle_poses import elbow_sweep, elbow_targets, glide_pose, settle_elbow
 from runtime.morphology_runtime import EAGLE_TG
 from runtime.realtime import RealtimeSync
