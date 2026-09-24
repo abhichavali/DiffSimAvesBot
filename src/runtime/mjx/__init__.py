@@ -1,1 +1,1 @@
-"""JAX/MJX runtime components for the tensegrity flapper migration."""
+"""The JAX/MJX port of the CPU runtime: jittable, differentiable wing pitch, aero and rollout step."""

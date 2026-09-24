@@ -23,6 +23,7 @@ opt/.compile.lock
 opt/gui_runs/
 _ea_genome.tg
 _recon_scene.xml
+opt/harmonic1_lift_sweep.jsonl
 out/
 *.log
 .claude/settings.local.json

@@ -4,6 +4,7 @@ CPU (numpy + MuJoCo), the reference the JAX port in ``mjx/`` is validated agains
 ``sim`` (the plate-wing rollout step and rest state), ``aero`` (blade-element
 forces), ``wing_pitch`` (rest calibration + pitch limiter), ``crank`` (crank sync,
 phase-holding drive), ``control_signal`` (the Fourier drive), ``disk_orientation``
-(stroke-plane steering), ``eagle_drive`` / ``wing_cables`` (eagle wing),
-``realtime`` (viewer pacing).
+(stroke-plane steering), ``hover_control`` (the free-flight hover wrench),
+``eagle_drive`` / ``eagle_poses`` / ``wing_cables`` (eagle wing), ``realtime`` (viewer
+pacing).
 """
