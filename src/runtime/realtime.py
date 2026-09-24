@@ -5,11 +5,6 @@ import time
 import mujoco
 
 
-def get_actuator_id(model, name):
-    """TEMP: remove after integration (PlateWingSim.crank_ids covers most callers)."""
-    return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
-
-
 class RealtimeSync:
     """``realtime_factor`` scales playback: 1.0 = realtime, 0.25 = 4x slow motion."""
 
