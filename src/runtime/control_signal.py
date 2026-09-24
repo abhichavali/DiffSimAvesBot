@@ -1,3 +1,10 @@
+"""The drive signal: a control .tg's Fourier series, and the ramp that eases it in.
+
+``load_control_for_morphology`` reads the control file a design names (and checks
+the two agree on the bird); ``eval_control`` is the series at time t and
+``drive_command`` the ramped, direction-signed crank command built from it.
+"""
+
 from __future__ import annotations
 
 import math
@@ -96,6 +103,12 @@ def eval_control(control: FourierControl, t: float) -> float:
     return value
 
 
+def drive_command(control: FourierControl, motor_direction: float, t: float,
+                  t0: float = 0.0, ramp_seconds: float = 0.0) -> float:
+    """The crank velocity command at ``t``: the ramped, direction-signed Fourier drive."""
+    return ramp_factor(t, t0, ramp_seconds) * motor_direction * eval_control(control, t)
+
+
 def _parse_scalar(text: str) -> float:
     match = re.match(
         r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(hz|rad/s)?$",
@@ -104,6 +117,4 @@ def _parse_scalar(text: str) -> float:
     )
     if not match:
         raise ValueError(f"Invalid control scalar: {text}")
-    value = float(match.group(1))
-    unit = (match.group(2) or "").lower()
-    return value if unit in ("", "hz") else value
+    return float(match.group(1))

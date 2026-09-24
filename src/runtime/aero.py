@@ -9,8 +9,8 @@ from dataclasses import dataclass
 import mujoco
 import numpy as np
 
-from morphology.wing_geometry import load_default_wing_geometry
-from runtime.runtime_config import load_runtime_config
+from morphology.wing_geometry import _resolve_wing_mesh_path, load_wing_geometry_from_stl
+from runtime.morphology_runtime import load_design_morphology
 
 
 def _ry(theta: float) -> np.ndarray:
@@ -18,6 +18,17 @@ def _ry(theta: float) -> np.ndarray:
     c = np.cos(theta)
     s = np.sin(theta)
     return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]], dtype=float)
+
+
+# Velocity -> lift direction for each sign of the chordwise velocity: ry(-sign * pi/2).
+_LIFT_ROTATION = {sign: _ry(-sign * np.pi / 2) for sign in (1.0, -1.0)}
+
+
+def _cross(a, b) -> np.ndarray:
+    """``np.cross`` of two 3-vectors in numpy's exact operation order, without its ~30 us overhead."""
+    a0, a1, a2 = a
+    b0, b1, b2 = b
+    return np.array([a1 * b2 - a2 * b1, a2 * b0 - a0 * b2, a0 * b1 - a1 * b0])
 
 
 def _cd(alpha, a, b, c, d):
@@ -61,8 +72,6 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     Crd = 5
     Cadd2 = 0
     c4 = 1
-    addr = 0.2500
-    rotr = 0.2500
     ct1 = 0.82
     ct2 = 0.05
 
@@ -89,16 +98,12 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # Rotational drag, summed over strips (gated by span cutoff).
     Fik_lt = 0
     Tik_lt = 0
+    wsum = float(omega_w[1] + omega_b[1])  # a Python float: same IEEE ops, 4x cheaper than np.float64
+    abswsum = abs(wsum)
+    span = Rw / NumBlade
     for k in range(1, NumBlade + 1):
         m = k / NumBlade
-        Rcurr = span_cutoffs[k - 1]
-
-        rdi = 0 if (Rw * i) > Rcurr else 1
-
-        wsum = omega_w[1] + omega_b[1]
-        abswsum = abs(wsum)
-
-        span = Rw / NumBlade
+        rdi = 0 if (Rw * i) > span_cutoffs[k - 1] else 1
         local = chord * (x_rot - m)
 
         Fik_lt += sFik * rdi * 0.5 * rho * wsum * abswsum * span * Crd * local * abs(local) * chord / NumBlade
@@ -109,8 +114,9 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # --------------------------------------------------------
 
     rle = -i * Rw
+    strip = (0.0, rle, 0.0)
 
-    vle = np.cross(omega_w + omega_b, np.array([0, rle, 0])) + vel_h
+    vle = _cross(omega_w + omega_b, strip) + vel_h
     vle[1] = 0
 
     # Previous-step element velocity for the added-mass finite difference. ``dt``
@@ -119,7 +125,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # ``vel_h`` for the old rotation-only behaviour.
     vh_prev = vel_h if vel_h_prev is None else vel_h_prev
     omega_wLI = omega_w - omega_w_d * dt
-    vleLI = np.cross(omega_wLI + omega_b, np.array([0, rle, 0])) + vh_prev
+    vleLI = _cross(omega_wLI + omega_b, strip) + vh_prev
     vleLI[1] = 0
 
     acc_xw = (vle[0] - vleLI[0]) / dt
@@ -128,7 +134,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # Velocity direction & folded angle of attack in [0, pi/2] (arctan2 of
     # absolute components is robust to vz == 0; lift/drag *direction* is set
     # separately below, so quadrant folding is fine for a symmetric section).
-    norm_v = np.linalg.norm(vle)
+    norm_v = np.sqrt(vle.dot(vle))  # np.linalg.norm's own formula
     if norm_v != 0:
         dir_vle = vle / norm_v
         alpha = np.arctan2(abs(dir_vle[0]), abs(dir_vle[2]))
@@ -141,7 +147,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
 
     # Non-zero sign so vx == 0 does not collapse the +-90 deg rotation to identity.
     lift_sign = 1.0 if vle[0] >= 0 else -1.0
-    dir_lift = _ry(-lift_sign * np.pi / 2) @ dir_vle
+    dir_lift = _LIFT_ROTATION[lift_sign] @ dir_vle
 
     # --------------------------------------------------------
     # Translational lift & drag
@@ -153,7 +159,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     FLi = q * _cl(alpha, e, f, g, h) * chord * (Rw / NumBlade) * dir_lift
 
     r_cof_trans = x_rot - (ct1 * abs(alpha) / np.pi + ct2)
-    r_cof_trans = np.clip(r_cof_trans, x_rot - 1, x_rot)
+    r_cof_trans = min(max(r_cof_trans, x_rot - 1), x_rot)  # np.clip, minus its overhead
     r_cof_trans *= chord
 
     # --------------------------------------------------------
@@ -187,9 +193,9 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
          + np.array([F_add2_i, 0, 0])
 
     Taui = (
-        np.cross([0, 0, sCof * r_cof_trans], FDi + sLift * FLi)
-        + np.cross([0, 0, sCof * r_cof_add], F_add_i + np.array([F_add2_i, 0, 0]))
-        + np.cross([0, 0, sCof * r_cof_rot], sRot * F_rot_i)
+        _cross((0.0, 0.0, sCof * r_cof_trans), FDi + sLift * FLi)
+        + _cross((0.0, 0.0, sCof * r_cof_add), F_add_i + np.array([F_add2_i, 0, 0]))
+        + _cross((0.0, 0.0, sCof * r_cof_rot), sRot * F_rot_i)
         + np.array([0, Tik_lt, 0])
     )
 
@@ -200,6 +206,12 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
 
 
 RHO_AIR = 1.1839
+
+# Recompute the aero every DEFAULT_AERO_SUBSTEP physics steps and re-apply the
+# cached force in between (the finite-difference window scales with it, so it
+# stays consistent). At the 0.13 ms step, 4 puts the aero cadence at ~0.52 ms --
+# the rate that was fine at the old 0.5 ms step -- for ~4x fewer aero calls.
+DEFAULT_AERO_SUBSTEP = 4
 
 # The unsteady (added-mass) aero force is proportional to finite-differenced
 # acceleration. In this explicit runtime it is noisy enough to inflate lift by
@@ -223,40 +235,44 @@ class WingAeroState:
     cached_forces: list[np.ndarray] | None = None
     cached_torques: list[np.ndarray] | None = None
     cached_points: list[np.ndarray] | None = None
+    cached_lift: float = 0.0  # world-z sum of cached_forces
 
 
 class AeroBladeRuntime:
-    def __init__(self, model, config_path=None, *, substep=None):
-        config = load_runtime_config(config_path) or {}
-        aero_cfg = config.get("aero", {})
-        num_blades = int(aero_cfg.get("num_blades", 10))
-        # Recompute aero forces every `substep` physics steps; reapply the
-        # cached force between recomputes. 1 = compute every step.
-        self.substep = max(1, int(aero_cfg.get("substep", 1) if substep is None else substep))
-        # Compute only the left wing and reflect its forces to the right (the
-        # wings are exact mirror images). Falls back to per-wing compute if off
-        # or if there isn't exactly the L,R pair to mirror.
-        self.mirror_wings = bool(aero_cfg.get("mirror_wings", False))
-        self.geometry = load_default_wing_geometry(num_blades=num_blades, config_path=config_path)
-        self.num_blades = num_blades
+    """Blade-element aero on both plate wings; call :meth:`apply` once per step, before mj_step.
+
+    ``morph`` supplies the blade count and the wing mesh; without it the design at
+    ``MORPHOLOGY_PATH`` does. Forces are recomputed every ``substep`` steps
+    (default ``DEFAULT_AERO_SUBSTEP``) and re-applied from the cache in between.
+    """
+
+    def __init__(self, model, morph=None, *, substep=None):
+        if morph is None:
+            morph = load_design_morphology()
+        self.num_blades = int(morph.wing.aero.blades)
+        self.substep = max(1, int(DEFAULT_AERO_SUBSTEP if substep is None else substep))
+        mesh = _resolve_wing_mesh_path(morph.wing.mesh_file, morph.world.meshdir)
+        self.geometry = load_wing_geometry_from_stl(mesh, num_blades=self.num_blades)
         self.dt = float(model.opt.timestep)
         self.wings = [
             self._resolve_wing(model, "L"),
             self._resolve_wing(model, "R"),
         ]
         self._step_counter = 0
+        self._jacp = np.zeros((3, model.nv))
+        self._jacr = np.zeros((3, model.nv))
 
     def apply(self, model, data) -> None:
         recompute = (self._step_counter % self.substep) == 0
-        mirror = self.mirror_wings and len(self.wings) == 2
-        for idx, wing in enumerate(self.wings):
+        for wing in self.wings:
             if recompute or wing.cached_forces is None:
-                if mirror and idx == 1:
-                    self._mirror_wing(model, data, self.wings[0], wing)
-                else:
-                    self._compute_wing(model, data, wing)
+                self._compute_wing(model, data, wing)
             self._reapply_wing(model, data, wing)
         self._step_counter += 1
+
+    def lift(self) -> float:
+        """World-z aero force (N) of the forces the last :meth:`apply` applied."""
+        return sum(wing.cached_lift for wing in self.wings)
 
     def _resolve_wing(self, model, side: str) -> WingAeroState:
         root_site_id = self._site_id(model, f"{side}_wing_Root_Site")
@@ -296,8 +312,7 @@ class AeroBladeRuntime:
         # steady terms but the added-mass term finite-differences velocity (x
         # lamda/dt), so it blew up into a ~17x MJX<->CPU lift gap. jac @ qvel uses
         # the current qvel and matches the MJX runtime to ~1e-4 (the transfer fix).
-        jacp = np.zeros((3, model.nv))
-        jacr = np.zeros((3, model.nv))
+        jacp, jacr = self._jacp, self._jacr
         mujoco.mj_jacSite(model, data, jacp, jacr, wing.root_site_id)
         omega_global = jacr @ data.qvel
         velocity_global = jacp @ data.qvel
@@ -363,27 +378,7 @@ class AeroBladeRuntime:
         wing.cached_forces = forces
         wing.cached_torques = torques
         wing.cached_points = points
-
-    def _mirror_wing(self, model, data, src: WingAeroState, dst: WingAeroState) -> None:
-        # The two wings are exact mirror images across the sagittal plane, and in
-        # their respective root-site frames the mirror is a z-flip (verified: the
-        # right wing's local velocity/force = reflz(left's) to ~9%). So map the
-        # left blade forces into the right wing's frame instead of recomputing:
-        #   F_R_global = R_root_R . reflz . R_root_L^T . F_L_global
-        # Force is a true vector; torque (chordwise pitching moment) is a
-        # pseudovector, so it picks up the extra det(reflz) = -1 sign.
-        if src.cached_forces is None:
-            dst.cached_forces = dst.cached_torques = dst.cached_points = None
-            return
-        reflz = np.diag([1.0, 1.0, -1.0])
-        rot_src = np.asarray(data.site_xmat[src.root_site_id]).reshape(3, 3)
-        rot_dst = np.asarray(data.site_xmat[dst.root_site_id]).reshape(3, 3)
-        m_force = rot_dst @ reflz @ rot_src.T
-        m_torque = rot_dst @ (-reflz) @ rot_src.T
-        dst.cached_forces = [m_force @ f for f in src.cached_forces]
-        dst.cached_torques = [m_torque @ t for t in src.cached_torques]
-        # Apply at the right wing's own blade sites (already the mirror points).
-        dst.cached_points = [np.asarray(data.site_xpos[sid]).copy() for sid in dst.blade_site_ids]
+        wing.cached_lift = float(np.sum([f[2] for f in forces]))
 
     def _reapply_wing(self, model, data, wing: WingAeroState) -> None:
         if wing.cached_forces is None:

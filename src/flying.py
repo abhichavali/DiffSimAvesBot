@@ -16,6 +16,7 @@ Pure string->string XML surgery (ElementTree only); no MuJoCo import here.
 
 from __future__ import annotations
 
+import os
 import xml.etree.ElementTree as ET
 
 AIRFRAME_BODY = "airframe"
@@ -87,53 +88,6 @@ def shrink_pillar_visual(xml: str, *, stub: float = 0.05) -> str:
     return _tostr(root)
 
 
-def add_obstacle(
-    xml: str,
-    pos,
-    *,
-    radius: float = 0.02,
-    z_lo: float = 0.10,
-    z_hi: float = 0.48,
-    rgba: str = "0.85 0.2 0.2 1",
-) -> str:
-    """Add a fixed vertical pole into the flight corridor.
-
-    A pole (not a ball) so the collidable surface spans the whole flight-height
-    band — a thin, fast, flapping wing can't miss it in z the way it slips past a
-    small sphere. contype/conaffinity 1 collides with the wings and struts (which
-    carry bit 1); a ball cap on top just makes it read as a deliberate object.
-    ``pos`` is (x, y, _); the third component is ignored (the pole spans z).
-    """
-    root = ET.fromstring(xml)
-    worldbody = root.find("worldbody")
-    x, y, _ = pos
-    obstacle = ET.SubElement(worldbody, "body", name="obstacle", pos=f"{x} {y} 0")
-    ET.SubElement(
-        obstacle,
-        "geom",
-        name="obstacle_pole",
-        type="capsule",
-        fromto=f"0 0 {z_lo} 0 0 {z_hi}",
-        size=str(radius),
-        rgba=rgba,
-        contype="1",
-        conaffinity="1",
-    )
-    ET.SubElement(
-        obstacle,
-        "geom",
-        name="obstacle_cap",
-        type="sphere",
-        pos=f"0 0 {z_hi}",
-        size=str(radius * 1.8),
-        rgba=rgba,
-        contype="0",
-        conaffinity="0",
-        group="2",
-    )
-    return _tostr(root)
-
-
 CEILING_THICKNESS = 0.012
 
 
@@ -167,7 +121,7 @@ def add_ceiling(
     band, and the same camera reads it instantly.
 
     contype 4 / conaffinity 0 keys off conaffinity 4, the ONE bit unique to the
-    wing capsules. The obvious mirror of ``add_mocap_obstacle`` (contype 4 /
+    wing plates. The obvious mirror of ``add_mocap_obstacle`` (contype 4 /
     conaffinity 2) would also catch every tensegrity strut — they carry contype 2
     as well — and the bird would hang off the ceiling by its shoulder instead of
     clipping a wingtip.
@@ -327,12 +281,12 @@ def add_mocap_obstacle(
     park=(5.0, 0.0, 0.3),
 ) -> str:
     """A MOVABLE collidable pole (a mocap body) that can be teleported in/out of the
-    wing's arc at runtime via ``data.mocap_pos``. Unlike ``add_obstacle`` (a welded,
-    fixed pole) a mocap body stays kinematic — infinite mass, driven by mocap_pos —
-    yet still collides, so the collision demo can bring an obstacle in front of the
-    wing and then remove it. Spans ``±half_height`` in its own z about the mocap
-    origin; contype/conaffinity 1 to hit the wing collision capsule. Starts parked
-    at ``park`` (well out of the way)."""
+    wing's arc at runtime via ``data.mocap_pos``. A mocap body stays kinematic —
+    infinite mass, driven by mocap_pos — yet still collides, so the collision demo
+    can bring an obstacle in front of the wing and then remove it. Spans
+    ``±half_height`` in its own z about the mocap origin; contype 4 / conaffinity 2
+    pairs it with the wing collision boxes (and the struts, which also carry
+    contype 2). Starts parked at ``park`` (well out of the way)."""
     root = ET.fromstring(xml)
     worldbody = root.find("worldbody")
     px, py, pz = park
@@ -340,21 +294,17 @@ def add_mocap_obstacle(
     ET.SubElement(
         body, "geom", name="obstacle_pole", type="capsule",
         fromto=f"0 0 {-half_height} 0 0 {half_height}", size=str(radius),
-        rgba=rgba, contype="4", conaffinity="2",   # pairs with the wing capsule only
+        rgba=rgba, contype="4", conaffinity="2",
     )
     return _tostr(root)
 
 
 # --------------------------------------------------------------------------- #
-# Visual hummingbird skin (ported from Tensegrity-Playground/build_visual_bird)
+# Visual hummingbird skin
 # --------------------------------------------------------------------------- #
-# The rufous-hummingbird meshes live in the sibling Tensegrity-Playground repo
-# (~29 MB); reference them in place rather than duplicating. Override with the
-# --bird-assets flag if that checkout is elsewhere.
-BIRD_ASSETS_DIR = (
-    "/Users/abhinavchavali/Code/Tensegrity-Playground/"
-    "templates/generated-joint/assets/bird"
-)
+# The rufous-hummingbird meshes (~29 MB: rufous_*.obj + rufous_diffuse.png) are
+# not in this repo. Point BIRD_ASSETS_DIR, or a CLI's --bird-assets, at their folder.
+BIRD_ASSETS_DIR = os.environ.get("BIRD_ASSETS_DIR")
 
 # ── skin TUNABLES (start = the TP values; retune for this rig from stills) ──
 BODY_SCALE = 0.0058          # body/head/tail base mesh scale
@@ -375,7 +325,7 @@ def _wing_pos(side: str) -> str:
     return f"{WING_FWD} {raise_local} {WING_OUT}"
 
 
-def add_visual_bird(xml: str, *, assets_dir: str = BIRD_ASSETS_DIR) -> str:
+def add_visual_bird(xml: str, *, assets_dir: str | None = BIRD_ASSETS_DIR) -> str:
     """Layer the rufous-hummingbird skin over the flying rig.
 
     A static, semi-transparent torso (body/head/tail) is parented to the
@@ -383,6 +333,8 @@ def add_visual_bird(xml: str, *, assets_dir: str = BIRD_ASSETS_DIR) -> str:
     through; each flapping ``wing.stl`` geom is swapped for the real L/R wing
     mesh. Must run AFTER to_airframe. Meshes are referenced by absolute path.
     """
+    if assets_dir is None:
+        raise ValueError("no bird skin meshes: set BIRD_ASSETS_DIR or pass --bird-assets")
     root = ET.fromstring(xml)
     asset = root.find("asset")
     s_body = f"{BODY_SCALE} {BODY_SCALE} {BODY_SCALE * BODY_WIDEN}"
@@ -445,13 +397,17 @@ def _tostr(root: ET.Element) -> str:
 if __name__ == "__main__":
     # Self-check: the transforms produce a scene MuJoCo can load, with a single
     # airframe freejoint that swallowed the welded bodies (mobile struts stay free).
+    import tempfile
     from pathlib import Path
 
     import mujoco
     import numpy as np
 
-    base = Path(__file__).resolve().parent.parent / "scene.xml"
-    xml = base.read_text()
+    from compile_tg import compile_tg
+    from runtime.morphology_runtime import DEFAULT_HUMMER_TG
+
+    with tempfile.TemporaryDirectory() as tmp:
+        xml = compile_tg(DEFAULT_HUMMER_TG, Path(tmp) / "scene.xml").read_text()
 
     flying = to_airframe(xml)
     m = mujoco.MjModel.from_xml_string(flying)
@@ -465,14 +421,14 @@ if __name__ == "__main__":
     n_free = int((m.jnt_type == mujoco.mjtJoint.mjJNT_FREE).sum())
     assert n_free == 3, n_free
 
-    full = enable_wing_collision(add_obstacle(flying, (-0.26, 0.02, 0.0)))
+    full = enable_wing_collision(add_mocap_obstacle(flying))
     m2 = mujoco.MjModel.from_xml_string(full)
     assert mujoco.mj_name2id(m2, mujoco.mjtObj.mjOBJ_GEOM, "obstacle_pole") >= 0
     assert mujoco.mj_name2id(m2, mujoco.mjtObj.mjOBJ_GEOM, "L_wing_collision") >= 0
     print("flying.py self-check OK: airframe + obstacle + wing collision load")
 
     # Ceiling: mocap (so it can be positioned at runtime) and it must pair with
-    # the wing capsule ONLY -- if the masks let the body through, the bird would
+    # the wing plates ONLY -- if the masks let the body through, the bird would
     # belly-flop into it instead of clipping a wingtip.
     ceil = enable_wing_collision(add_ceiling(flying))
     m4 = mujoco.MjModel.from_xml_string(ceil)
@@ -524,10 +480,10 @@ if __name__ == "__main__":
                 f"vs box {np.round(lo, 4)}..{np.round(hi, 4)}")
     print("  + wing collision boxes cover the wing meshes")
 
-    if Path(BIRD_ASSETS_DIR).is_dir():
+    if BIRD_ASSETS_DIR and Path(BIRD_ASSETS_DIR).is_dir():
         m3 = mujoco.MjModel.from_xml_string(add_visual_bird(flying))
         assert mujoco.mj_name2id(m3, mujoco.mjtObj.mjOBJ_BODY, "visual_torso") >= 0
         assert mujoco.mj_name2id(m3, mujoco.mjtObj.mjOBJ_MATERIAL, "bird_body_mat") >= 0
         print("  + visual bird skin loads")
     else:
-        print(f"  (skin skipped: {BIRD_ASSETS_DIR} not present)")
+        print(f"  (skin skipped: BIRD_ASSETS_DIR={BIRD_ASSETS_DIR!r} is not a folder)")

@@ -1,9 +1,9 @@
-"""Load the active morphology design for simulation runtime.
+"""Where the designs live, and which one the runtime uses when it is not handed one.
 
-Runtime code (aero, wing geometry, pitch calibration) reads physical knobs from
-the same `.tg` file the compiler uses — not from legacy JSON configs.
-
-Override the design file with ``MORPHOLOGY_PATH`` (absolute or repo-relative).
+``DEFAULT_*_TG`` are the tool defaults. The design named by ``MORPHOLOGY_PATH``
+(default ``DEFAULT_HUMMER_TG``) is the ``morph=None`` fallback of the CPU runtime
+and what the MJX configs read. ``load_design_morphology`` caches its parse for the
+process: call ``load_design_morphology.cache_clear()`` after re-pointing the env var.
 """
 
 from __future__ import annotations
