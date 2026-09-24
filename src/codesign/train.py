@@ -241,8 +241,8 @@ def run(cfg) -> None:
     cpu_cells = [(cfg.integrator, cfg.timestep)]
     if three_integrators:
         cpu_cells += [("implicitfast", cfg.timestep), ("rk4", cfg.timestep)]
-    cpu_cells += [(cfg.integrator, None if cfg.timestep is None else cfg.timestep * f)
-                  for f in cfg.cpu_timestep_factors]
+    base_ms = cfg.timestep if cfg.timestep is not None else dt * 1e3  # None = the scene's dt
+    cpu_cells += [(cfg.integrator, base_ms * f) for f in cfg.cpu_timestep_factors]
 
     # CPU gate baselines: the first in-loop check seeds them (a startup CPU eval cost
     # ~45 min on a design whose numbers are already known).
