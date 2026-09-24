@@ -210,6 +210,16 @@ def quat_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     ], dtype=float)
 
 
+def quat_from_euler_xyz(euler) -> np.ndarray:
+    """Intrinsic x-y-z Euler angles (MJCF's default ``eulerseq``) as a w-first quaternion."""
+    q = np.array([1.0, 0.0, 0.0, 0.0])
+    for axis, angle in enumerate(euler):
+        r = np.array([math.cos(0.5 * angle), 0.0, 0.0, 0.0])
+        r[axis + 1] = math.sin(0.5 * angle)
+        q = quat_mul(q, r)
+    return q
+
+
 def quat_from_axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
     axis = np.asarray(axis, dtype=float)
     axis = axis / (np.linalg.norm(axis) + 1e-12)

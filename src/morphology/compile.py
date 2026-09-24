@@ -29,6 +29,7 @@ from morphology.geometry import (
     mirror_y,
     motor_anchor_node,
     quat_from_axis_angle,
+    quat_from_euler_xyz,
     quat_mul,
     quat_rotate,
     strut_pair,
@@ -133,7 +134,7 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
 
     # Forward kinematics to the ulna's distal end at qpos = 0.
     hum_pos, hum_quat = compose(mobile_pos, mobile_quat,
-                                mobile_geom.midpoint, np.array(bones.mount_quat()))
+                                mobile_geom.midpoint, quat_from_euler_xyz(bones.mount_euler_rad))
     ulna_pos, ulna_quat = compose(hum_pos, hum_quat,
                                   np.array([0.0, 0.0, bones.humerus]), _IDENTITY_QUAT)
     tip_pos, tip_quat = compose(ulna_pos, ulna_quat,

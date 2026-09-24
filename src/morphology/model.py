@@ -377,23 +377,6 @@ class WingBones:
         """Shoulder to wingtip, feathers included."""
         return self.humerus + self.ulna + self.manus + self.primary
 
-    def mount_quat(self) -> Tuple[float, float, float, float]:
-        """Intrinsic x-y-z Euler (MJCF ``eulerseq`` default) as a w-first quaternion."""
-        half = [0.5 * a for a in self.mount_euler_rad]
-        q = (1.0, 0.0, 0.0, 0.0)
-        for axis, a in enumerate(half):
-            r = [math.cos(a), 0.0, 0.0, 0.0]
-            r[axis + 1] = math.sin(a)
-            w1, x1, y1, z1 = q
-            w2, x2, y2, z2 = r
-            q = (
-                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-            )
-        return q
-
 
 @dataclass
 class Wing:

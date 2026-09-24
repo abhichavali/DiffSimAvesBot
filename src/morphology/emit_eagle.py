@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 from morphology.compiled import CompiledMorphology, CompiledShoulder
-from morphology.geometry import mirror_quat
+from morphology.geometry import mirror_quat, quat_from_euler_xyz
 from morphology.mjcf_parts import (
     STRUCTURAL_TENDON_COLORS,
     hex_to_rgba,
@@ -184,7 +184,7 @@ def emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph, worldb
     """
     b = morph.wing.bones
     prefix = shoulder.side
-    quat = b.mount_quat()
+    quat = quat_from_euler_xyz(b.mount_euler_rad)
     if prefix == "R":
         quat = mirror_quat(quat)
     twist_axis = "0 0 1" if prefix == "L" else "0 0 -1"
