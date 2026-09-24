@@ -20,11 +20,28 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 import numpy as np
+
+
+#: Stamped into theta_best.json, theta_full.json and codesign_seed.json. Since 649cab1
+#: the rest settle resets data.time to 0; a harmonic file without the stamp was driven
+#: from time 2000*dt, so its phases are k*omega*2000*dt ahead of today's replay.
+CLOCK_STAMP = {"time_origin": "settle_end_reset"}
+
+
+def warn_old_clock(d: dict, path, harmonics) -> None:
+    """Warn when ``d`` (a loaded artifact) has nonzero ``harmonics`` but no CLOCK_STAMP."""
+    if d.get("time_origin") != CLOCK_STAMP["time_origin"] and np.any(np.asarray(harmonics, dtype=float)):
+        warnings.warn(
+            f"{path}: harmonic artifact written before the rest settle reset the clock (649cab1); "
+            "its phases are k*omega*2000*dt_run ahead. Replay it with opt/design_io.py "
+            "--pre-clock-fix-dt <the run's --timestep>; rotate a warm start's a_k/b_k first "
+            "(AGENTS.md 'Harmonic clock').", stacklevel=2)
 
 
 class Genes(NamedTuple):
@@ -97,6 +114,7 @@ def load_control_seed(path: Path | None, K: int, drive, base_a0: float,
     else:
         d = json.loads(Path(path).read_text())
         a, b, a0 = list(d["a"]), list(d["b"]), float(d["a0"])
+        warn_old_clock(d, path, a + b)
     if wavelet:
         return [math.log(a0 / base_a0)] + [0.0] * (2 * K)
     a = (a + [0.0] * K)[:K]
@@ -121,6 +139,8 @@ def initial_theta(genome: Genome, control_seed, codesign: Path | None = None,
     if codesign is not None:
         d = json.loads(Path(codesign).read_text())
         seed = jnp.asarray(d.get("genome", d.get("theta")), dtype=jnp.float32)
+        if "layout" not in d or d["layout"].get("control", True):
+            warn_old_clock(d, codesign, seed[1:2 * K + 1])
         if "layout" in d:
             return _theta_from_layout(genome, control_seed, seed, Genome(**d["layout"]))
         want = 2 * K + 1 + 2 * n + 2

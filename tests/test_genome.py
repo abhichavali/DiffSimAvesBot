@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 
 from codesign.cpu_check import to_cpu
-from codesign.genome import Genome, initial_theta
+from codesign.artifacts import rotate_harmonics
+from codesign.genome import CLOCK_STAMP, Genome, initial_theta
 
 FULL = Genome(K=2, n_tend=3, control=True, frequency=True, tendons=True, pitch=True, motor=True,
               strokeplane=True)
@@ -61,7 +62,7 @@ def test_init_codesign_matches_groups_by_layout(tmp_path):
     def seed(src, extra=0):
         p = tmp_path / "seed.json"
         theta = np.arange(1, src.size + extra + 1, dtype=np.float32)  # every gene distinct
-        p.write_text(json.dumps({"theta": theta.tolist(), "layout": src._asdict()}))
+        p.write_text(json.dumps({"theta": theta.tolist(), "layout": src._asdict(), **CLOCK_STAMP}))
         return p, src.split(theta, None)
 
     p, want = seed(FULL)  # every group, incl. f_log and pitch that the old decoder dropped
@@ -75,3 +76,26 @@ def test_init_codesign_matches_groups_by_layout(tmp_path):
     assert got.f_log == 0.0 and not np.asarray(got.pitch).any() and not np.asarray(got.sp).any()
     with pytest.raises(ValueError, match="K=2"):
         initial_theta(Genome(K=3, n_tend=3, tendons=True, motor=True), jnp.zeros(7), p)
+
+
+def test_pre_clock_fix_seeds_warn_and_rotate_back(tmp_path):
+    """A harmonic seed without the clock stamp warns; rotate_harmonics re-expresses a drive
+    that ran from time t0 (the old 2000*dt settle end) as one that runs from 0."""
+    import json
+    import warnings
+
+    p, genome = tmp_path / "theta_full.json", Genome(K=1, n_tend=0)
+    old = {"theta": [0.0, 0.1, 0.0], "layout": genome._asdict()}
+    p.write_text(json.dumps(old))
+    with pytest.warns(UserWarning, match="--pre-clock-fix-dt"):
+        initial_theta(genome, jnp.zeros(3), p)
+    p.write_text(json.dumps({**old, **CLOCK_STAMP}))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        initial_theta(genome, jnp.zeros(3), p)
+
+    a, b, w, t0 = np.array([0.1, -0.2]), np.array([0.05, 0.3]), 65.0, 0.12
+    a2, b2 = rotate_harmonics(a, b, w, t0)
+    t, k = np.linspace(0.0, 0.2, 9), np.arange(1, 3)[:, None]
+    assert np.allclose(a @ np.cos(k * w * (t + t0)) + b @ np.sin(k * w * (t + t0)),
+                       a2 @ np.cos(k * w * t) + b2 @ np.sin(k * w * t))

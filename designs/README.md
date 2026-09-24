@@ -19,7 +19,9 @@ leading edge and started the strips at the hinge (lift 1.7-1.9x today's, peak 8-
 re-run `design_io` before comparing against them. The seed's passive pitch is bistable
 (a ~190 or a ~210 mN mode depending on dt and integrator), so compare lift per mode. The
 harmonic designs' `control.tg` harmonics were rotated when the clock moved, so dt 0.06 ms
-replays as it did before the clock fix.
+replays as it did before the clock fix. Harmonic run artifacts from before 2026-09-24
+elsewhere (run dirs, other worktrees) were not: replay them with
+`opt/design_io.py <dir> --pre-clock-fix-dt <the run's --timestep>` (AGENTS.md "Harmonic clock").
 
 | design | bird | what it is | lineage | key numbers | default for |
 |---|---|---|---|---|---|

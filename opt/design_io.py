@@ -31,9 +31,12 @@ def main():
     ap.add_argument("--timestep", type=float, default=0.06, help="ms (match the run)")
     ap.add_argument("--warmup", type=float, default=8.0, help="settling periods before sampling")
     ap.add_argument("--periods", type=float, default=3.0, help="sampled periods (certify: 24)")
+    ap.add_argument("--pre-clock-fix-dt", type=float, default=None, metavar="MS",
+                    help="the run's --timestep, for harmonics written before 649cab1 (2026-09-24): "
+                         "rotates a_k/b_k by k*omega*2000*dt")
     args = ap.parse_args()
     res = validate(args.design_dir, args.integrator, timestep_ms=args.timestep, warmup=args.warmup,
-                   periods=args.periods)
+                   periods=args.periods, pre_clock_fix_dt_ms=args.pre_clock_fix_dt)
     for integ, r in res.items():
         print(f"[{args.design_dir.name}/{integ:12s}] lift={r.lift*1e3:7.1f} mN  "
               f"peak_torque={r.peak*1e3:7.1f} mNm  power={r.power*1e3:6.0f} mW")

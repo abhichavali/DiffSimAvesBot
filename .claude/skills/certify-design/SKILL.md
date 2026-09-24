@@ -53,5 +53,9 @@ on the seed at dt 0.03 euler: 24 cycles at 209.4-211.0 mN, drift -1.72 mNm.
   `strokeplane_optimized.json` and `--wavelet` dirs are NOT replayed by design_io.
 - Harmonics now run on the crank-locked clock that starts at rollout start; a design
   that differs between dt 0.03 and 0.06 is a real finding, not the old clock bug.
+- An optimizer dir written before 2026-09-24 (its `theta_best.json` has no
+  `time_origin`; design_io warns) drove its harmonics from time 2000*dt: certify it with
+  `--pre-clock-fix-dt <the run's --timestep>`. A dir with only `control.tg` cannot be
+  detected: check when it was written.
 - Optional wide check: `--timestep 0.04` and `0.09` with `--integrator euler`.
 - Report the per-case table (integrator x dt: lift, peak, power) and the worst peak.

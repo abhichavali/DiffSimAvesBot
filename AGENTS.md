@@ -99,7 +99,14 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
 - **Harmonic clock**: `data.time` is reset to 0 after the rest settle, so the control's
   harmonics start at rollout start. CPU replay and export use the MJX rollout's
   crank-locked clock (`Genes.clock_factor()` = exp(f_log + a0_log)). Old claims that
-  "harmonics are dt-specialized" were this clock bug.
+  "harmonics are dt-specialized" were this clock bug. Harmonic artifacts written before
+  the reset (649cab1, 2026-09-24) drove from time 2000*dt: only the four committed
+  harmonic designs were rotated. Replay any other (a run dir's `theta_best.json` or
+  `control.tg`) with `opt/design_io.py <dir> --pre-clock-fix-dt <the run's --timestep>`,
+  and rotate an old `theta_full.json` / `codesign_seed.json` before `--init-codesign`:
+  a' = a cos(th_k) + b sin(th_k), b' = b cos(th_k) - a sin(th_k), th_k = k*w*2000*dt
+  (w = the file's `omega`, or 2 pi f*exp(f_log + a0_log) for a genome). New JSON artifacts
+  carry `"time_origin": "settle_end_reset"`; loading a harmonic one without it warns.
 - **Aero** follows the mounted wing mesh (strips, per-strip hinge offset, root offset come
   from `wing_geometry.py`); lift follows the chordwise flow whichever edge leads; aero is
   recomputed every `aero_substep` (default 4) steps and its generalized force held in

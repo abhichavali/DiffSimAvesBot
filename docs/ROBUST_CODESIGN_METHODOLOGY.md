@@ -27,6 +27,9 @@ end-to-end from it.
 > rest settle left `data.time` at 2000·dt, so every ω·t harmonic started rotated by a
 > dt-dependent angle (447° at 0.06 ms). With the clock reset, run-4 it021 went from
 > 151.5 @0.06 / 157.6 @0.03 to 151.5–151.7 mNm flat over dt 0.03–0.09 (euler, same aero).
+> Every harmonic run dir and warm-start JSON this log names (§6.1, §14) is on that old
+> clock: replay with `opt/design_io.py --pre-clock-fix-dt <its --timestep>` and rotate a
+> warm start's a_k/b_k first (AGENTS.md "Harmonic clock").
 > (2) Every mNm / mN number here was certified on an aero whose hinge edge always led,
 > sat on the leading edge and started the strips at the hinge. Re-certified on the
 > current aero (doctrine, 8+24 cycles): seed 193.1 mNm at 187–210 mN; it009p 170.5

@@ -58635,7 +58635,8 @@
      "strokeplane": false,
      "wavelet": false
     },
-    "lock_wings": false
+    "lock_wings": false,
+    "time_origin": "settle_end_reset"
    },
    "theta_best.json": {
     "a0": 62.87412591006926,
@@ -58649,7 +58650,8 @@
     "omega": 62.812915675065135,
     "motor_direction": 1.0,
     "Lbar": 0.9823172688484192,
-    "tau_hat": 39.0082893371582
+    "tau_hat": 39.0082893371582,
+    "time_origin": "settle_end_reset"
    },
    "tendon_optimized.json": {
     "tau_hat": 39.0082893371582,

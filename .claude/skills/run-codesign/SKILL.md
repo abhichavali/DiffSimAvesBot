@@ -27,7 +27,9 @@ halves repeat runs. Always pass a distinct `--scene` when anything else may be r
 
 - `--tg`: default `designs/hummer/hover` (the seed). Warm-start from a previous run with
   `--init-codesign <dir>/theta_full.json` (the full genome; partial seeds lost motor
-  pretension before).
+  pretension before). A seed from before 2026-09-24 (no `"time_origin"` key; loading it
+  warns) has its harmonics on the old clock: rotate a_k/b_k first (AGENTS.md "Harmonic
+  clock").
 - **`--lift-floor` (N): always pass it.** The 0.300 default is unreachable (the seed makes
   187-210 mN on the current aero), so it binds from step one. Pick it against the seed's
   measured lift (see the `certify-design` skill).

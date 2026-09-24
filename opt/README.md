@@ -140,7 +140,10 @@ every 3 iterations counted across stages, `cpu_best/`, `robust_best/`, `*preharm
 (control repointed), `control.tg`, `theta_full.json` (the raw theta: an
 `--init-codesign` seed), `theta_best.json`, `tendon_optimized.json`,
 `motor_tendon_optimized.json`, `pitch_optimized.json`, `strokeplane_optimized.json` and
-`log.json`; the run root also gets `cpu_validation.json`. The layout is documented in
+`log.json`; the run root also gets `cpu_validation.json`. The JSON thetas carry
+`"time_origin": "settle_end_reset"`; harmonic ones from before 2026-09-24 lack it, warn
+on load, and replay with `design_io --pre-clock-fix-dt` (AGENTS.md "Harmonic clock").
+The layout is documented in
 `src/codesign/artifacts.py`, which also reads it back:
 
 ```sh

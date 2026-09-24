@@ -6,8 +6,9 @@ A design dir (a run's --out, and each checkpoints/itNNN, stage_*, cpu_best, robu
   shoulder.tg                  the source .tg with `control =` repointed at control.tg
   control.tg                   the optimized control (control_optimized.tg: same text)
   theta_full.json              {"theta": the raw packed theta, "layout": its Genome,
-                               "lock_wings"} -- an --init-codesign seed
-  theta_best.json              a0 and a/b ABSOLUTE (x a0), omega, frequency_hz, ...
+                               "lock_wings", "time_origin"} -- an --init-codesign seed
+  theta_best.json              a0 and a/b ABSOLUTE (x a0), omega, frequency_hz, ...,
+                               "time_origin" (absent: pre-clock-fix, see reconstruct_design)
   tendon_optimized.json        per structural tendon: absolute stiffness + factors, keyed
                                by FULL tendon name (a --lock-wings dir written before
                                lock_wings was recorded holds only the L_ names)
@@ -35,7 +36,7 @@ import mujoco
 import numpy as np
 
 from codesign.cpu_check import CpuDesign, CpuResult, cpu_rollout
-from codesign.genome import Genome, wavelet_dictionary
+from codesign.genome import CLOCK_STAMP, Genome, warn_old_clock, wavelet_dictionary
 from codesign.rig import symmetrize_wings
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
@@ -93,7 +94,7 @@ def write_design(out_dir: Path, design: dict, log, *, genome: Genome, control_se
     write_json(out_dir / "log.json", log)
     (out_dir / "theta_full.json").write_text(json.dumps({"theta": [float(x) for x in theta],
                                                          "layout": genome._asdict(),
-                                                         "lock_wings": rig.lock_wings}))
+                                                         "lock_wings": rig.lock_wings, **CLOCK_STAMP}))
     (out_dir / "shoulder.tg").write_text(repoint_control(tg.read_text()))
     g = genome.split(theta, np.asarray(control_seed))
     K, ctrl = genome.K, g.control
@@ -123,7 +124,7 @@ def write_design(out_dir: Path, design: dict, log, *, genome: Genome, control_se
         (out_dir / "control.tg").write_text(control_text)
         (out_dir / "control_optimized.tg").write_text(control_text)
         write_json(out_dir / "theta_best.json", {**best, "frequency_hz": float(freq_hz),
-                                                 "omega": float(math.tau * freq_hz), **stats})
+                                                 "omega": float(math.tau * freq_hz), **stats, **CLOCK_STAMP})
     if genome.tendons:
         write_json(out_dir / "tendon_optimized.json", {
             "tau_hat": design["tau"], "Lbar": design["Lbar"],
@@ -157,13 +158,25 @@ class DesignSpec(NamedTuple):
     morph: object  # the design's Morphology
 
 
-def reconstruct_design(design_dir) -> DesignSpec:
+def rotate_harmonics(a, b, omega, t0):
+    """a_k/b_k of a drive whose phase was omega*(t + t0), re-expressed for phase omega*t:
+    a' = a cos(k omega t0) + b sin(k omega t0), b' = b cos(k omega t0) - a sin(k omega t0)."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    th = np.arange(1, len(a) + 1) * omega * t0
+    return a * np.cos(th) + b * np.sin(th), b * np.cos(th) - a * np.sin(th)
+
+
+def reconstruct_design(design_dir, *, pre_clock_fix_dt_ms=None) -> DesignSpec:
     """Rebuild a design dir (shoulder.tg + theta_best.json, plus tendon/motor/pitch JSON
     when present) as the CpuDesign the optimizer validated. A committed design (no
     theta_best.json) runs the control.tg its shoulder.tg names.
 
     theta_best stores a/b ABSOLUTE (x a0); the CPU runner wants DEPTHS, so a0 is divided
     back out. Writes _recon_scene.xml into ``design_dir`` (gitignored).
+
+    ``pre_clock_fix_dt_ms`` (the run's --timestep) replays harmonics written before
+    649cab1, whose clock started at the end of the 2000-step rest settle: they are
+    rotated by k*omega*2000*dt.
     """
     design_dir = Path(design_dir)
     tg, scene = design_dir / "shoulder.tg", design_dir / "_recon_scene.xml"
@@ -172,9 +185,13 @@ def reconstruct_design(design_dir) -> DesignSpec:
     if theta_best.exists():
         th = json.loads(theta_best.read_text())
         a0, a, b, omega = th["a0"], th["a"], th["b"], th["omega"]
+        if pre_clock_fix_dt_ms is None:
+            warn_old_clock(th, theta_best, a + b)
     else:
         c = load_control_for_morphology(tg)
         a0, a, b, omega = c.a0, c.a, c.b, c.omega
+    if pre_clock_fix_dt_ms is not None:
+        a, b = rotate_harmonics(a, b, omega, 2000 * pre_clock_fix_dt_ms * 1e-3)  # settle_steps * dt
     ctrl = (a0, np.asarray(a) / a0, np.asarray(b) / a0, omega)
     return DesignSpec(scene, CpuDesign(ctrl, _tendon_arrays(scene, design_dir),
                                        _pitch_params(design_dir)),
@@ -182,10 +199,10 @@ def reconstruct_design(design_dir) -> DesignSpec:
 
 
 def validate(design_dir, integrators=("euler", "implicitfast"), *, timestep_ms=0.06,
-             warmup=8.0, periods=3.0) -> dict[str, CpuResult]:
+             warmup=8.0, periods=3.0, pre_clock_fix_dt_ms=None) -> dict[str, CpuResult]:
     """Reconstruct and roll out on MuJoCo CPU; warmup=8 periods is load-bearing (the rig
     builds lift for ~8 cycles)."""
-    spec = reconstruct_design(design_dir)
+    spec = reconstruct_design(design_dir, pre_clock_fix_dt_ms=pre_clock_fix_dt_ms)
     return {integ: cpu_rollout(spec.scene_path, spec.design, integ, morph=spec.morph, warmup=warmup,
                                periods=periods, phase_lag=spec.morph.motors.crank_phase_lag_rad,
                                timestep_ms=timestep_ms)

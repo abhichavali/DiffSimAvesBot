@@ -38,7 +38,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import tg_scalars  # noqa: E402
 from codesign.artifacts import fourier_control_tg, motor_json, repoint_control, tendon_pairs_json  # noqa: E402
-from codesign.genome import Genome  # noqa: E402
+from codesign.genome import CLOCK_STAMP, Genome  # noqa: E402
 from codesign.metrics import Metrics, build_rollout  # noqa: E402
 from codesign.rig import flap_t1_mask, setup, step_counts  # noqa: E402
 from design_paths import HOVER_BASE_TG  # noqa: E402
@@ -182,11 +182,11 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
     (out_dir / "shoulder.tg").write_text(repoint_control(src_text))
     (out_dir / "theta_best.json").write_text(json.dumps(
         {"a0": float(a0), "a": [float(x) for x in a_out], "b": [float(x) for x in b_out],
-         "omega": float(omega), "frequency_hz": float(omega / math.tau)}, indent=2))
+         "omega": float(omega), "frequency_hz": float(omega / math.tau), **CLOCK_STAMP}, indent=2))
     seed = [float(x) for x in g]
     seed[0] = 0.0  # a0_log: control.tg above is already absolute
     (out_dir / "codesign_seed.json").write_text(json.dumps(
-        {"genome": seed, "layout": genome._asdict(), "n_geom": len(geom_names)}, indent=2))
+        {"genome": seed, "layout": genome._asdict(), "n_geom": len(geom_names), **CLOCK_STAMP}, indent=2))
 
 
 def main():
