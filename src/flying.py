@@ -31,6 +31,12 @@ AIRFRAME_FREEJOINT = "airframe_freejoint"
 # is identical to the bench. 4 x 2.5 g + 12.8 g struts + 0.27 g wings = 23.1 g = 226 mN.
 DISK_MASS = 0.0025
 FLIGHT_WEIGHT_RANGE_N = (0.200, 0.250)
+# Extra airframe rotational inertia [kg m^2] about every axis, with NO extra mass: the airframe's
+# mass carried further out (motors/battery spread fore-aft and sideways), ~10 g at ~15 cm. As
+# compiled, the body's own ~4e-5 is comparable to the flapping struts', so each wingbeat rocks it
+# 25-50 deg, the stroke plane rocks with it, and free-flight lift collapses to ~0 (held: 239 mN).
+# +1.6e-4 keeps the wobble to 4-10 deg and free lift at ~271 mN (control-policy, 2026-09-24).
+BODY_INERTIA = 1.6e-4
 
 
 def to_airframe(xml: str) -> str:
@@ -51,6 +57,8 @@ def to_airframe(xml: str) -> str:
 
     airframe = ET.Element("body", name=AIRFRAME_BODY, pos="0 0 0", quat="1 0 0 0")
     ET.SubElement(airframe, "freejoint", name=AIRFRAME_FREEJOINT)
+    # Massless, so where it sits does not matter (no gravity moment, no parallel-axis term).
+    ET.SubElement(airframe, "inertial", pos="0 0 0", mass="0", diaginertia=f"{BODY_INERTIA} {BODY_INERTIA} {BODY_INERTIA}")
     for body in welded:
         worldbody.remove(body)
         airframe.append(body)
