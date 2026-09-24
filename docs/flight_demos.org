@@ -1,342 +1,78 @@
 #+TITLE: Tensegrity Flapping-Wing Flight Demos
 #+AUTHOR: DiffSimAvesBot
-#+DATE: 2026-07-23
+#+DATE: 2026-09-24
 #+OPTIONS: toc:2 num:t
 #+STARTUP: showall
 
-* Overview
+* Status
 
-Five interactive MuJoCo simulations of the free-flying tensegrity flapping-wing
-robot (design ~designs/hummer/hover~), all launched from one
-viewer via a ~--mode~ flag:
+Free flight is uncontrolled until the closed-loop hover policy drives it. Nothing
+holds the bird up: gravity, the blade-element aero, the wing-pitch limiter, contacts
+and the four crank-motor servos are the only forces, so today every free-flight
+render shows the bird falling and tumbling.
 
-#+begin_src bash
-mjpython src/view_hover.py                    # hover      (default)
-mjpython src/view_hover.py --mode vector      # force vectoring + aero-force arrows
-mjpython src/view_hover.py --mode multimodal  # up/down-stroke asymmetry + aero arrows
-mjpython src/view_hover.py --mode flying      # visual hummingbird over the mechanism
-mjpython src/view_hover.py --mode collision   # obstacle brought into a wing, then removed
-#+end_src
+Removed on 2026-09-24 because none of it was physical (all in git history):
+- the July hover stack: ~src/view_hover.py~ (viewer, five ~--mode~ demos),
+  ~src/runtime/hover_control.py~ (a bounded 6-DOF stabilizing wrench written into the
+  airframe freejoint's ~qfrc_applied~), ~opt/hover_policy.py~ (its MJX model and BPTT
+  trainer) and ~designs/hummer/hover/hover_policy/~ (the sweep-tuned PD). It also
+  scaled gravity down to the flap lift (5.27 m/s^2). Last present at ~9d9640e^~.
+- the render assists: a weight-cancelling force, altitude / speed / station servos
+  and an attitude PD applied with ~mj_applyFT~, plus the envelopes and scripted
+  setpoints that drove them. Last present at ~2a25446^~ and ~ef99ae4^~.
 
-Every mode sits on top of the *same stabilized hover*: the flapping carries the
-weight and a feedback controller keeps the body upright and on-station. So the
-document starts with how hovering was built (the hard part), then the shared
-build pipeline, then each mode.
+* The free airframe (~src/flying.py~)
 
-| Mode       | What you see                                                        |
-|------------+---------------------------------------------------------------------|
-| hover      | Upright, on-station, holds altitude, recovers from nudges           |
-| vector     | Wing motion scripted beat-by-beat (tilt, stop, resume); force arrows |
-| multimodal | Precessing stroke plane -> up/down-stroke asymmetry; force arrows    |
-| flying     | Semi-transparent hummingbird skin over the tensegrity joint + motors |
-| collision  | A red pole enters a wing's arc, is hit, then removed; contacts shown |
+The compiled scene is a bench rig: fixed struts and motor pillars are welded to the
+world and only the mobile struts (wings) float, held by the tendon net.
+~flying.to_airframe~ reparents every world-welded body under one ~airframe~ body on
+a ~<freejoint>~; the mobile struts keep their own freejoints and stay coupled only
+through the tendons. The pillars fly massless and each crank disk carries 2.5 g for
+its motor, so the whole bird weighs 226 mN (~FLIGHT_WEIGHT_RANGE_N~ = 200-250 mN; the
+~__main__~ self-check asserts it). The seed's bench lift at its own drive is 187-210 mN
+(~219 mN with the stroke plane leveled), below that weight.
 
-Key files:
-- ~opt/hover_policy.py~ -- free-flight model build and the (differentiable) trainer.
-- ~src/runtime/hover_control.py~ -- the controller: ~level_stroke_plane~,
-  ~pd_init_theta~, the features and the stabilizing wrench.
-- ~src/view_hover.py~ -- the mode-based viewer (controller + per-mode schedules
-  + live aero arrows).
-- ~src/flying.py~ -- post-compile XML surgery (~to_airframe~,
-  ~shrink_pillar_visual~, ~enable_wing_collision~, ~add_mocap_obstacle~,
-  ~add_visual_bird~).
-- ~designs/hummer/hover/hover_policy/~ -- the saved controller (~policy_best.npz~) + ~hover_meta.json~.
+Scene helpers (pure XML surgery): ~shrink_pillar_visual~ (cosmetic),
+~enable_wing_collision~, ~add_poles~, ~add_ceiling~, ~add_mocap_obstacle~,
+~add_visual_bird~. Lessons that each cost a broken demo:
+- Collision and skin geoms must be massless. A default-density wing collider weighed
+  ~26 g per wing and the mesh skin ~2.3 kg; both sank the bird.
+- Collision masks are asymmetric so a wing hits only the obstacle (wing
+  ~contype 2 / conaffinity 4~, obstacle the reverse): a shared bit made the two wings
+  hit each other and the struts at the top of the stroke.
+- Obstacles are mocap bodies: kinematic, placed at runtime, weightless to the bird.
 
-* How the hover was built (the foundation)
+* What was learned about free hover (July 2026, pre-2026-09 aero)
 
-This was the hard part; everything else is a layer on it.
+- Open loop the free body tumbles 90-180 deg within ~15 wingbeats at every timestep
+  tried (0.13-0.40 ms). A cycle-averaged linear policy over crank speed and
+  stroke-plane authority could not catch it.
+- Pitching the stroke plane (disk pitch 20 deg) pumps a constant forward thrust;
+  leveling it makes the stroke vertical.
+- With the wrench, attitude authority was the lever: a weakly held body leaned ~56 deg,
+  vectored its lift sideways and drifted a metre; holding it within ~4 deg held
+  position within centimetres.
+- Reverse-mode BPTT through the stiff flapping rollout exploded (gradients ~1e11) at
+  every horizon and starting point tried.
 
-** The problem: the mechanism is fundamentally unstable in free hover
+* The renders (~src/demos/~, headless MP4)
 
-The grounded design is a bench rig -- the pillars are welded to the world. To
-fly it, ~flying.to_airframe~ reparents every world-welded body into a single
-~airframe~ body on a ~<freejoint>~ (mobile struts keep their own freejoints;
-pillar mass is lightened to 10 g each). Total flying mass ~73 g.
+| script                                  | what it shows                                                    |
+|-----------------------------------------+------------------------------------------------------------------|
+| ~render_configs.py --config flying~     | the free airframe flapping, skinned                              |
+| ~render_configs.py --config multimodal~ | a precessing stroke plane, per-blade aero arrows                 |
+| ~render_configs.py --config collision~  | poles on the flight path: each wing strike knocks the drive down, sweeps the wings aft and spools back up |
+| ~render_configs.py --config ceiling~    | the same beat against a slab 65 mm above the stroke              |
+| ~render_flight_phases.py~               | hover -> cruise -> glide: stroke-plane pitch 0 -> 30 -> 90 deg, motor fade |
+| ~render_stroke_plane.py~                | stroke-plane tilt/pitch and drive-speed sweep, body-frame wingtip trail |
 
-Measured open-loop (no control), with gravity matched to the flap lift, the free
-body *tumbles to 90-180 deg within ~15 wingbeats at every timestep tried
-(0.13-0.40 ms)*. No timestep is passively stable -- Euler numerical damping only
-delays the tumble. A cycle-averaged linear policy over crank-speed / stroke-plane
-authority cannot catch it (confirmed in MJX too).
-
-The physical reason: real hovering insects and hummingbirds stabilize by
-modulating each wingbeat (within-wingbeat control). These wings are quasi-static,
-so the flapping just makes lift plus disturbances with no fast control handle.
-
-*Conclusion:* stop asking the flapping to stabilize the body. Let the flapping
-supply the /lift/, and add a separate controller that supplies the /flight-control
-authority the mechanism lacks/.
-
-** The approach: gravity-matched lift + a 6-DOF stabilizing wrench
-
-1. *Match gravity to the mean flap lift* so hover is even possible (real weight
-   >> lift). The mean lift is measured on the grounded bench; gravity is set so
-   ~weight = lift~ (~385 mN -> ~5.27 m/s^2 for the leveled config).
-   /Note (2026-09-24):/ those lift numbers are from the aero before the 2026-09
-   fixes. On today's aero the leveled bench makes ~219 mN (-> ~3.0 m/s^2), but
-   ~hover_meta.json~ still stores 5.27 m/s^2 and the policy was trained at it, so
-   the bird is overweight until ~opt/hover_policy.py~ is re-run. At its 0.13 ms
-   step the seed's passive pitch is also no longer periodic.
-2. *Level the stroke plane* (~level_stroke_plane~: set the crank-disk mount pitch
-   from the design's 20 deg to 0). The 20 deg pitch pumped a constant /forward
-   thrust/ that dragged the bird off-station; leveling makes the flap a pure
-   vertical stroke (and actually raises lift, 363 -> 385 mN; pre-2026-09 aero).
-3. *The controller applies a 6-DOF wrench to the airframe body*: a world-frame
-   force (3) + a body-frame torque (3), written into
-   ~data.qfrc_applied[dofadr:dofadr+6]~ of the airframe freejoint each step.
-   (A tested MuJoCo quirk: a freejoint's translational ~qfrc_applied~ is
-   body-frame, torque body-frame -- convenient, since the flap forces are also
-   body-frame.)
-
-This is non-physical (a virtual "flight controller"), which is fine here --
-transfer past the visualizer was explicitly not required.
-
-** The controller: a feature-normalized diagonal PD
-
-The state fed to the controller (~hover_features~) is, for the airframe freejoint:
-
-: [ pos_err(3), linvel(3), att_err(3), angvel(3) ]      # 12 features
-
-- ~pos_err~   = airframe position - hover set-point
-- ~att_err~   = small-angle rotation vector vs upright (2 * quat.xyz)
-- these are *EMA low-pass filtered* (removes the fast flap "bob" so the gains see
-  slow drift) and *feature-normalized* by ~FEATURE_SCALE = [20,20,20, 10,10,10,
-  5,5,5, 2,2,2]~ so a "typical" deviation is ~O(1) and the gains it needs are
-  ~O(1) instead of ~80x too small in raw metres.
-
-The control law (~policy_commands~, ~pd_init_theta~) is a diagonal PD:
-
-: force  = -kp_pos * pos_err - kd_pos * linvel     (tanh-bounded by f_max)
-: torque = -kp_att * att_err - kd_att * angvel     (tanh-bounded by tau_max)
-
-*The key insight -- attitude authority is the lever.* Attitude and position are
-coupled through the lift vector: with weak attitude gains the body settles at a
-~56 deg lean, which vectors its lift sideways (~0.32 N horizontal); that
-saturates the position force and it drifts a metre. Crank the attitude gains up
-and it stays within ~4 deg upright, the lift stays vertical, and position holds
-within centimetres. Fixing attitude fixes position.
-
-Winning gains (found by a gain sweep in the simulator):
-
-| gain     | value | axis                    |
-|----------+-------+-------------------------|
-| kp_pos   |   6.0 | position -> force        |
-| kd_pos   |   2.5 | velocity -> force        |
-| kp_att   |   0.4 | attitude -> torque       |
-| kd_att   |   0.1 | angular rate -> torque   |
-| f_max    |   0.4 | per-axis force bound [N] |
-| tau_max  |  0.25 | per-axis torque bound [Nm] |
-
-Result: *tilt <= 4.3 deg, horizontal drift <= 40 mm, altitude locked, and it
-recovers from velocity kicks* (vs open-loop tumbling to 180 deg and drifting
-~1 m).
-
-** Why it is a sim-tuned PD, not a gradient-trained policy (honest note)
-
-The full plan was to /train/ the controller with the differentiable simulator.
-~opt/hover_policy.py~ builds the entire differentiable MJX rollout (JAX
-blade-element aero + wing-pitch + the wrench) and does reverse-mode BPTT
-(~jax.checkpoint~ remat + ~opt.iterations=1~ to make it fit and be
-differentiable).
-
-It does not work: *the gradients explode (~1e11) through this stiff, unstable
-flapping rollout regardless of horizon or starting point* -- even starting from
-the working PD, gradient descent walked /away/ from it. So gradient training
-cannot produce or improve a stabilizer here.
-
-What works is the *structured PD above, whose handful of gains were tuned by a
-sweep in the (differentiable) simulator*. The differentiable sim was used heavily
-to build and evaluate everything; gradient descent specifically was the one tool
-that did not pan out. (The controller was developed on a vast.ai RTX 5070 Ti,
-since destroyed; the result is committed in ~designs/hummer/hover/hover_policy/~.)
-
-* The shared build pipeline (all five modes)
-
-Every mode builds the model the same way, then layers its own behavior:
-
-#+begin_src text
-compile_tg(tg)                     -> grounded bench scene.xml
-flying.to_airframe(xml)            -> reparent welded bodies into one free airframe
-flying.shrink_pillar_visual(xml)   -> trim the dangling pillar stilts (cosmetic)
-[mode-specific XML: collision / flying transforms]
-MjModel.from_xml + Euler + gravity + dt (from hover_meta.json)
-level_stroke_plane(model)          -> pure vertical stroke
-raise all free bodies + set-point by --hover-height (ground clearance)
-#+end_src
-
-Per step (~step_forces~ in ~view_hover.py~):
-1. mode schedule (crank factor / stroke-plane tilt / obstacle position),
-2. ~hover_features~ -> EMA -> ~policy_commands~ (the PD) -> wrench into
-   ~qfrc_applied~,
-3. aero via ~AeroBladeRuntime~ (CPU quasi-steady blade-element),
-   wing pitch via ~WingPitchLimiter~,
-4. constant crank drive ~a0 * crank_factor~ on the four motor actuators.
-
-*Ground clearance:* the assembly spawns sitting on the floor, so ~--hover-height~
-(default 0.25 m) lifts /all/ free bodies together (tendons don't stretch) and
-raises the controller set-point to match -- it then holds ~0.1-0.2 m of clearance
-instead of standing on the ground.
-
-*Live aero-force arrows* (~draw_aero_arrows~): each frame, per-blade thin arrows
-plus a bold net-force arrow per wing are pushed into ~viewer.user_scn~ via
-~mjv_initGeom~ / ~mjv_connector~ (blue = left wing, orange = right). Forces come
-from the aero runtime's cached per-strip forces/points, in world frame -- so the
-arrows point wherever the aero force actually points.
-
-* Simulation 1: hover (default)
-
-*What it shows.* The bird flaps and hovers in place, upright, holding altitude
-above the floor; nudge it (it recovers). This is the bare foundation with no
-extra schedule.
-
-*How it works / was built.* Exactly the shared pipeline above: constant crank
-drive (~crank_factor = 1~), leveled stroke plane, the PD wrench holding
-position + attitude. Measured: tilt ~4 deg, drift ~27 mm.
+Each has ~--self-check~ (asserts its schedule, no sim); ~render_configs --dry-run~
+runs the physics without rendering. The collision and ceiling reports assert real
+wing contacts, so they fail while the bird cannot fly to the obstacles.
 
 #+begin_src bash
-mjpython src/view_hover.py
-mjpython src/view_hover.py --openloop   # same rig, controller off -> it tumbles
+uv run python src/demos/render_configs.py --self-check
+uv run python src/demos/render_configs.py --config flying --dry-run --seconds 1
+uv run python src/demos/render_flight_phases.py
+uv run python src/demos/render_stroke_plane.py
 #+end_src
-
-* Simulation 2: vector (force vectoring)
-
-*What it shows.* /Force vectoring/ = steering the /direction/ of the aerodynamic
-force by changing how the wings move (not just its magnitude). Over an 8 s cycle
-(~--period~) the wing motion is scripted beat-by-beat: level flap -> tilt the
-stroke plane forward -> tilt aft -> slow to a *full stop* -> resume. Live
-aero-force arrows swing with the stroke-plane tilt and collapse to nothing when
-the wings stop.
-
-*How it works / was built.*
-- ~vector_schedule(t, period)~ returns ~(crank_factor, sp_tilt, sp_pitch)~ for the
-  current phase. ~crank_factor~ multiplies the flap drive ~a0~ (down to 0 =
-  wings stopped); ~sp_tilt/sp_pitch~ are applied through
-  ~DiskOrientation.set(...)~, which rewrites the crank-disk mount quaternions so
-  the whole flap arc -- and hence the mean force -- tilts.
-- The aero arrows (drawn into ~viewer.user_scn~) are computed from the CPU aero
-  runtime's cached per-strip forces, so they track the vectoring and vanish at
-  the stop.
-- The controller's force bound is raised (~f_max = 0.9~) so the body stays a
-  steady platform even when lift briefly drops to zero -- you watch the /force/
-  change, not the body flailing.
-
-Verified headless: min crank factor 0.00 (wings fully stop) and net aero lift
-~0 mN at the stop.
-
-#+begin_src bash
-mjpython src/view_hover.py --mode vector
-mjpython src/view_hover.py --mode vector --force-scale 2.5 --period 6
-#+end_src
-
-* Simulation 3: multimodal (up/down-stroke asymmetry)
-
-*What it shows.* Multi-modal flight: the up-stroke and down-stroke are not
-symmetric, so the aerodynamic force is stronger on the power stroke. The aero
-arrows pulse asymmetrically through the cycle.
-
-*How it works / was built.*
-- ~multimodal_sp(t, period)~ /precesses/ the stroke-plane normal -- it returns a
-  ~(tilt, pitch)~ that sweeps a slow circle (~sin~ and ~sin+pi/2~), applied each
-  step via ~DiskOrientation.set(...)~. The wing therefore spends part of the
-  cycle on a forward-tilted (asymmetric) plane and part on a symmetric one, so
-  the per-stroke aero load swells and shrinks.
-- The wing-pitch dead-zone (~WingPitchLimiter~) already feathers the wing
-  differently up vs down; the precession makes that asymmetry visible in the arrows.
-- Flap drive stays full; the PD wrench holds the hover (~f_max = 0.6~).
-
-#+begin_src bash
-mjpython src/view_hover.py --mode multimodal
-#+end_src
-
-* Simulation 4: flying (visual body over the mechanism)
-
-*What it shows.* The tensegrity joint, wings, and motors mounted on a /visual
-body frame/ -- a semi-transparent rufous-hummingbird skin -- with the whole robot
-flying/hovering. You see the mechanism through the translucent body.
-
-*How it works / was built.*
-- ~flying.add_visual_bird~ adds textured body/head/tail meshes (parented to the
-  ~airframe~ body, so they fly with it) at ~20% opacity, and swaps the two
-  placeholder wing geoms for the real left/right rufous wing meshes. The meshes
-  are not in this repo: they are referenced in place from the sibling
-  ~Tensegrity-Playground~ checkout when it exists, else from ~BIRD_ASSETS_DIR~
-  or ~--bird-assets~ (one of which is then required).
-- *Mass fix (important):* the mesh geoms otherwise inherit MuJoCo's default
-  density and the skin weighs ~2.3 kg -- 32x the 73 g bird -- so it dropped like
-  a rock. The skin is purely cosmetic, so ~visual_torso~ is given an explicit
-  tiny inertial (~mass = 1e-6~); MuJoCo then ignores the mesh-derived mass.
-  Skinned mass is back to 73.07 g (identical to bare), weight = lift, and it
-  hovers. (The wings already had explicit inertials, so swapping their meshes
-  changed nothing.)
-- Same PD hover controller underneath.
-
-#+begin_src bash
-mjpython src/view_hover.py --mode flying
-#+end_src
-
-* Simulation 5: collision (obstacle in, then out)
-
-*What it shows.* From a stable hover, a red pole is brought into a wing's arc,
-the wing hits it (the bird staggers), then the pole is removed and the controller
-recovers the hover. The collision mesh is on and MuJoCo's contact points/forces
-are drawn.
-
-*How it works / was built.*
-- ~flying.enable_wing_collision~ gives each wing a thin invisible collision
-  capsule along its span; the visible wing mesh stays collision-free (a mesh
-  collider would force MJX onto its slow convex path). Two build subtleties, both
-  of which broke the demo until fixed:
-  - *The capsule must be massless* (~density="0"~). A solid capsule at default
-    density is ~26 g /per wing/ -- it pushed the 73 g bird to 475 g and it sank
-    like a stone. (Same class of bug as the visual skin.)
-  - *Asymmetric collision masks* so the wing hits ONLY the obstacle: wing =
-    ~contype 2 / conaffinity 4~, obstacle = ~contype 4 / conaffinity 2~. A
-    symmetric bit made the two wing capsules collide with /each other/ at the top
-    of the stroke (and with the struts, bit 1) and blow up the sim on start.
-- ~flying.add_mocap_obstacle~ adds the pole as a *mocap body* -- kinematic,
-  infinite mass, its pose driven by ~data.mocap_pos~ each frame -- so it can be
-  teleported in and out while still colliding (a welded body could not be moved
-  at runtime), and its own mass never weighs on the bird.
-- ~collision_obstacle(t, period, park, hit)~ parks the pole far away, moves it
-  *into the wing's arc* (offset ~dy~0.04~, deep enough that the fast-moving wing
-  whacks it firmly -- ~14 simultaneous contacts) from 12% to 52% of the cycle
-  (enters early), then parks it again. Smaller ~--obstacle-dy~ / fatter
-  ~--obstacle-r~ = harder hit.
-- The contact viz flags (~mjVIS_CONTACTPOINT~, ~mjVIS_CONTACTFORCE~) are enabled
-  on the viewer; the PD wrench (boosted to ~f_max 0.6~ here) fights the
-  perturbation and re-settles.
-
-Verified headless: parked = 0 contacts and a clean hover; during the obstacle-in
-window the wing clips the pole (tilt bumps to ~7-10 deg) and recovers, altitude
-held.
-
-#+begin_src bash
-mjpython src/view_hover.py --mode collision
-mjpython src/view_hover.py --mode collision --obstacle-dy 0.11 --obstacle-r 0.04
-#+end_src
-
-* Running & tuning
-
-Common flags (all modes):
-
-| Flag              | Meaning                                                      |
-|-------------------+--------------------------------------------------------------|
-| ~--speed~         | Viewer realtime factor (0.15 = ~7x slow-mo; ->1.0 real-time)  |
-| ~--hover-height~  | Metres of ground clearance to hold (default 0.25)            |
-| ~--force-scale~   | Aero-arrow length per newton (vector/multimodal)            |
-| ~--period~        | Seconds per demo cycle (vector/multimodal/collision)        |
-| ~--arrows~        | ~auto~ / ~on~ / ~off~ for the aero-force arrows              |
-| ~--keep-pillars~  | Keep the full pillar visuals instead of trimming them       |
-| ~--obstacle-dx/-dy/-dz/-r~ | Reposition/resize the collision pole               |
-| ~--openloop~      | Turn the controller off (watch it tumble)                   |
-
-* Summary
-
-- *Hover* is the load-bearing piece: the flapper cannot self-stabilize, so the
-  flapping carries the (gravity-matched, stroke-plane-leveled) lift and a
-  feature-normalized diagonal-PD wrench -- tuned by a simulator gain sweep, with
-  attitude authority as the key lever -- holds it upright and on-station.
-- The other four modes are thin schedules layered on that hover: scripted wing
-  motion + force arrows (*vector*), a precessing stroke plane + force arrows
-  (*multimodal*), a massless cosmetic skin (*flying*), and a movable mocap
-  obstacle against a collidable wing (*collision*).

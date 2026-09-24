@@ -47,7 +47,7 @@ numbers. Never hand-edit a compiled `scene.xml`: edit the `.tg` and recompile.
 
 ```bash
 cp -r designs/hummer/hover designs/hummer/<name>          # start from the nearest design
-# edit shoulder.tg / control.tg (hover_policy/ and _recon_scene.xml need not come along)
+# edit shoulder.tg / control.tg (_recon_scene.xml need not come along)
 uv run python -c "import sys; sys.path.insert(0,'src'); from morphology.tg_parser import load_morphology as L; m=L('designs/hummer/<name>/shoulder.tg'); print(m.bird, m.name)"
 uv run python src/compile_tg.py --tg designs/hummer/<name>/shoulder.tg --out /tmp/<name>.xml
 uv run python src/run_fixed_frequency.py --tg designs/hummer/<name>/shoulder.tg --periods 5 --scene /tmp/<name>_ff.xml
@@ -62,7 +62,7 @@ certified peak and lift with the date, what defaults to it).
 ## Tool defaults
 
 Tool defaults live only in `src/design_paths.py`: `DEFAULT_HUMMER_TG` (`hummer/hover`:
-optimizer, viewers, GUI, renders, hover_policy, runners), `HOVER_BASE_TG` (EA, run_gui),
+optimizer, viewers, GUI, renders, runners), `HOVER_BASE_TG` (EA, run_gui),
 `LEGACY_BASELINE_TG` (compile_tg), `EAGLE_TG`. Repoint a default there, never with a
 literal path in a tool, and update the "default for" column of `designs/README.md`.
 

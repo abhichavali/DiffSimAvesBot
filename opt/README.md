@@ -9,7 +9,6 @@ simulation. The CLIs live here; the library is `src/codesign/`.
 | `evolve_codesign.py` | EA over the same genome, optional `.tg` geometry genes (`--geom-genes`) |
 | `run_gui.py` | Tk codesign launcher: GA -> Adam chain over the two CLIs above; each Adam run starts on its GA seed dir (`ga/seed_N/shoulder.tg` + `codesign_seed.json`) (not the design-inspector GUI, `plot_fixed_frequency_gui.py`) |
 | `design_io.py` | Replay or certify a design dir (optimizer output or committed `designs/`) on MuJoCo CPU (`codesign.artifacts.validate`) |
-| `hover_policy.py` | Free-flight hover model + BPTT trainer (controller: `src/runtime/hover_control.py`) |
 | `tg_scalars.py` | `.tg` scalar flatten/substitute for the GUI and geometry genes |
 | `diag_mjx_cpu_parity.py`, `harmonic1_lift_sweep.py` | MJX<->CPU step diff; first-harmonic lift sweep |
 

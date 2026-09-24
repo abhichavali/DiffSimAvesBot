@@ -21,15 +21,15 @@ compiler) -> MJCF -> `src/runtime` (CPU step; `mjx/` port) -> `src/codesign` + `
 | `src/design_paths.py` | tool-default designs | `DEFAULT_HUMMER_TG` (hummer/hover), `HOVER_BASE_TG`, `LEGACY_BASELINE_TG`, `EAGLE_TG` |
 | `src/morphology/` | `.tg` -> MJCF compiler | `compile.compile_file`; `tg_parser.load_morphology` -> `model.py` dataclasses; `geometry.py`/`tendon_net.py` (strut poses, 12 sigma tendons); `motor_tendons.py`; `emit_mjcf.py`/`emit_eagle.py`/`mjcf_parts.py`; `wing_geometry.py` (posed wing mesh -> aero strips, hinge offset) |
 | `src/compile_tg.py` | compile CLI | `compile_tg(tg, out)`, what every tool calls |
-| `src/runtime/` | CPU runtime (the reference) | `sim.py` (`PlateWingSim`, `rest_state`: the canonical step and force order); `aero.py` (blade-element aero, the one home of aero coefficients and `set_unsteady_aero`); `control_signal.py`, `crank.py`, `wing_pitch.py`, `disk_orientation.py`, `hover_control.py`, `eagle_*.py`, `wing_cables.py`, `realtime.py` |
+| `src/runtime/` | CPU runtime (the reference) | `sim.py` (`PlateWingSim`, `rest_state`: the canonical step and force order); `aero.py` (blade-element aero, the one home of aero coefficients and `set_unsteady_aero`); `control_signal.py`, `crank.py`, `wing_pitch.py`, `disk_orientation.py`, `eagle_*.py`, `wing_cables.py`, `realtime.py` |
 | `src/runtime/mjx/` | JAX/MJX port (jit/vmap, differentiable) | `aero.py`, `aero_runtime.py` (`aero_wrench`), `rollout.py` (`physics_step`, `build_drive_config`, `simulate`) |
 | `src/codesign/` | co-design library | `rig`, `genome`, `metrics` (`build_rollout`), `loss`, `train`, `cpu_check`, `artifacts` (design dirs: write + read back) |
-| `opt/` | co-design CLIs | `optimize_control.py`, `evolve_codesign.py`, `hover_policy.py`, `design_io.py` (CPU replay/certify), `run_gui.py`; see `opt/README.md` |
-| `src/*.py` | runners and viewers | `run_fixed_frequency.py`, `run_mjx_fixed_frequency.py`, `view_fixed_frequency.py`, `view_hover.py`, `view_eagle.py`; `flying.py` (bench scene -> free-flying airframe) |
+| `opt/` | co-design CLIs | `optimize_control.py`, `evolve_codesign.py`, `design_io.py` (CPU replay/certify), `run_gui.py`; see `opt/README.md` |
+| `src/*.py` | runners and viewers | `run_fixed_frequency.py`, `run_mjx_fixed_frequency.py`, `view_fixed_frequency.py`, `view_eagle.py`; `flying.py` (bench scene -> free-flying airframe) |
 | `src/demos/` | headless MP4 renders | `render_*.py` (`--self-check` asserts without rendering) |
 | `plot_fixed_frequency_gui.py`, `src/gui/` | Tk design inspector and its simulations | |
 | `tests/`, `tests/golden/` | pytest suite; golden behavior harness | `tests/golden/harness.py` docstring |
-| `docs/` | `ROBUST_CODESIGN_METHODOLOGY.md` (certification; section 12 is the doctrine, the rest a campaign log), `flight_demos.org` (free-flight hover demos) | |
+| `docs/` | `ROBUST_CODESIGN_METHODOLOGY.md` (certification; section 12 is the doctrine, the rest a campaign log), `flight_demos.org` (free-flight airframe and demos) | |
 | `assets/wing.stl` | the wing mesh the aero strips are measured from | |
 
 Names that mislead:
@@ -46,8 +46,8 @@ Names that mislead:
 
 Python is managed with `uv`: `uv sync`, `uv run python <script>`, `uv add <pkg>`. No lint
 suite is configured. Most CLIs take `--tg` (defaults live in `src/design_paths.py`) and `--help`;
-exceptions: `opt/design_io.py` takes a design dir, `src/view_hover.py` takes `--run`, and
-`plot_fixed_frequency_gui.py` parses no arguments (`--help` launches the GUI).
+exceptions: `opt/design_io.py` takes a design dir and `plot_fixed_frequency_gui.py`
+parses no arguments (`--help` launches the GUI).
 
 ```bash
 uv run python src/compile_tg.py --tg designs/hummer/hover/shoulder.tg --out scene.xml
@@ -66,12 +66,15 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
   `opt/design_io.py <dir> --integrator euler implicitfast rk4 --periods 24` and the same
   with `--timestep 0.03 --integrator euler implicitfast`; the worst peak printed is the
   number. Compare lift per passive-pitch mode (see Gotchas).
-- **Viewers** (`src/view_fixed_frequency.py`, `src/view_hover.py`, `src/view_eagle.py`)
-  need `mjpython` on macOS; see Gotchas for the command. Headless alternatives:
+- **Viewers** (`src/view_fixed_frequency.py`, `src/view_eagle.py`) need `mjpython` on
+  macOS; see Gotchas for the command. Headless alternatives:
   `view_eagle.py --gif out/eagle.gif`, `src/demos/render_*.py`.
-- **Renders**: `src/demos/render_*.py --self-check`. The `render_antiphase` and
-  `render_bilateral_control` self-checks and `render_configs --config collision|ceiling
-  --dry-run` already fail their asserts; compare before/after, do not expect PASS.
+- **Renders**: `src/demos/render_*.py --self-check`. The free-flight clips
+  (`render_configs`, `render_flight_phases`, `render_stroke_plane`) apply no assist
+  forces: the bird is uncontrolled and falls until the closed-loop hover policy drives
+  it. The `render_antiphase` and `render_bilateral_control` self-checks and
+  `render_configs --config collision|ceiling --dry-run` already fail their asserts;
+  compare before/after, do not expect PASS.
 - Tools default `--scene` to the repo-root `scene.xml`: pass `--scene <tmp path>` when
   running tools concurrently, or they overwrite each other's scene.
 
@@ -114,9 +117,12 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
   recomputed every `aero_substep` (default 4) steps and its generalized force held in
   between: CPU `PlateWingSim`, the codesign MJX rollout and `run_mjx_fixed_frequency`
   hold the same way. MJX's `build_aero_config(substep=)` only sizes the added-mass
-  finite-difference window; the hold is the caller's, and `rollout.simulate` and
-  `opt/hover_policy.py` recompute every step. Keep the CPU (`runtime/aero.py`) and MJX
-  (`runtime/mjx/aero.py`) implementations consistent: change both or neither.
+  finite-difference window; the hold is the caller's, and `rollout.simulate` recomputes
+  every step. Keep the CPU (`runtime/aero.py`) and MJX (`runtime/mjx/aero.py`)
+  implementations consistent: change both or neither.
+- **No fake forces**: aero and the wing-pitch limiter are the only terms in
+  `qfrc_applied`; free flight gets no assist wrench, weight cancel or scaled gravity. The
+  bird is flown only through its four crank motors.
 - Do not hand-edit a compiled `scene.xml`; edit the `.tg` and recompile.
 - Commits: one change per commit, imperative subject in the repo's style (`git log`).
 
@@ -164,7 +170,7 @@ for CPU/numpy, within `JAX_RTOL` for JAX/MJX. The harness docstring is the contr
   drops the CUDA jax. `pkill -f '[o]ptimize_control'`, not `pkill -f optimize_control`
   (that kills your own ssh session).
 - **Reverse-mode autodiff**: `jax.jacfwd` works as-is; `jax.grad` cannot trace MJX's
-  solver `while_loop` unless `model.opt.iterations == 1` (`opt/hover_policy.py` does).
+  solver `while_loop` unless `model.opt.iterations == 1`.
   Geometry (radius / attach / offsets) is compiled host-side and is not differentiable.
 - **Passive pitch is bistable** on the seed `designs/hummer/hover`: it settles into a
   ~190 mN or a ~210 mN lift mode depending on dt and integrator. Compare per-cycle lift
@@ -185,9 +191,6 @@ Keep this list and `opt/README.md` "Known issues" in sync.
   period, not the crank-locked one (1.5% mean-power gap at a0_log = 0.05); `--wavelet`
   writes a `control.tg` no runtime tool loads; the validity-penalized Adam stage was
   removed (`C_valid` is logged, not in the loss).
-- `designs/hummer/hover/hover_policy/hover_meta.json` gravity (5.27 m/s^2) and its policy
-  predate the 2026-09 aero fixes; the leveled bench now lifts ~219 mN (~3.0 m/s^2), so
-  `view_hover` flies an overweight bird until `opt/hover_policy.py` is re-run.
 - GUI plot cache (`src/gui/sims.py` `cached_sim`): the `src/` mtime is read per call but
   the code is imported once, so editing physics with the GUI open and pressing Cmd-U
   stores old-code results under the new key. Restart the GUI after physics edits, or
@@ -199,5 +202,3 @@ Keep this list and `opt/README.md` "Known issues" in sync.
   with that limit active (5 tendon-limit rows at qpos0).
 - GUI: `run_gui`'s `RunConfig.loss` is never read; the design inspector leaks one
   `mkdtemp` scene dir per tab.
-- `opt/hover_policy.py` writes no `pd_gains` into `hover_meta.json` (descriptive; nothing
-  reads it).

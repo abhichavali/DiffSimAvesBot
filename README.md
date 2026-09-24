@@ -19,8 +19,8 @@ uv run python plot_fixed_frequency_gui.py        # design inspector (Tk)
 uv run pytest -q                                  # tests + golden quick tier
 ```
 
-The viewers (`src/view_fixed_frequency.py`, `src/view_hover.py`, `src/view_eagle.py`)
-need `mjpython` on macOS; see `AGENTS.md` for the exact command. Pass `--tg` to the
+The viewers (`src/view_fixed_frequency.py`, `src/view_eagle.py`) need `mjpython` on
+macOS; see `AGENTS.md` for the exact command. Pass `--tg` to the
 compiler: it defaults to `designs/hummer/legacy-baseline`, the June demo baseline, which
 is not a hover design.
 
@@ -38,4 +38,4 @@ wing); tools refuse a design of the wrong bird and a control of another bird.
 - `designs/README.md` — every committed design, its lineage and numbers.
 - `opt/README.md` — co-design: genome, reward, robustness gates, outputs, known issues.
 - `docs/ROBUST_CODESIGN_METHODOLOGY.md` — how designs are certified (CPU peak torque);
-  `docs/flight_demos.org` — the free-flight hover demos.
+  `docs/flight_demos.org` — the free-flight airframe and demos.
