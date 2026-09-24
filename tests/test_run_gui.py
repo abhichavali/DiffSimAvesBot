@@ -121,12 +121,18 @@ def test_build_commands():
     assert set(stages) == {"GA", "diff-sim seed_1"}
     ga, ds = stages["GA"], stages["diff-sim seed_1"]
     assert ga[ga.index("--genes") + 1] == "control,tendon_stiffness"
-    assert ga[ga.index("--timesteps") + 1:] == ["0.06", "0.03"]
+    assert ga[ga.index("--timesteps") + 1:ga.index("--harmonics")] == ["0.06", "0.03"]
+    # the GA and Adam agree on the genome layout
+    assert ga[ga.index("--harmonics") + 1] == ds[ds.index("--harmonics") + 1] == "5"
     # chained run warm-starts Adam from the GA winner
     assert "--init-codesign" in ds
     assert "--tune-tendons" in ds and "--freeze-control" not in ds
     # both halves selected -> no restriction flag
     assert "--tendon-params" not in ds
+    # motor genes are tuned by Adam only when the GA searched them
+    assert "--tune-motor-tendons" not in ds
+    ds = dict(build_commands(cfg(genes=["control", "motor"], harmonics=3)))["diff-sim seed_1"]
+    assert "--tune-motor-tendons" in ds and ds[ds.index("--harmonics") + 1] == "3"
 
 
 def test_top_n_fans_out(tmp_path):
@@ -143,6 +149,7 @@ def test_top_n_fans_out(tmp_path):
     # every-generation checkpoint (what an interrupted run leaves behind)
     s1 = stages["diff-sim seed_1"]
     assert s1[s1.index("--init-codesign") + 1].endswith("ga/best_genome.json")
+    assert s1[s1.index("--tg") + 1] == str(TG)  # that genome is relative to the base design
 
     # once the GA has materialized its seeds, every rank resolves to its own
     for rank in (1, 2, 3):
@@ -154,6 +161,8 @@ def test_top_n_fans_out(tmp_path):
         argv = stages[f"diff-sim seed_{rank}"]
         seed = argv[argv.index("--init-codesign") + 1]
         assert seed.endswith(f"ga/seed_{rank}/codesign_seed.json"), seed
+        # ...and Adam runs on that seed's own design (evolved geometry, a0 and clock)
+        assert argv[argv.index("--tg") + 1] == str(out / "ga" / f"seed_{rank}" / "shoulder.tg")
 
     # GA off: top-N is meaningless, exactly one cold-start run
     solo = build_commands(cfg(run_ga=False, top_n=4))

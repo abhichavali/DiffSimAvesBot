@@ -164,6 +164,7 @@ def build_commands(cfg: RunConfig) -> list[tuple[str, list[str]]]:
             # exactly how many of them the diff-sim stage will consume
             "--n-seeds", str(cfg.top_n),
             "--timesteps", *[str(t) for t in cfg.timesteps],
+            "--harmonics", str(cfg.harmonics),  # the genome layout Adam will decode
         ]))
 
     if cfg.run_adam:
@@ -172,9 +173,13 @@ def build_commands(cfg: RunConfig) -> list[tuple[str, list[str]]]:
         # Cold start = one run; chained = one run per GA seed, ranked best-first.
         for rank in range(1, cfg.top_n + 1) if cfg.run_ga else (None,):
             sub = f"seed_{rank}" if rank else "cold"
+            seed = ga_seed_path(cfg.out, rank) if rank else None
+            # A materialized seed dir is the evolved design (geometry, a0, clock, harmonics),
+            # and its codesign_seed.json is relative to it; best_genome.json to the base.
+            tg = seed.parent / "shoulder.tg" if seed and seed.name == "codesign_seed.json" else cfg.tg
             argv = py + [
                 str(ROOT / "opt" / "optimize_control.py"),
-                "--tg", str(cfg.tg), "--scene", str(cfg.scene),
+                "--tg", str(tg), "--scene", str(cfg.scene),
                 "--out", str(cfg.out / "adam" / sub),
                 "--harmonics", str(cfg.harmonics),
                 "--iters-per-stage", str(cfg.iters_per_stage), "--lr", str(cfg.lr),
@@ -187,10 +192,12 @@ def build_commands(cfg: RunConfig) -> list[tuple[str, list[str]]]:
                     argv += ["--tendon-params", "stiffness"]
                 elif not cfg.tune_stiffness:
                     argv += ["--tendon-params", "pretension"]
+            if "motor" in cfg.genes:
+                argv += ["--tune-motor-tendons"]
             if not cfg.tune_fourier:
                 argv += ["--freeze-control"]
-            if rank:  # warm-start from that GA seed's genome
-                argv += ["--init-codesign", str(ga_seed_path(cfg.out, rank))]
+            if seed:  # warm-start from that GA seed's genome
+                argv += ["--init-codesign", str(seed)]
             stages.append((f"diff-sim {sub}", argv))
 
     return stages

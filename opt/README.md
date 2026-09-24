@@ -7,7 +7,7 @@ simulation. The CLIs live here; the library is `src/codesign/`.
 |---|---|
 | `optimize_control.py` | Gradient co-design CLI (argparse -> `codesign.train.run`) |
 | `evolve_codesign.py` | EA over the same genome, optional `.tg` geometry genes (`--geom-genes`) |
-| `run_gui.py` | Tk codesign launcher: GA -> Adam chain over the two CLIs above (not the design-inspector GUI, `plot_fixed_frequency_gui.py`) |
+| `run_gui.py` | Tk codesign launcher: GA -> Adam chain over the two CLIs above; each Adam run starts on its GA seed dir (`ga/seed_N/shoulder.tg` + `codesign_seed.json`) (not the design-inspector GUI, `plot_fixed_frequency_gui.py`) |
 | `design_io.py` | Replay or certify a design dir (optimizer output or committed `designs/`) on MuJoCo CPU (`codesign.artifacts.validate`) |
 | `hover_policy.py` | Free-flight hover model + BPTT trainer (controller: `src/runtime/hover_control.py`) |
 | `tg_scalars.py` | `.tg` scalar flatten/substitute for the GUI and geometry genes |
@@ -164,7 +164,6 @@ put the hinge on the leading edge of a wing starting at the hinge, not on the dr
   (step counts are static, a0_log is not), so once a0 moves its window is not whole flap
   cycles while the CPU gate's is: at a0_log = 0.05, mean power reads 1.5% apart. (`C_lc`
   alone is resampled onto the crank's own cycles.)
-- `evolve_codesign.py` hard-codes K=5 harmonics.
 - `--wavelet` writes a `control.tg` (`basis = wavelet`, `w_j = ...`) that no runtime tool
   loads (`load_control` rejects it), and `design_io` KeyErrors on its `theta_best.json`.
 - The validity-penalized Adam stage (`--w-valid`, `--alpha-stall-deg`, `--k-max`, ...)

@@ -146,7 +146,12 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
 
     With geometry genes the emitted shoulder.tg carries the EVOLVED dimensions,
     not the source ones -- otherwise the winner's shape would be lost and the
-    design dir would silently describe a different rig than the one scored."""
+    design dir would silently describe a different rig than the one scored.
+
+    codesign_seed.json is the genome as an --init-codesign seed for THIS dir's
+    shoulder.tg: its a0_log is 0, because control.tg already carries the evolved a0
+    and its clock (seeding it against the source .tg would drop them).
+    dt_transfer.json keeps the raw genome."""
     out_dir.mkdir(parents=True, exist_ok=True)
     rig, genome = info["rig"], info["genome"]
     K = genome.K
@@ -160,7 +165,7 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
         (out_dir / "motor_tendon_optimized.json").write_text(json.dumps(
             motor_json(rig.tendons, rig.motor_ids, genes.motor), indent=2))
     control = fourier_control_tg(load_morphology(Path(tg_src)).bird, K, omega / math.tau,
-                                 a0, a_out, b_out)
+                                 a0, a_out, b_out, rig.morph.motors.motor_direction)
     (out_dir / "control.tg").write_text(control)
     (out_dir / "control_optimized.tg").write_text(control)
     src_text = Path(tg_src).read_text()
@@ -178,8 +183,10 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
     (out_dir / "theta_best.json").write_text(json.dumps(
         {"a0": float(a0), "a": [float(x) for x in a_out], "b": [float(x) for x in b_out],
          "omega": float(omega), "frequency_hz": float(omega / math.tau)}, indent=2))
+    seed = [float(x) for x in g]
+    seed[0] = 0.0  # a0_log: control.tg above is already absolute
     (out_dir / "codesign_seed.json").write_text(json.dumps(
-        {"genome": [float(x) for x in g], "layout": genome._asdict(), "n_geom": len(geom_names)}, indent=2))
+        {"genome": seed, "layout": genome._asdict(), "n_geom": len(geom_names)}, indent=2))
 
 
 def main():
@@ -207,6 +214,9 @@ def main():
                         "into <out>/progressive/ so Adam can start on them mid-run (0=off)")
     p.add_argument("--dump-k", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--harmonics", type=int, default=5,
+                   help="Fourier harmonics K of the control genes (2K+1 of them); an Adam "
+                        "run seeded from this EA must use the same --harmonics")
     p.add_argument("--genes", default="control,tendon_stiffness,tendon_pretension,motor",
                    help="comma list of genome BLOCKS the EA may mutate; frozen blocks stay at "
                         "the baseline (or --init-genome) value for the whole run. Blocks: "
@@ -246,7 +256,7 @@ def main():
         log(f"[setup] building metrics dt={dt:g}ms")
         scene_dt = args.scene.with_name(f"scene_dt{int(dt*1000)}.xml")
         vm, mj, D, info = build_metrics(args.tg, scene_dt, args.aero_substep, dt,
-                                        n_geom=n_geom)
+                                        K=args.harmonics, n_geom=n_geom)
         evs.append(vm)
         log(f"[setup] built metrics dt={dt:g}ms in {time.time() - t0:.1f}s")
     genome = info["genome"]
@@ -455,7 +465,8 @@ def main():
     # dt-transfer acid test: peak torque of each winner across a WIDE dt sweep.
     sweep_dts = [0.13, 0.06, 0.03, 0.015]
     sweep = [(d, build_metrics(args.tg, args.scene.with_name(f"scene_sw{int(d*1000)}.xml"),
-                               args.aero_substep, d, n_geom=n_geom)[1]) for d in sweep_dts]
+                               args.aero_substep, d, K=args.harmonics, n_geom=n_geom)[1])
+             for d in sweep_dts]
     summary = []
     for si, idx in enumerate(chosen, 1):
         g = arch_g[idx]
