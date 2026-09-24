@@ -48,7 +48,6 @@ import mujoco  # noqa: E402
 
 import flying  # noqa: E402
 from common import (  # noqa: E402
-    TIP_SITES,
     airframe_xml,
     attitude_pd,
     draw_aero_arrows,
@@ -58,6 +57,7 @@ from common import (  # noqa: E402
     save_still,
     scene_option,
     smoothstep,
+    tip_site_ids,
 )
 from design_paths import DEFAULT_HUMMER_TG  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
@@ -781,13 +781,9 @@ def render_config(config, args):
     trail_every = 1
     step_n = [0]
     if obstacle:
-        tip_ids = {s: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, n)
-                   for s, n in TIP_SITES.items()}
-        missing = [s for s, i in tip_ids.items() if i < 0]
-        if missing:
-            raise ValueError(f"missing wingtip sites: {missing}")
+        tip_ids = tip_site_ids(sim.aero)
         trail_every = max(1, round(control.period / (float(model.opt.timestep) * args.trail_pts)))
-        trail = {s: deque(maxlen=int(args.trail_pts * args.trail_cycles)) for s in TIP_SITES}
+        trail = {s: deque(maxlen=int(args.trail_pts * args.trail_cycles)) for s in tip_ids}
         plan = CeilingPlan(args) if config == "ceiling" else CollisionPlan(args)
         tip_gids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{s}_wing_collision")
                     for s in "LR"]

@@ -35,7 +35,6 @@ import mujoco
 import numpy as np
 
 from common import (
-    TIP_SITES,
     WING_COLORS,
     captioner,
     crank_gears,
@@ -46,6 +45,7 @@ from common import (
     relative_phase,
     scene_option,
     smoothstep,
+    tip_site_ids,
 )
 from compile_tg import compile_tg
 from design_paths import DEFAULT_HUMMER_TG
@@ -241,7 +241,7 @@ def play(args):
     for _ in range(math.ceil(args.warmup_periods * control.period / dt)):
         step()
 
-    tip_ids = {s: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, n) for s, n in TIP_SITES.items()}
+    tip_ids = tip_site_ids(aero)
     trail = {s: deque(maxlen=int(args.trail_pts * args.trail_cycles)) for s in tip_ids}
     trail_every = max(1, round(control.period / dt / args.trail_pts))
     centre = data.xpos[1:].mean(axis=0).copy()

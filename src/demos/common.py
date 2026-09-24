@@ -30,11 +30,14 @@ WING_COLORS = {
     "R": np.array([1.0, 0.45, 0.10, 0.95], np.float32),
 }
 
-# Outermost aero blade site on each wing — the closest thing the model has to a
-# wingtip, and what the trail is traced from.
-TIP_SITES = {"L": "L_wing_aero_blade_04", "R": "R_wing_aero_blade_04"}
 
 MAC_FONT = Path("/System/Library/Fonts/Helvetica.ttc")
+
+
+def tip_site_ids(aero) -> dict[str, int]:
+    """Side -> the outermost aero blade site of an AeroBladeRuntime's wing: the closest
+    thing the model has to a wingtip, and what the trail is traced from."""
+    return {wing.side: wing.blade_site_ids[-1] for wing in aero.wings}
 
 
 def smoothstep(x: float) -> float:

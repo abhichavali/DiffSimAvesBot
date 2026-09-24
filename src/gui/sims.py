@@ -47,7 +47,6 @@ PLOT_YLABELS = {
 PLOT_CHOICES = tuple(PLOT_YLABELS)
 MEAN_LIFT_PLOTS = ("Mean lift per cycle", "Mean lift per half-cycle")
 SETTLE_PERIODS = 3
-WINGTIP_SITE = "L_wing_aero_blade_04"
 PLOT_CACHE_DIR = ROOT / ".gui_plot_cache"
 
 
@@ -147,7 +146,7 @@ def phase_trace(
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{station}_disk_hinge")
         qvel_ids[name] = int(model.jnt_dofadr[jid])
     structural_ids, structural_names = structural_tendons(model)
-    tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
+    tip_id = sim.aero.wings[0].blade_site_ids[-1]  # the L wing's outermost aero blade: its wingtip
 
     trace = {
         "elapsed": [], "phase": [], "U_tens": [], "tilt": [], "pitch": [], "x": [], "y": [], "z": [],
@@ -385,9 +384,7 @@ def wing_path_data(
     """Record the wingtip site's 3D world trajectory (mm) over `periods` cycles."""
     sim, control, step, _sp = settled_drive(tg_path, scene_path, control_path, settle_periods)
     model, data = sim.model, sim.data
-    tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
-    if tip_id < 0:
-        raise ValueError(f"Missing wingtip site: {WINGTIP_SITE}")
+    tip_id = sim.aero.wings[0].blade_site_ids[-1]  # the L wing's outermost aero blade: its wingtip
 
     path: dict[str, list[float]] = {"phase": [], "x": [], "y": [], "z": []}
     start_time = data.time

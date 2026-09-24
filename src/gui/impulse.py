@@ -70,13 +70,12 @@ class ImpulseSim:
     #:   sweep      - span direction in the horizontal plane: 0 straight out, + forward
     #:   elevation  - span direction above the horizontal, + up
     #:   roll       - plate rotation about the span (wing_plane_roll): 0 level, + nose-up
-    #:   aoa        - angle between the plate and its own relative wind at 62% span (unsigned)
-    #: The wingtip's fore-aft and height positions ride along (not plotted) so the
+    #:   aoa        - angle between the plate and its own relative wind on the aero strip
+    #:                holding 70% span (62.5% on a 4-blade wing; unsigned)
+    #: The tip strip's fore-aft and height positions ride along (not plotted) so the
     #: stroke-plane angle can be read off the two stroke reversals, Ellington-style.
     KINEMATICS = ("sweep", "elevation", "roll", "aoa")
     FORWARD = np.array([-1.0, 0.0, 0.0])  # .tg convention: +x is the trailing edge, so -x is cranial
-    AOA_BLADE = "aero_blade_03"  # (2 + 0.5) / 4 = 62.5% span, the nearest strip to the usual 70%
-    TIP_SITE = "aero_blade_04"
 
     def __init__(self, tg_path: Path, scene_path: Path, control_path: Path | None,
                  settle_periods: float, speed: float | None = None) -> None:
@@ -120,12 +119,11 @@ class ImpulseSim:
 
         self.sides: dict[str, tuple[int, int, int]] = {}  # side -> (wing body, AoA blade site, tip site)
         self.outboard: dict[str, np.ndarray] = {}  # world direction the span points at rest
-        for side in ("L", "R"):
+        for wing in self.sim.aero.wings:
+            side, blades = wing.side, wing.blade_site_ids
             bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{side}_wing")
-            sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, f"{side}_wing_{self.AOA_BLADE}")
-            tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, f"{side}_wing_{self.TIP_SITE}")
-            if bid >= 0 and sid >= 0 and tid >= 0:
-                self.sides[side] = (bid, sid, tid)
+            if bid >= 0:
+                self.sides[side] = (bid, blades[int(0.7 * len(blades))], blades[-1])
                 span = np.asarray(data.xmat[bid]).reshape(3, 3)[:, 2]
                 self.outboard[side] = np.array([0.0, math.copysign(1.0, span[1]), 0.0])
         self._jacp = np.zeros((3, model.nv))

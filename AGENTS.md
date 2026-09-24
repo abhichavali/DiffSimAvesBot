@@ -133,6 +133,5 @@ CPU path is unchanged and is the reference the port is validated against.
 - Morphology: `_park_length` ignores pitch; degree-conversion heuristics; unknown `.tg`
   keys are silently accepted; the R fixed strut keeps the L site quats; the
   `attach_along_edge` default is 1.2 in one place and 0.0 in another.
-- Wingtip site `*_aero_blade_04` is hard-coded (GUI, demos), wrong when `blades != 4`.
 - GUI: `run_gui`'s `RunConfig.loss` is never read; a leaked `mkdtemp`.
 - `opt/hover_policy.py` writes an absolute `tg` and no `pd_gains` into `hover_meta.json`.

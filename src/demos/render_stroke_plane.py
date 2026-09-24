@@ -41,7 +41,6 @@ import mujoco  # noqa: E402
 
 import flying  # noqa: E402
 from common import (  # noqa: E402
-    TIP_SITES,
     airframe_xml,
     attitude_pd,
     captioner,
@@ -51,6 +50,7 @@ from common import (  # noqa: E402
     save_still,
     scene_option,
     smoothstep,
+    tip_site_ids,
 )
 from design_paths import DEFAULT_HUMMER_TG  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
@@ -155,11 +155,7 @@ def render(args):
     airframe_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, flying.AIRFRAME_BODY)
     air_dofadr = int(model.jnt_dofadr[
         mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, flying.AIRFRAME_FREEJOINT)])
-    tip_ids = {s: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, n)
-               for s, n in TIP_SITES.items()}
-    missing = [s for s, i in tip_ids.items() if i < 0]
-    if missing:
-        raise ValueError(f"missing wingtip sites: {missing}")
+    tip_ids = tip_site_ids(sim.aero)
 
     m_total = float(model.body_subtreemass[airframe_bid])
     g = float(-model.opt.gravity[2])
@@ -173,7 +169,7 @@ def render(args):
     # trail is a hexagon rather than a stroke path.
     trail_every = max(1, round(control.period / (dt * args.trail_pts)))
     keep = int(args.trail_pts * args.trail_cycles)
-    trail = {s: deque(maxlen=keep) for s in TIP_SITES}
+    trail = {s: deque(maxlen=keep) for s in tip_ids}
     step_n = [0]
 
     def assist(_m, _d):
