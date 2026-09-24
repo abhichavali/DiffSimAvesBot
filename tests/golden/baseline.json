@@ -58696,6 +58696,17 @@
      -0.0019999989308416843,
      0.001999999163672328
     ],
+    "layout": {
+     "K": 1,
+     "n_tend": 24,
+     "control": true,
+     "frequency": false,
+     "tendons": true,
+     "pitch": false,
+     "motor": false,
+     "strokeplane": false,
+     "wavelet": false
+    },
     "lock_wings": false
    },
    "theta_best.json": {

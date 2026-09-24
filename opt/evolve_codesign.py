@@ -178,7 +178,8 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
     (out_dir / "theta_best.json").write_text(json.dumps(
         {"a0": float(a0), "a": [float(x) for x in a_out], "b": [float(x) for x in b_out],
          "omega": float(omega), "frequency_hz": float(omega / math.tau)}, indent=2))
-    (out_dir / "codesign_seed.json").write_text(json.dumps({"genome": [float(x) for x in g]}, indent=2))
+    (out_dir / "codesign_seed.json").write_text(json.dumps(
+        {"genome": [float(x) for x in g], "layout": genome._asdict(), "n_geom": len(geom_names)}, indent=2))
 
 
 def main():
@@ -406,7 +407,8 @@ def main():
               f"alpha={math.degrees(M0.alpha_pk):.0f}deg k={M0.k_eff:.2f} | archive={len(arch_g)}", flush=True)
         args.out.mkdir(parents=True, exist_ok=True)
         (args.out / "best_genome.json").write_text(json.dumps(
-            {"gen": gen, "fitness": float(fits[order[0]]), "genome": [float(x) for x in pop[order[0]]]}))
+            {"gen": gen, "fitness": float(fits[order[0]]), "genome": [float(x) for x in pop[order[0]]],
+             "layout": genome._asdict(), "n_geom": n_geom}))
         if args.dump_every and gen % args.dump_every == args.dump_every - 1 and arch_g:
             ag = np.array(arch_g); af = np.array(arch_f)
             keep = []

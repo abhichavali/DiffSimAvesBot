@@ -110,15 +110,19 @@ def initial_theta(genome: Genome, control_seed, codesign: Path | None = None,
                   lock_wings: bool = False):
     """The starting theta: the control seed with every other factor at 1x (log 0).
 
-    ``codesign`` (an evolve_codesign genome or a theta_full.json) seeds control, the
-    structural and motor tendons and the stroke plane instead. It is read BY POSITION as
-    [control 2K+1][tendons 2n][motor 2] with the stroke plane as the last 10 values.
+    ``codesign`` (an evolve_codesign genome or a theta_full.json) seeds the groups it
+    holds instead. A file with a "layout" (the Genome that wrote it) is split by group
+    name: a group the seed lacks keeps its default, and a different K or tendon count
+    raises. An older file without one is read BY POSITION as [control 2K+1][tendons
+    2n][motor 2] with the stroke plane as the last 10 values.
     """
     K, n = genome.K, genome.n_tend
     seed = None
     if codesign is not None:
         d = json.loads(Path(codesign).read_text())
         seed = jnp.asarray(d.get("genome", d.get("theta")), dtype=jnp.float32)
+        if "layout" in d:
+            return _theta_from_layout(genome, control_seed, seed, Genome(**d["layout"]))
         want = 2 * K + 1 + 2 * n + 2
         assert seed.shape[0] >= want, f"init-codesign len {seed.shape[0]} < {want}"
         # Sliced BY POSITION, so a genome from the other wing mode silently decodes as
@@ -152,6 +156,26 @@ def initial_theta(genome: Genome, control_seed, codesign: Path | None = None,
             parts.append(seed[-10:])
         else:
             parts.append(jnp.zeros(10, dtype=jnp.float32))  # the compiled mount plane
+    return jnp.concatenate(parts)
+
+
+def _theta_from_layout(genome: Genome, control_seed, seed, src: Genome):
+    """initial_theta for a seed written by ``src``: each group of ``genome`` taken by name."""
+    if (src.K, src.n_tend) != (genome.K, genome.n_tend):
+        raise ValueError(f"--init-codesign seed has K={src.K}, n_tend={src.n_tend}; this run "
+                         f"has K={genome.K}, n_tend={genome.n_tend} (--harmonics, --lock-wings)")
+    have = src.split(seed[:src.size], None)  # an EA genome may carry geometry genes after
+    parts = []
+    for name, sl in genome.slices().items():
+        v = getattr(have, name)
+        if name == "control":
+            # Keep the warm-start a0; across a Fourier/wavelet switch zero the basis coeffs.
+            v = control_seed if v is None else (v.at[1:].set(0.0) if src.wavelet != genome.wavelet else v)
+        elif name == "f_log":
+            v = jnp.full(1, v, dtype=jnp.float32)  # a scalar, 0.0 when the seed has none
+        elif v is None:
+            v = jnp.zeros(sl.stop - sl.start, dtype=jnp.float32)
+        parts.append(v)
     return jnp.concatenate(parts)
 
 

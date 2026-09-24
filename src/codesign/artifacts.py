@@ -5,8 +5,8 @@ A design dir (a run's --out, and each checkpoints/itNNN, stage_*, cpu_best, robu
 
   shoulder.tg                  the source .tg with `control =` repointed at control.tg
   control.tg                   the optimized control (control_optimized.tg: same text)
-  theta_full.json              {"theta": the raw packed theta, "lock_wings"} -- an
-                               --init-codesign seed
+  theta_full.json              {"theta": the raw packed theta, "layout": its Genome,
+                               "lock_wings"} -- an --init-codesign seed
   theta_best.json              a0 and a/b ABSOLUTE (x a0), omega, frequency_hz, ...
   tendon_optimized.json        per structural tendon: absolute stiffness + factors, keyed
                                by FULL tendon name (a --lock-wings dir written before
@@ -92,6 +92,7 @@ def write_design(out_dir: Path, design: dict, log, *, genome: Genome, control_se
     theta = np.asarray(design["theta"])
     write_json(out_dir / "log.json", log)
     (out_dir / "theta_full.json").write_text(json.dumps({"theta": [float(x) for x in theta],
+                                                         "layout": genome._asdict(),
                                                          "lock_wings": rig.lock_wings}))
     (out_dir / "shoulder.tg").write_text(repoint_control(tg.read_text()))
     g = genome.split(theta, np.asarray(control_seed))

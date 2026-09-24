@@ -50,3 +50,28 @@ def test_cpu_decode_rides_the_crank_locked_clock():
     design = to_cpu(genome, np.array([0.1, 0.0, 0.0, 0.2]), None, rig, 65.0)
     assert design.ctrl[0] == pytest.approx(65.0 * math.exp(0.1))
     assert design.ctrl[3] == pytest.approx(65.0 * math.exp(0.3))
+
+
+def test_init_codesign_matches_groups_by_layout(tmp_path):
+    """A seed that records its layout decodes group by group, whatever groups it holds."""
+    import json
+
+    ctrl = jnp.zeros(5, dtype=jnp.float32)
+
+    def seed(src, extra=0):
+        p = tmp_path / "seed.json"
+        theta = np.arange(1, src.size + extra + 1, dtype=np.float32)  # every gene distinct
+        p.write_text(json.dumps({"theta": theta.tolist(), "layout": src._asdict()}))
+        return p, src.split(theta, None)
+
+    p, want = seed(FULL)  # every group, incl. f_log and pitch that the old decoder dropped
+    got = FULL.split(np.asarray(initial_theta(FULL, ctrl, p)), None)
+    for a, b in zip(want, got):
+        assert np.array_equal(np.asarray(a), np.asarray(b))
+    ea = Genome(K=2, n_tend=3, tendons=True, motor=True)  # an EA genome + 4 geometry genes
+    p, want = seed(ea, extra=4)
+    got = FULL.split(np.asarray(initial_theta(FULL, ctrl, p)), None)
+    assert np.array_equal(got.motor, want.motor) and np.array_equal(got.stiff, want.stiff)
+    assert got.f_log == 0.0 and not np.asarray(got.pitch).any() and not np.asarray(got.sp).any()
+    with pytest.raises(ValueError, match="K=2"):
+        initial_theta(Genome(K=3, n_tend=3, tendons=True, motor=True), jnp.zeros(7), p)

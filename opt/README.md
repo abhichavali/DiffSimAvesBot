@@ -56,8 +56,10 @@ The command is `u(t) = a0 * (1 + sum a_n cos(n w t) + b_n sin(n w t))` on the cr
 clock `w = omega*exp(f_log + a0_log)`, which `theta_best.json` and `control.tg` record: inside theta
 a_n/b_n are modulation DEPTHS; `theta_best.json` stores them ABSOLUTE (x a0). With
 `--wavelet` the 2K coefficients are dyadic Ricker atom amplitudes instead.
-`--init-codesign` reads a genome BY POSITION as `[control][tendons 2n][motor 2]...[sp 10
-last]` (an `evolve_codesign` genome or a `theta_full.json`).
+`--init-codesign` seeds from an `evolve_codesign` genome or a `theta_full.json`: each
+records its `layout` (the Genome), so the groups are matched by name (a group the seed
+lacks starts at its default; a different K or tendon count is an error). Older files
+without a layout are read BY POSITION as `[control][tendons 2n][motor 2]...[sp 10 last]`.
 
 ## The reward
 
@@ -162,8 +164,6 @@ put the hinge on the leading edge of a wing starting at the hinge, not on the dr
   (step counts are static, a0_log is not), so once a0 moves its window is not whole flap
   cycles while the CPU gate's is: at a0_log = 0.05, mean power reads 1.5% apart. (`C_lc`
   alone is resampled onto the crank's own cycles.)
-- `--init-codesign` slices by position, so a `theta_full.json` from a `--tune-pitch` or
-  `--tune-frequency` run is mis-decoded.
 - `evolve_codesign.py` hard-codes K=5 harmonics.
 - `--wavelet` writes a `control.tg` (`basis = wavelet`, `w_j = ...`) that no runtime tool
   loads (`load_control` rejects it), and `design_io` KeyErrors on its `theta_best.json`.

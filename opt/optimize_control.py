@@ -253,7 +253,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--init-control", type=Path, default=None,
                    help="warm-start control from a phase-1 theta_best.json")
     p.add_argument("--init-codesign", type=Path, default=None,
-                   help="seed full [control, structural tendon, motor tendon] genome from evolve_codesign")
+                   help="seed the genome from an evolve_codesign genome (best_genome.json, "
+                        "codesign_seed.json) or a run's theta_full.json, group by group")
     p.add_argument("--out", type=Path, default=ROOT / "opt" / "runs")
     args = p.parse_args(argv)
     if args.dt_jitter < 0.0:
