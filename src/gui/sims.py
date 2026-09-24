@@ -175,7 +175,10 @@ def phase_trace(
             trace["speed"][name].append(abs(float(data.qvel[dof])))
         energy = 0.0
         for name, tid in zip(structural_names, structural_ids):
-            rest_length = float(model.tendon_range[tid][1])
+            # ponytail: spring + damper only; the tendon-limit efc force (up to ~2.4 N when a
+            # cable hits its range max) is not added. Sum efc_force over mjCNSTR_LIMIT_TENDON
+            # rows with efc_id == tid if the full cable tension is needed.
+            rest_length = float(model.tendon_lengthspring[tid][0])
             displacement = float(data.ten_length[tid]) - rest_length
             trace["tension"][name].append(tendon_tension(model, data, tid, rest_length))
             trace["displacement"][name].append(1000.0 * displacement)
@@ -345,7 +348,7 @@ def work_loop_data(
             motor_tendon_loops[label]["y"].append(tendon_tension(model, data, tid, rest))
 
         for name, tid in zip(structural_names, structural_ids):
-            rest = float(model.tendon_range[tid][1])
+            rest = float(model.tendon_lengthspring[tid][0])  # spring only, as in phase_trace
             structural_loops[name]["x"].append(1000.0 * (float(data.ten_length[tid]) - rest))
             structural_loops[name]["y"].append(tendon_tension(model, data, tid, rest))
 
