@@ -221,8 +221,8 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     return Fi, Taui
 
 
-# Recompute the aero every DEFAULT_AERO_SUBSTEP physics steps and re-apply the
-# cached force in between (the finite-difference window scales with it, so it
+# Recompute the aero every DEFAULT_AERO_SUBSTEP physics steps and hold its
+# generalized force in between (the finite-difference window scales with it, so it
 # stays consistent). At the 0.13 ms step, 4 puts the aero cadence at ~0.52 ms --
 # the rate that was fine at the old 0.5 ms step -- for ~4x fewer aero calls.
 DEFAULT_AERO_SUBSTEP = 4
@@ -267,8 +267,8 @@ class AeroBladeRuntime:
     """Blade-element aero on both plate wings; call :meth:`apply` once per step, before mj_step.
 
     ``morph`` supplies the blade count and the wing mesh. Forces are recomputed every
-    ``substep`` steps (default ``DEFAULT_AERO_SUBSTEP``) and re-applied from the cache
-    in between.
+    ``substep`` steps (default ``DEFAULT_AERO_SUBSTEP``); in between, the generalized
+    force they made is added again unchanged, the hold the MJX rollout uses.
     """
 
     def __init__(self, model, morph, *, substep=None):
@@ -283,18 +283,19 @@ class AeroBladeRuntime:
         self._step_counter = 0
         self._jacp = np.zeros((3, model.nv))
         self._jacr = np.zeros((3, model.nv))
+        self._qfrc = np.zeros(model.nv)  # the held aero generalized force
 
     def apply(self, model, data) -> None:
-        # After mj_step the kinematics (site_xpos/xmat, cdof, subtree_com) still sit at
-        # the pre-step pose while qpos/qvel have moved on; bring them up to qpos so the
-        # aero frames, Jacobians and points match the qvel it reads.
-        mujoco.mj_kinematics(model, data)
-        mujoco.mj_comPos(model, data)
-        recompute = (self._step_counter % self.substep) == 0
-        for wing in self.wings:
-            if recompute or wing.cached_forces is None:
+        if self._step_counter % self.substep == 0:
+            # After mj_step the kinematics (site_xpos/xmat, cdof, subtree_com) still sit
+            # at the pre-step pose while qpos/qvel have moved on; bring them up to qpos so
+            # the aero frames, Jacobians and points match the qvel it reads.
+            mujoco.mj_kinematics(model, data)
+            mujoco.mj_comPos(model, data)
+            self._qfrc[:] = 0.0
+            for wing in self.wings:
                 self._compute_wing(model, data, wing)
-            self._reapply_wing(model, data, wing)
+        data.qfrc_applied += self._qfrc
         self._step_counter += 1
 
     def lift(self) -> float:
@@ -402,24 +403,11 @@ class AeroBladeRuntime:
             forces.append(root_rotation @ force_local)
             torques.append(root_rotation @ torque_local)
             points.append(np.asarray(data.site_xpos[blade_site_id]).copy())
+            mujoco.mj_applyFT(model, data, forces[-1], torques[-1], points[-1],
+                              wing.wing_body_id, self._qfrc)
 
         wing.cached_forces = forces
         wing.cached_torques = torques
         wing.cached_points = points
         wing.cached_lift = float(np.sum([f[2] for f in forces]))
 
-    def _reapply_wing(self, model, data, wing: WingAeroState) -> None:
-        if wing.cached_forces is None:
-            return
-        for force_global, torque_global, point_global in zip(
-            wing.cached_forces, wing.cached_torques, wing.cached_points
-        ):
-            mujoco.mj_applyFT(
-                model,
-                data,
-                force_global,
-                torque_global,
-                point_global,
-                wing.wing_body_id,
-                data.qfrc_applied,
-            )

@@ -117,14 +117,19 @@ def test_rotational_drag_is_the_chordwise_integral(side):
         assert t[1] == pytest.approx(-k0 * np.sum(u**2 * np.abs(u)), rel=1e-5)
 
 
+def hover_moving():
+    """The hover design's morphology, model and an MjData at rest with a brisk qvel."""
+    tg = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
+    model = mujoco.MjModel.from_xml_string(compile_file(tg))
+    data = mujoco.MjData(model)
+    data.qvel[:] = 30.0 * np.sin(np.arange(model.nv) + 1.0)
+    return load_morphology(tg), model, data
+
+
 def test_aero_reads_the_pose_it_moved_to():
     """Straight out of mj_step the kinematics still hold the pre-step pose; the aero must
     see the stepped pose, i.e. act as if mj_forward had run (CPU and MJX)."""
-    tg = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
-    morph = load_morphology(tg)
-    model = mujoco.MjModel.from_xml_string(compile_file(tg))
-    stepped = mujoco.MjData(model)
-    stepped.qvel[:] = 30.0 * np.sin(np.arange(model.nv) + 1.0)
+    morph, model, stepped = hover_moving()
     mujoco.mj_step(model, stepped)
     forwarded = mujoco.MjData(model)
     forwarded.qpos[:], forwarded.qvel[:] = stepped.qpos, stepped.qvel
@@ -141,3 +146,19 @@ def test_aero_reads_the_pose_it_moved_to():
         return data.qfrc_applied.copy()
 
     np.testing.assert_array_equal(cpu(stepped), cpu(forwarded))
+
+
+def test_aero_hold_keeps_the_generalized_force():
+    """Between recomputes the CPU runtime adds the last recompute's generalized force
+    unchanged, as the MJX rollout's hold does, however far the wing has moved."""
+    morph, model, data = hover_moving()
+    rt = AeroBladeRuntime(model, morph, substep=4)
+    qfrc = []
+    for _ in range(5):
+        data.qfrc_applied[:] = 0.0
+        rt.apply(model, data)
+        qfrc.append(data.qfrc_applied.copy())
+        mujoco.mj_step(model, data)
+    for held in qfrc[1:4]:
+        np.testing.assert_array_equal(held, qfrc[0])
+    assert np.abs(qfrc[4] - qfrc[0]).max() > 1e-3 * np.abs(qfrc[0]).max()  # step 4 recomputes
