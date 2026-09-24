@@ -1,6 +1,6 @@
 """Headless CPU lift statistics for a plate-wing design under its own control signal.
 
-    uv run python src/run_fixed_frequency.py [--tg designs/hummer/legacy-baseline/shoulder.tg] [--periods 5]
+    uv run python src/run_fixed_frequency.py [--tg designs/hummer/hover/shoulder.tg] [--periods 5]
 
 Compiles the .tg, rests and crank-syncs it, ramps the drive in over the warmup
 periods, then prints the mean/RMS/min/max summed aerodynamic lift (N) over the
@@ -17,7 +17,7 @@ import mujoco
 import numpy as np
 
 from compile_tg import compile_tg
-from design_paths import LEGACY_BASELINE_TG
+from design_paths import DEFAULT_HUMMER_TG
 from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import drive_command, load_control_for_morphology
@@ -69,7 +69,7 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the compiled morphology with its design control signal.")
-    parser.add_argument("--tg", type=Path, default=LEGACY_BASELINE_TG)
+    parser.add_argument("--tg", type=Path, default=DEFAULT_HUMMER_TG)
     parser.add_argument("--scene", type=Path, default=ROOT / "scene.xml")
     parser.add_argument("--periods", type=float, default=5.0)
     parser.add_argument("--warmup-periods", type=float, default=2.0)

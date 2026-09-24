@@ -26,8 +26,8 @@ running tools concurrently, or they overwrite each other's scene.
   - With no `--tg` it compiles `designs/hummer/legacy-baseline/` (negative lift, not a hover design).
 - **Headless CPU run** (compiles, simulates, prints lift stats):
   - `uv run python src/run_fixed_frequency.py --tg designs/hummer/hover/shoulder.tg --periods 5`
-  - MJX lift stats: `uv run python src/run_mjx_fixed_frequency.py --periods 5` (not the
-    same experiment: a step drive instead of the ramp, and another default design).
+  - MJX lift stats: `uv run python src/run_mjx_fixed_frequency.py --periods 5` (same
+    default design and printout; the numbers differ only by CPU vs MJX).
 - **Viewer**: `mjpython src/view_fixed_frequency.py [--tg path/to/shoulder.tg]` (see
   above for the full mjpython command; hover demos: `src/view_hover.py`, eagle:
   `src/view_eagle.py`).
@@ -136,5 +136,4 @@ CPU path is unchanged and is the reference the port is validated against.
   `attach_along_edge` default is 1.2 in one place and 0.0 in another.
 - Wingtip site `*_aero_blade_04` is hard-coded (GUI, demos), wrong when `blades != 4`.
 - GUI: `run_gui`'s `RunConfig.loss` is never read; a leaked `mkdtemp`.
-- `run_fixed_frequency` and `run_mjx_fixed_frequency` have different defaults (above).
 - `opt/hover_policy.py` writes an absolute `tg` and no `pd_gains` into `hover_meta.json`.

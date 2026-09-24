@@ -2,9 +2,8 @@
 
     uv run python src/run_mjx_fixed_frequency.py [--tg designs/hummer/hover/shoulder.tg] [--periods 5]
 
-The drive starts as a step (ramp_duration=0), not ramped over the warmup like the
-CPU runner, and the default design differs, so the two printouts are not the same
-experiment.
+Same default design, warmup ramp, windows and printout as the CPU runner, so the two
+printouts differ only by CPU vs MJX.
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
 
     mx = mjx.put_model(model)
     dx = mjx.put_data(model, data)
-    drive = rollout.build_drive_config(model, morph, control, ramp_duration=0.0)
+    drive = rollout.build_drive_config(model, morph, control, ramp_duration=warmup_periods * period)
     pitch = wing_pitch.build_wing_pitch_config(model, morph, data)
     aero = aero_runtime.build_aero_config(model, morph)
 
