@@ -45,7 +45,6 @@ class WingGeometry:
     root_offset: float
     chords: np.ndarray
     x_rot: np.ndarray
-    span_cutoffs: np.ndarray
     mesh_path: str
 
 
@@ -93,8 +92,6 @@ def _load_wing_geometry_cached(mesh_path: str, num_blades: int, mtime_ns: int,
         raise ValueError(f"Wing mesh has zero span length: {mesh_path}")
 
     span_min = float(mins[SPAN])
-    chord_length = float(maxs[CHORD] - mins[CHORD])
-    chord_max = float(maxs[CHORD])
 
     chords, x_rot = [], []
     for j in range(num_blades):
@@ -102,22 +99,16 @@ def _load_wing_geometry_cached(mesh_path: str, num_blades: int, mtime_ns: int,
         chord = float(values.max() - values.min()) if values.size else 0.0
         chords.append(chord)
         x_rot.append(-float(values.min()) / chord if chord > 0 else 0.0)
-    cutoffs = []
-    for k in range(num_blades):
-        values = _section_values(triangles, CHORD, chord_max - ((k + 1) / num_blades) * chord_length, SPAN)
-        cutoffs.append((float(values.max()) if values.size else 0.0) - span_min)
 
     chords = np.array(chords, dtype=float)
     x_rot = np.array(x_rot, dtype=float)
-    span_cutoffs = np.maximum(np.array(cutoffs, dtype=float), 0.0)
-    for a in (chords, x_rot, span_cutoffs):
+    for a in (chords, x_rot):
         a.setflags(write=False)
     return WingGeometry(
         length=length,
         root_offset=span_min,
         chords=chords,
         x_rot=x_rot,
-        span_cutoffs=span_cutoffs,
         mesh_path=mesh_path,
     )
 

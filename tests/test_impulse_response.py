@@ -23,12 +23,15 @@ def test_wrap_and_cut():
     assert len(x) == 5 and np.isnan(x[2]) and np.isnan(y[2]) and y[3] == 3.0
 
 
-def stroke_deviation(sim: ImpulseSim, key: str, cycles: float = 2.0) -> float:
-    """Largest gap (deg) between the last `cycles` of history and the tiled undisturbed stroke."""
-    w = sim.window(cycles)
-    x, y = sim.reference_tiled(key, w["t"][0], w["t"][-1])
-    ok = ~np.isnan(x)
-    return float(np.max(np.abs(w[key] - np.interp(w["t"], x[ok], y[ok]))))
+def twin_gap(sim: ImpulseSim, twin: ImpulseSim, key: str, cycles: float = 2.0) -> float:
+    """Largest gap (deg) in `key` over the last `cycles` between two sims stepped in lockstep.
+
+    The seed's stroke is not exactly periodic (its passive pitch wanders a few degrees
+    cycle to cycle), so a pulse's effect is read against an unpulsed twin, not a past cycle.
+    """
+    a, b = sim.window(cycles), twin.window(cycles)
+    assert np.array_equal(a["t"], b["t"])
+    return float(np.max(np.abs(a[key] - b[key])))
 
 
 def test_phases_hold_the_designed_lag_and_the_pulse_reaches_the_wing(tmp_path):
@@ -69,8 +72,11 @@ def test_phases_hold_the_designed_lag_and_the_pulse_reaches_the_wing(tmp_path):
     for name in sim.motors:  # L t1 gained phase, so the other three read behind it
         if name != sim.ref:
             assert -15.0 < after[name] - before[name] < -4.0, (name, before[name], after[name])
-    assert stroke_deviation(sim, "sweep:L") > 2.0  # the pulsed wing moved off its stroke...
-    assert stroke_deviation(sim, "sweep:R") < 1.5  # ...the other wing did not
+    twin = ImpulseSim(TG, tmp_path / "twin.xml", CONTROL, settle_periods=1.0)
+    for seconds in (2.0 * sim.period, 4.0 * sim.period, 0.5e-3 * duration, 0.5e-3 * duration + 2.0 * sim.period):
+        twin.advance(seconds)  # the same drive, never pulsed
+    assert twin_gap(sim, twin, "sweep:L") > 2.0  # the pulsed wing moved off its stroke...
+    assert twin_gap(sim, twin, "sweep:R") < 1.5  # ...the other wing did not
     assert np.count_nonzero(np.array(sim.hist["applied:L_motor_t1"])) > 0
     assert not np.any(np.array(sim.hist["applied:R_motor_t4"]))
 
@@ -80,17 +86,16 @@ def test_phases_hold_the_designed_lag_and_the_pulse_reaches_the_wing(tmp_path):
 
 
 def test_feedforward_alone_reproduces_the_stroke(tmp_path):
-    """A zero pulse still opens the loop; the nominal profile must then hold the stroke."""
-    sim = ImpulseSim(TG, tmp_path / "scene.xml", CONTROL, settle_periods=1.0)
-    sim.advance(2.0 * sim.period)
-    # how much the stroke drifts cycle to cycle on its own, with no pulse at all
-    sim.capture_reference()
-    sim.advance(2.0 * sim.period)
-    drift = {key: stroke_deviation(sim, key) for key in ("sweep:L", "roll:L")}
+    """A zero pulse still opens the loop; the nominal profile must then hold the stroke
+    the closed loop flies (an unpulsed twin)."""
+    sim, twin = (ImpulseSim(TG, tmp_path / f"{name}.xml", CONTROL, settle_periods=1.0) for name in ("sim", "twin"))
+    for s in (sim, twin):
+        s.advance(4.0 * s.period)
     sim.inject(0.0, 20.0, sim.motors)
-    sim.advance(0.02 + 2.0 * sim.period)
-    for key, natural in drift.items():
-        assert stroke_deviation(sim, key) < max(1.5, natural + 1.0), (key, natural, stroke_deviation(sim, key))
+    for s in (sim, twin):
+        s.advance(0.02 + 2.0 * s.period)
+    for key in ("sweep:L", "roll:L"):
+        assert twin_gap(sim, twin, key) < 1.5, (key, twin_gap(sim, twin, key))
 
 
 def test_hold_phase_pins_the_lag_and_lets_a_pulse_step_decay(tmp_path):

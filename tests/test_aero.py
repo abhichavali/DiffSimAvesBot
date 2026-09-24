@@ -11,26 +11,27 @@ import pytest
 from morphology.compile import ROOT, compile_file
 from morphology.tg_parser import load_morphology
 from morphology.wing_geometry import _section_values, load_wing_geometry
-from runtime.aero import RHO_AIR, aerodynamics
+from runtime.aero import _SIDE_SIGNS, AERO_PARAMS, RHO_AIR, aerodynamics
 from runtime.mjx.aero import aero_wing
 
 CHORD, LENGTH, DT = 0.05, 0.2, 5e-4
 X_ROT, ROOT_OFFSET = 0.2, 0.007  # hinge 0.2 chord behind the leading edge; wing starts 7 mm out
 MIRROR = np.array([1.0, 1.0, -1.0])
-# A zero span cutoff switches the rotational drag off, so the pitch rate only adds the
-# rotational lift. The strip velocity is v either way (omega_y x the spanwise lever = 0).
+# A pitch rate adds the rotational drag (all a strip feels on still air, and the same
+# whichever edge leads) and the rotational lift. The strip velocity is v either way
+# (omega_y x the spanwise lever = 0).
 
 
 def cpu_strip(side, v, omega=(0.0, 0.0, 0.0)):
     zero = np.zeros(3)
     return aerodynamics(side, np.array(omega), zero, v, zero, 0.5, DT, LENGTH, 1,
-                        RHO_AIR, CHORD, np.zeros(1), x_rot=X_ROT, root=ROOT_OFFSET)
+                        RHO_AIR, CHORD, x_rot=X_ROT, root=ROOT_OFFSET)
 
 
 def mjx_strip(side, v, omega=(0.0, 0.0, 0.0)):
     zero, v = jnp.zeros(3), jnp.asarray(v)
     f, t = aero_wing(jnp.array(omega), zero, v, zero, v, side=side,
-                     chords=jnp.array([CHORD]), x_rot=jnp.array([X_ROT]), span_cutoffs=jnp.zeros(1),
+                     chords=jnp.array([CHORD]), x_rot=jnp.array([X_ROT]),
                      length=LENGTH, root=ROOT_OFFSET, num_blade=1, dt=DT)[:2]
     return np.asarray(f[0], dtype=float), np.asarray(t[0], dtype=float)
 
@@ -48,8 +49,9 @@ def test_reversed_chordwise_flow_mirrors_the_plate(side, alpha_deg, vx_sign):
         # tau_y = z_cop * F_x; the plate spans z in [-X_ROT, 1 - X_ROT] chords on L, mirrored on R.
         mid = (1.0 - 2.0 * X_ROT) * CHORD
         assert ta[1] / fa[0] + tb[1] / fb[0] == pytest.approx(mid if side == "L" else -mid, rel=1e-4)
-        rot_a = strip(side, v, pitch)[0][0] - fa[0]
-        rot_b = strip(side, MIRROR * v, pitch)[0][0] - fb[0]
+        drag = strip(side, np.zeros(3), pitch)[0][0]
+        rot_a = strip(side, v, pitch)[0][0] - fa[0] - drag
+        rot_b = strip(side, MIRROR * v, pitch)[0][0] - fb[0] - drag
         hinge, far = (rot_b, rot_a) if side == "L" else (rot_a, rot_b)
         assert hinge == pytest.approx((0.75 - X_ROT) / (0.25 - X_ROT) * far, rel=1e-4)
     # A general rotation puts the root offset in the strip velocity too.
@@ -88,11 +90,25 @@ def test_uniform_flow_loads_every_strip_alike():
     """Uniform flow plus a pitch rate (omega_y adds no strip velocity): every strip of a
     uniform-chord wing sees the same flow, so gets the same force, rotational lift included."""
     v, omega, zero = np.array([1.0, 0.0, 2.0]), np.array([0.0, 5.0, 0.0]), np.zeros(3)
-    f_in, f_out = (aerodynamics("L", omega, zero, v, zero, i, DT, LENGTH, 2, RHO_AIR, CHORD, np.zeros(2),
+    f_in, f_out = (aerodynamics("L", omega, zero, v, zero, i, DT, LENGTH, 2, RHO_AIR, CHORD,
                                 x_rot=X_ROT, root=ROOT_OFFSET)[0] for i in (0.25, 0.75))
     np.testing.assert_allclose(f_in, f_out, rtol=1e-12)
     f = aero_wing(jnp.asarray(omega), jnp.zeros(3), jnp.asarray(v), jnp.zeros(3), jnp.asarray(v), side="L",
-                  chords=jnp.full(2, CHORD), x_rot=jnp.full(2, X_ROT), span_cutoffs=jnp.zeros(2),
+                  chords=jnp.full(2, CHORD), x_rot=jnp.full(2, X_ROT),
                   length=LENGTH, root=ROOT_OFFSET, num_blade=2, dt=DT)[0]
     np.testing.assert_allclose(f[0], f[1], rtol=1e-6)
     np.testing.assert_allclose(f[0], f_in, rtol=1e-5)
+
+
+@pytest.mark.parametrize("side", "LR")
+def test_rotational_drag_is_the_chordwise_integral(side):
+    """A pitch rate on still air loads a strip with the rotational drag alone: the integral
+    over the chord of Crd*rho/2*w|w| * u|u| (force) and u^2|u| (moment), u the distance ahead
+    of the hinge. (It was a span-gated right-endpoint sum over NumBlade elements.)"""
+    w = 5.0
+    u = CHORD * (X_ROT - (np.arange(10_000) + 0.5) / 10_000)  # midpoint rule, leading -> far edge
+    k0 = 0.5 * RHO_AIR * w * abs(w) * LENGTH * AERO_PARAMS.Crd * CHORD / u.size
+    for strip in (cpu_strip, mjx_strip):
+        f, t = strip(side, np.zeros(3), (0.0, w, 0.0))
+        assert f[0] == pytest.approx(_SIDE_SIGNS[side][0] * k0 * np.sum(u * np.abs(u)), rel=1e-5)
+        assert t[1] == pytest.approx(-k0 * np.sum(u**2 * np.abs(u)), rel=1e-5)

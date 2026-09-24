@@ -524,7 +524,7 @@ def aero_cpu_item(tmp):
     for side in "LR":
         for ci, (w, v, wd, vp) in enumerate(AERO_CASES):
             rows = [cpu_aero_strip(side, np.array(w), np.zeros(3), np.array(v), np.array(wd), (j + 0.5) / nb,
-                                   AERO_DT, g.length, nb, RHO_AIR, float(c), g.span_cutoffs,
+                                   AERO_DT, g.length, nb, RHO_AIR, float(c),
                                    vel_h_prev=np.array(vp), return_cop=True, x_rot=float(g.x_rot[j]),
                                    root=g.root_offset) for j, c in enumerate(g.chords)]
             out[f"strips/{side}{ci}"] = {k: [np.asarray(r[j]).tolist() for r in rows]
@@ -564,8 +564,7 @@ def aero_mjx_item(tmp):
         for ci, (w, v, wd, vp) in enumerate(AERO_CASES):
             f, t = mjx_aero_wing(*(jnp.asarray(x) for x in (w, (0.0, 0.0, 0.0), v, wd, vp)), side=side,
                                  chords=jnp.asarray(g.chords), x_rot=jnp.asarray(g.x_rot),
-                                 span_cutoffs=jnp.asarray(g.span_cutoffs), length=g.length,
-                                 root=g.root_offset, num_blade=len(g.chords), dt=AERO_DT)
+                                 length=g.length, root=g.root_offset, num_blade=len(g.chords), dt=AERO_DT)
             out[f"strips/{side}{ci}"] = {"force": np.asarray(f).tolist(), "torque": np.asarray(t).tolist()}
     model, data, qvel2 = fixed_state(tmp)
     centers = [float(data.qpos[model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{s}_wing_pitch")]])

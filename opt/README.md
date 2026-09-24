@@ -147,8 +147,8 @@ uv run python opt/design_io.py opt/runs/cpu_best --integrator euler implicitfast
 
 `design_io.py` also replays a committed design dir on its own `control.tg`; with
 `--periods 24` it runs the certification doctrine of `docs/ROBUST_CODESIGN_METHODOLOGY.md`
-section 12 (see its docstring). The seed `designs/hummer/hover` certifies at 194.9 mNm
-worst case this way, at 184 mN lift (section 12's 174.7 mNm / 358-364 mN came from the
+section 12 (see its docstring). The seed `designs/hummer/hover` certifies at 193.4 mNm
+worst case this way, at 189 mN lift (section 12's 174.7 mNm / 358-364 mN came from the
 campaign's own scripts, on an aero that assumed the hinge edge always leads and put the
 hinge on the leading edge of a wing starting at the hinge, not on the drawn wing).
 
@@ -156,7 +156,7 @@ hinge on the leading edge of a wing starting at the hinge, not on the drawn wing
 
 - `--lift-floor` (and `run_gui`'s `lift_floor`) default to 300 mN, picked when the aero
   assumed the hinge edge always leads and sat on the leading edge. The seed now makes
-  184 mN, so the floor binds from the first step; pick a new one before the next run.
+  189 mN, so the floor binds from the first step; pick a new one before the next run.
 - Between aero recomputes (substep 4) the CPU re-applies the held world wrench through
   the current Jacobian, MJX holds the generalized force. With the aero on the mesh this
   reads ~2.9% lift / 0.8% peak apart on the seed plus two small harmonics at dt 0.13 ms

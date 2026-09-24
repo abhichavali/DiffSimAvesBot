@@ -87,7 +87,7 @@ _SIDE_SIGNS = {
 
 
 def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
-                 i, dt, Rw, NumBlade, rho, chord, span_cutoffs=None,
+                 i, dt, Rw, NumBlade, rho, chord,
                  vel_h_prev=None, return_cop=False, *, x_rot, root):
     """Blade-strip force + pitching moment in the root-site frame, for one wing.
 
@@ -105,22 +105,14 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     r_cof_rot = 0 * chord
     r_cof_add = 0 * chord
 
-    if span_cutoffs is None:
-        span_cutoffs = np.full(NumBlade, Rw)
-
-    # Rotational drag, summed over strips (gated by span cutoff).
-    Fik_lt = 0
-    Tik_lt = 0
+    # Rotational drag of the chord pitching about the hinge: the exact integral over the
+    # chord of Crd * rho/2 * w|w| * u|u| (force) and u^2|u| (moment), u = the element's
+    # distance ahead of the hinge (x_rot at the leading edge, x_rot - 1 at the far edge).
     wsum = float(omega_w[1] + omega_b[1])  # a Python float: same IEEE ops, 4x cheaper than np.float64
-    abswsum = abs(wsum)
-    span = Rw / NumBlade
-    for k in range(1, NumBlade + 1):
-        m = k / NumBlade
-        rdi = 0 if (Rw * i) > span_cutoffs[k - 1] else 1
-        local = chord * (x_rot - m)
-
-        Fik_lt += sFik * rdi * 0.5 * rho * wsum * abswsum * span * Crd * local * abs(local) * chord / NumBlade
-        Tik_lt -= rdi * 0.5 * rho * wsum * abswsum * span * Crd * (local ** 2) * abs(local) * chord / NumBlade
+    k0 = 0.5 * rho * wsum * abs(wsum) * (Rw / NumBlade) * Crd
+    u0, u1 = x_rot, x_rot - 1
+    Fik_lt = sFik * k0 * chord ** 3 * (u0 ** 2 * abs(u0) - u1 ** 2 * abs(u1)) / 3
+    Tik_lt = -k0 * chord ** 4 * (u0 ** 3 * abs(u0) - u1 ** 3 * abs(u1)) / 4
 
     # --------------------------------------------------------
     # Blade-element analysis
@@ -393,7 +385,6 @@ class AeroBladeRuntime:
                 self.num_blades,
                 RHO_AIR,
                 chord,
-                self.geometry.span_cutoffs,
                 vel_h_prev=velocity_local_prev,
                 x_rot=float(self.geometry.x_rot[blade_index]),
                 root=self.geometry.root_offset,

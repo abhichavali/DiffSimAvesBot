@@ -10,7 +10,7 @@ the constants in `src/design_paths.py` (`DEFAULT_HUMMER_TG`, ...).
 Peak torque is the CPU certification number: worst case over integrators/dt, exact
 per-cycle peaks (see `docs/ROBUST_CODESIGN_METHODOLOGY.md` section 12). Reproduce it
 with `opt/design_io.py <dir> --periods 24` (its docstring has the two doctrine
-commands); the seed `hummer/hover` certifies at 194.9 mNm (lift 184 mN) that way.
+commands); the seed `hummer/hover` certifies at 193.4 mNm (lift 189 mN) that way.
 The key numbers in the table were certified on an aero wing that differed from the
 drawn one: its hinge edge always led, the hinge sat on the leading edge and the strips
 started at the hinge. Taking the lift, CoP and rotational lift from the edge that does

@@ -8,15 +8,15 @@ and applied at each blade site by the MJX runtime layer.
 
 Two design choices serve the autodiff goal:
 
-* Branch-free. The ``norm_v == 0`` guard, the ``rdi`` span cutoff, the
-  ``lift_sign``/``chord_sign`` flips, and the CoP clip are all expressed with
+* Branch-free. The ``norm_v == 0`` guard, the ``lift_sign``/``chord_sign``
+  flips, and the CoP clip are all expressed with
   ``where``/``clip`` so the function is smooth enough to ``jit``/``vmap``/``grad``.
 * The Sane & Dickinson polar coefficients (and the other empirical constants)
   are ``runtime.aero.AeroParams``, the one table both models read.
 
 Left vs right wings differ only by the CPU model's ``_SIDE_SIGNS`` mirror flips;
 ``side`` ("L"/"R") selects them at trace time. The geometry inputs
-(``length``/``root``/``chords``/``x_rot``/``span_cutoffs``) come from the host-side
+(``length``/``root``/``chords``/``x_rot``) come from the host-side
 ``wing_geometry`` STL parse and are passed in as constants.
 """
 
@@ -65,7 +65,6 @@ def aero_strip(
     x_rot: jax.Array,
     *,
     side: str,
-    span_cutoffs: jax.Array,
     params: AeroParams,
     length: float,
     root: float,
@@ -90,16 +89,12 @@ def aero_strip(
     r_cof_rot = 0.0
     r_cof_add = 0.0
 
-    # --- Rotational drag, summed over all strips (gated by span cutoff) ---
-    m = (jnp.arange(1, num_blade + 1).astype(span_cutoffs.dtype)) / num_blade
-    rdi = jnp.where(Rw * span_fraction <= span_cutoffs, 1.0, 0.0)
+    # --- Rotational drag: exact chordwise integral (see the numpy model) ---
     wsum = omega_w[1] + omega_b[1]
-    abswsum = jnp.abs(wsum)
-    span = Rw / num_blade
-    local = chord * (x_rot - m)
-    base = rdi * 0.5 * rho * wsum * abswsum * span * p.Crd
-    Fik_lt = sFik * jnp.sum(base * local * jnp.abs(local) * chord / num_blade)
-    Tik_lt = -jnp.sum(base * (local**2) * jnp.abs(local) * chord / num_blade)
+    k0 = 0.5 * rho * wsum * jnp.abs(wsum) * (Rw / num_blade) * p.Crd
+    u0, u1 = x_rot, x_rot - 1.0
+    Fik_lt = sFik * k0 * chord**3 * (u0**2 * jnp.abs(u0) - u1**2 * jnp.abs(u1)) / 3.0
+    Tik_lt = -k0 * chord**4 * (u0**3 * jnp.abs(u0) - u1**3 * jnp.abs(u1)) / 4.0
 
     # --- Blade-element velocity at the strip's hinge point ---
     rle = -(root + span_fraction * Rw)
@@ -194,7 +189,6 @@ def aero_wing(
     side: str,
     chords: jax.Array,
     x_rot: jax.Array,
-    span_cutoffs: jax.Array,
     params: AeroParams = AeroParams(),
     length: float,
     root: float,
@@ -221,7 +215,6 @@ def aero_wing(
             chord,
             x_rot_j,
             side=side,
-            span_cutoffs=span_cutoffs,
             params=params,
             length=length,
             root=root,

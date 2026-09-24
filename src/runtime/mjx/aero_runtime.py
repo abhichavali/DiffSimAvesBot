@@ -12,7 +12,7 @@ JAX/MJX port of ``runtime.aero.AeroBladeRuntime``. For each wing it:
    blade site — the ``mj_applyFT`` equivalent ``jacp @ f + jacr @ t`` — summing
    into a ``qfrc_applied`` contribution.
 
-The host-side wing geometry (``length``/``root``/``chords``/``x_rot``/``span_cutoffs``)
+The host-side wing geometry (``length``/``root``/``chords``/``x_rot``)
 and the site/body indices are resolved once on a CPU model in :func:`build_aero_config`.
 
 Verified conventions (machine precision vs CPU MuJoCo):
@@ -43,7 +43,6 @@ class AeroConfig(NamedTuple):
     wing_body_id: jax.Array  # (n_wings,) int
     chords: jax.Array  # (num_blade,)
     x_rot: jax.Array  # (num_blade,) hinge behind the leading edge, in chords
-    span_cutoffs: jax.Array  # (num_blade,)
     length: float  # static — wing span Rw
     root: float  # static — hinge to wing root along the span
     num_blade: int  # static
@@ -89,7 +88,6 @@ def build_aero_config(model: mujoco.MjModel, morph, *, substep: int = 1) -> Aero
         wing_body_id=jnp.asarray(body_ids, dtype=jnp.int32),
         chords=jnp.asarray(geom.chords),
         x_rot=jnp.asarray(geom.x_rot),
-        span_cutoffs=jnp.asarray(geom.span_cutoffs),
         length=float(geom.length),
         root=float(geom.root_offset),
         num_blade=num_blade,
@@ -144,7 +142,6 @@ def _wing_qfrc(m, d, cfg: AeroConfig, wing_idx: int, side: str, state: AeroState
         side=side,
         chords=cfg.chords,
         x_rot=cfg.x_rot,
-        span_cutoffs=cfg.span_cutoffs,
         params=cfg.params,
         length=cfg.length,
         root=cfg.root,
