@@ -31,6 +31,13 @@ lift): pass a hover `.tg`. Always pass `--timestep` when using `--cpu-timestep-f
 over and use `uv run --no-sync` (plain `uv run` re-syncs and drops CUDA jax). The full
 campaign commands are in `docs/ROBUST_CODESIGN_METHODOLOGY.md` section 6.
 
+Compile time is the number of distinct graphs: one `jacfwd` per loss (per rotating batch
+with `--rotate-batch`, the slowest, and slower still with rk4 in it), one forward per
+full-matrix cell (`--bank-integrators` x `--dt-bank`) and per holdout cell (3 x
+`--holdout-dts`). On a GPU these took 30-50 min per run. `export
+JAX_COMPILATION_CACHE_DIR=~/.cache/jax` keeps the compiled graphs across runs with
+identical results (a repeated CPU smoke run: 17 s -> 9 s).
+
 ## The genome
 
 theta packs the active groups in this fixed order (`codesign.genome.Genome`):
