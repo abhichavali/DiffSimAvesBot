@@ -9,6 +9,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from morphology.compiled import CompiledMorphology, CompiledShoulder, CompiledWrist
+from morphology.emit_mjcf import emit_mjcf
 from morphology.geometry import (
     ArcPlane,
     apply_scale_to_strut,
@@ -31,6 +32,7 @@ from morphology.geometry import (
     world_node,
 )
 from morphology.model import Arrange, Face, Morphology, TendonGenerator
+from morphology.motor_tendons import measure_motor_tendon_ranges
 from morphology.symmetry import StructuralEdge, expand_sigma_tendons
 from morphology.tendons import (
     SHOULDER_GENERATORS,
@@ -396,32 +398,11 @@ def _mirror_shoulder(left: CompiledShoulder, morph: Morphology) -> CompiledShoul
     )
 
 
-def compile_to_mjcf(
-    morph: Morphology,
-    *,
-    settle_steps: int = 2000,
-    tendon_sweep_steps: int = 72,
-    color_structural_tendons: bool = False,
-) -> str:
-    from morphology.emit_mjcf import emit_mjcf
-    from morphology.motor_tendons import measure_motor_tendon_ranges
-
+def compile_to_mjcf(morph: Morphology, *, color_structural_tendons: bool = False) -> str:
     compiled = compile_morphology(morph)
-    probe_xml = emit_mjcf(compiled)
-    motor_ranges = measure_motor_tendon_ranges(
-        probe_xml,
-        morph,
-        settle_steps=settle_steps,
-        sweep_steps=tendon_sweep_steps,
-    )
-    del probe_xml
-    xml = emit_mjcf(
-        compiled,
-        motor_tendon_ranges=motor_ranges,
-        color_structural_tendons=color_structural_tendons,
-    )
-    del compiled, motor_ranges
-    return xml
+    motor_ranges = measure_motor_tendon_ranges(emit_mjcf(compiled), morph)
+    return emit_mjcf(compiled, motor_tendon_ranges=motor_ranges,
+                     color_structural_tendons=color_structural_tendons)
 
 
 def default_generators() -> Tuple[TendonGenerator, ...]:
