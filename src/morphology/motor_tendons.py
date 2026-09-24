@@ -36,31 +36,29 @@ def measure_motor_tendon_ranges(xml: str, morph: Morphology) -> Dict[str, MotorT
     for _ in range(SETTLE_STEPS):
         mujoco.mj_step(model, data)
 
-    ranges: Dict[str, MotorTendonRange] = {}
-    for side in ("L", "R"):
-        for foot in morph.motors.feet:
-            name = f"{side}_motor_t{foot.station}"
-            l_min, l_max, l_rest = _sweep(model, data, f"{side}_t{foot.station}_disk_hinge", name)
-            springlength = foot.tendon_rest_length
-            if springlength is None:
-                springlength = morph.motors.tendon_rest_length
-            if springlength is None:
-                springlength = l_rest
-            ranges[name] = MotorTendonRange(max(0.0, l_min - MARGIN), l_max + MARGIN, l_rest, springlength)
-    return ranges
-
-
-def _sweep(model, data, joint: str, tendon: str) -> tuple[float, float, float]:
-    """(min, max, rest) length of `tendon` while `joint` turns through 2π; qpos is restored."""
-    adr = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint)]
-    tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, tendon)
-    saved = float(data.qpos[adr])
+    # Each motor tendon runs from the strut to its own disk's pin, so all the
+    # disks can turn together without changing each other's tendon lengths.
+    feet = [(side, foot) for side in ("L", "R") for foot in morph.motors.feet]
+    qadr = [model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_t{foot.station}_disk_hinge")]
+            for side, foot in feet]
+    tids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, f"{side}_motor_t{foot.station}")
+            for side, foot in feet]
     mujoco.mj_forward(model, data)
-    l_rest = float(data.ten_length[tid])
+    rest = data.ten_length[tids]
     samples = []
     for angle in np.linspace(0.0, 2.0 * np.pi, SWEEP_STEPS, endpoint=False):
-        data.qpos[adr] = angle
+        data.qpos[qadr] = angle
         mujoco.mj_forward(model, data)
-        samples.append(float(data.ten_length[tid]))
-    data.qpos[adr] = saved
-    return min(samples), max(samples), l_rest
+        samples.append(data.ten_length[tids])
+    lo, hi = np.min(samples, axis=0), np.max(samples, axis=0)
+
+    ranges: Dict[str, MotorTendonRange] = {}
+    for (side, foot), l_min, l_max, l_rest in zip(feet, lo.tolist(), hi.tolist(), rest.tolist()):
+        springlength = foot.tendon_rest_length
+        if springlength is None:
+            springlength = morph.motors.tendon_rest_length
+        if springlength is None:
+            springlength = l_rest
+        ranges[f"{side}_motor_t{foot.station}"] = MotorTendonRange(
+            max(0.0, l_min - MARGIN), l_max + MARGIN, l_rest, springlength)
+    return ranges
