@@ -9,41 +9,46 @@ These instructions apply to all coding agents (Cursor, Claude, Gemini, Copilot, 
   - Run a script: `uv run python <script>`
   - Add a dependency: `uv add <package-name>`
 - MuJoCo viewer runs on macOS require **`mjpython`** instead of `python`:
-  - `mjpython src/run_hanging_poc.py`
+  - `mjpython src/view_fixed_frequency.py`
 
 ## Common commands
 
-- **Morphology compiler** (`.tg` DSL → MuJoCo XML):
-  - Author: `shoulder/shoulder.tg`
-  - `uv run python src/compile_morphology.py templates/generated-joint/scene.xml`
-  - Optional: `--morphology path/to/file.tg`
-  - Tests: `uv run pytest -q`
-  - See `docs/MORPHOLOGY_COMPILER.md`
-- Run the simulation viewer:
-  - `mjpython src/run_hanging_poc.py`
-- Use an alternate compiled scene at runtime:
-  - `MUJOCO_XML_PATH=templates/shoulder-joint/scene.xml mjpython src/run_hanging_poc.py`
-- Use an alternate morphology for runtime aero/wing params:
-  - `MORPHOLOGY_PATH=path/to/custom.tg mjpython src/run_hanging_poc.py`
+- **Compile** a design (`.tg` DSL → MuJoCo XML):
+  - `uv run python src/compile_tg.py --tg designs/hummer/hover/shoulder.tg --out scene.xml`
+  - With no `--tg` it compiles `designs/hummer/legacy-baseline/` (negative lift, not a hover design).
+- **Headless CPU run** (compiles, simulates, prints lift stats):
+  - `uv run python src/run_fixed_frequency.py --tg designs/hummer/hover/shoulder.tg --periods 5`
+  - MJX equivalent: `uv run python src/run_mjx_fixed_frequency.py --periods 5`
+- **Viewer**: `mjpython src/view_fixed_frequency.py [--tg path/to/shoulder.tg]`
+  (hover demos: `mjpython src/view_hover.py`; eagle: `mjpython src/view_eagle.py`)
+- **Tests**: `uv run pytest -q` (unit tests + the golden quick tier).
+- **Behavior check**: `uv run python -m tests.golden check [--quick]` must stay all-PASS
+  after any refactor; see the docstring at the top of `tests/golden/harness.py`.
 
-No automated lint suite is configured. Validate morphology changes with
-`uv run pytest -q` (unit tests + the golden quick tier) and,
-where relevant, the viewer.
+No automated lint suite is configured.
 
 ## High-level architecture
 
-The pipeline is **`shoulder/*.tg` → parser → compiler → MuJoCo simulation**.
+The pipeline is **`designs/<bird>/<name>/{shoulder,control}.tg` → parser → compiler → MuJoCo simulation**.
 
-- `shoulder/shoulder.tg` — authoritative design (geometry knobs, topology, materials)
+- `designs/` — the committed designs; **`designs/README.md`** lists each one (what it
+  is, lineage, key numbers, which tool defaults to it). `shoulder.tg` is the whole
+  morphology, `control.tg` the Fourier crank-velocity command beside it.
+- `src/runtime/morphology_runtime.py` — tool-default design paths (`DEFAULT_HUMMER_TG`,
+  `HOVER_BASE_TG`, `LEGACY_BASELINE_TG`, `EAGLE_TG`) and the runtime design loader
+  (override with `MORPHOLOGY_PATH`).
 - `src/morphology/tg_parser.py` — `.tg` → typed `Morphology` dataclass tree
-- `src/morphology/` — geometry/symmetry derivation, MJCF emitter
-- `src/compile_morphology.py` — CLI entry point
-- `src/runtime/morphology_runtime.py` — loads `.tg` for sim-time aero/wing params
-- `src/runtime/aero.py` — quasi-steady blade-element aero forces (CPU/numpy reference)
-- `src/morphology/wing_geometry.py` — wing planform (span, chords) from the STL mesh
-- `src/run_hanging_poc.py` — loads compiled XML (`MUJOCO_XML_PATH`; default `templates/generated-joint/scene.xml`), viewer + actuators + aero
-- `templates/generated-joint/` — compiled MJCF output target
+- `src/morphology/` — geometry/symmetry derivation, MJCF emitter, wing planform (`wing_geometry.py`)
+- `src/compile_tg.py` — compile CLI (`compile_tg(tg, out)` is what every tool calls)
+- `src/runtime/` — CPU simulation runtime: `aero.py` (quasi-steady blade-element aero,
+  the numpy reference), `control_signal.py`, `crank.py`, `wing_pitch.py`, `eagle_drive.py`
+- `src/run_fixed_frequency.py`, `src/view_fixed_frequency.py`, `src/view_hover.py`,
+  `src/view_eagle.py` — CPU runners/viewers; `src/demos/render_*.py` — headless MP4 renders
 - `src/runtime/mjx/` — **JAX/MJX port** of the simulation (GPU, jittable, differentiable). See the MJX section below.
+- `opt/` — co-design optimizer (`optimize_control.py`, `evolve_codesign.py`,
+  `hover_policy.py`, ...); see `opt/README.md`. `plot_fixed_frequency_gui.py` is the Tk GUI.
+- `tests/` — pytest suite; `tests/golden/` — the golden behavior harness.
+- `docs/ROBUST_CODESIGN_METHODOLOGY.md` — how designs are certified (CPU peak torque).
 
 ## Codebase conventions
 
@@ -51,10 +56,10 @@ The pipeline is **`shoulder/*.tg` → parser → compiler → MuJoCo simulation*
 - Six σ-generators expand to 12 structural tendons; R-side is an exact mirror of L.
 - Quaternions follow MuJoCo's **w-first** ordering: `[w, x, y, z]`.
 - Structural tendon rest lengths are **derived** from posed anchor distance × pretension — never hand-written.
-- Do not hand-edit `templates/generated-joint/scene.xml` for design changes; edit `.tg` and recompile.
+- Do not hand-edit a compiled `scene.xml` for design changes; edit the `.tg` and recompile.
 - Preferred execution: `uv` for compile scripts, `mjpython` for viewer-based MuJoCo runs on macOS.
 
-## MJX / GPU / viewer (summary — see `docs/usage.md` for the full overview)
+## MJX / GPU
 
 The simulation is also ported to **MJX** (`src/runtime/mjx/`): a pure-JAX rollout
 that is `jit`/`vmap`-able and differentiable for gradient-based optimization. The
@@ -69,11 +74,6 @@ CPU path is unchanged and is the reference the port is validated against.
 - **Tests**: `uv run pytest -q`; full behavior check: `uv run python -m tests.golden check`.
 - **GPU server**: SSH alias `HanatServer`; project at `/workspace/Tensegrity-Playground`
   (own `.venv`). Repo is **private** → sync with `rsync` (not `git clone`).
-  Instances get evicted often → **`docs/vast_migration.md`** is the quick runbook
-  for spinning up a fresh box and re-syncing.
 - **Renders**: headless MP4 demos in `src/demos/render_*.py` (`--self-check` asserts
   without rendering).
 
-**Read `docs/usage.md` before doing MJX, GPU-server, or viewer work** — it has the
-module APIs, autodiff/solver details, MJCF-prep rationale, gotchas, and exact commands.
-This buffer is normal
