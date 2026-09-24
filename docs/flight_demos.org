@@ -252,9 +252,10 @@ flying/hovering. You see the mechanism through the translucent body.
 *How it works / was built.*
 - ~flying.add_visual_bird~ adds textured body/head/tail meshes (parented to the
   ~airframe~ body, so they fly with it) at ~20% opacity, and swaps the two
-  placeholder wing geoms for the real left/right rufous wing meshes. Meshes are
-  referenced in place from the sibling ~Tensegrity-Playground~ checkout
-  (~--bird-assets~ to relocate).
+  placeholder wing geoms for the real left/right rufous wing meshes. The meshes
+  are not in this repo: they are referenced in place from the sibling
+  ~Tensegrity-Playground~ checkout when it exists, else from ~BIRD_ASSETS_DIR~
+  or ~--bird-assets~ (one of which is then required).
 - *Mass fix (important):* the mesh geoms otherwise inherit MuJoCo's default
   density and the skin weighs ~2.3 kg -- 32x the 73 g bird -- so it dropped like
   a rock. The skin is purely cosmetic, so ~visual_torso~ is given an explicit

@@ -11,13 +11,15 @@ body with the flapping mechanism onboard.
 Positions are absolute in `<worldbody>`; the airframe root sits at the origin
 with identity orientation, so reparenting is a pure move — no geometry shifts.
 
-Pure string->string XML surgery (ElementTree only); no MuJoCo import here.
+The helpers are pure string->string XML surgery (ElementTree only); only the
+__main__ self-check imports MuJoCo.
 """
 
 from __future__ import annotations
 
 import os
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 AIRFRAME_BODY = "airframe"
 AIRFRAME_FREEJOINT = "airframe_freejoint"
@@ -303,8 +305,12 @@ def add_mocap_obstacle(
 # Visual hummingbird skin
 # --------------------------------------------------------------------------- #
 # The rufous-hummingbird meshes (~29 MB: rufous_*.obj + rufous_diffuse.png) are
-# not in this repo. Point BIRD_ASSETS_DIR, or a CLI's --bird-assets, at their folder.
-BIRD_ASSETS_DIR = os.environ.get("BIRD_ASSETS_DIR")
+# not in this repo. They default to the sibling Tensegrity-Playground checkout;
+# point BIRD_ASSETS_DIR, or a CLI's --bird-assets, elsewhere.
+_SIBLING_BIRD = (Path(__file__).resolve().parents[2]
+                 / "Tensegrity-Playground/templates/generated-joint/assets/bird")
+BIRD_ASSETS_DIR = os.environ.get("BIRD_ASSETS_DIR") or (
+    str(_SIBLING_BIRD) if _SIBLING_BIRD.is_dir() else None)
 
 # ── skin TUNABLES (start = the TP values; retune for this rig from stills) ──
 BODY_SCALE = 0.0058          # body/head/tail base mesh scale
