@@ -24,6 +24,9 @@ def test_angles_follow_their_unit():
     disk = parse("tilt: 0.0 rad, pitch: 20 deg", "tilt: 5 deg, pitch: 2 deg, crank_phase: 90 deg").motors.disk
     assert (disk.tilt_rad, disk.pitch_rad, disk.crank_phase_rad) == (rad(5), rad(2), rad(90))
     assert parse("pitch: 20 deg", "pitch: 0.35 rad").motors.disk.pitch_rad == 0.35
+    assert parse("pitch: 20 deg", "pitch: 20deg").motors.disk.pitch_rad == rad(20)  # no space
+    assert parse("initial    = 0.0 rad", "initial    = 10deg").wing.pitch.initial_rad == rad(10)
+    assert parse("crank_phase_lag = 6 deg", "crank_phase_lag = 6deg").motors.crank_phase_lag_rad == rad(6)
     assert parse("tilt: 0.0 rad", "tilt: 5 rad").motors.disk.tilt_rad == 5.0
     pitch = parse("initial    = 0.0 rad", "initial    = 10 deg").wing.pitch
     assert pitch.initial_rad == rad(10)

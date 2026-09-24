@@ -63,7 +63,7 @@ _EDGE_RE = re.compile(
 _TENDON_OVERRIDE_RE = re.compile(r"^([LR]_[A-Za-z0-9_]+_to_[A-Za-z0-9_]+)\s*\{([^}]*)\}\s*$")
 _DRIVE_RE = re.compile(r"^drive\s+M\[(\d+)\]\s+and\s+M\[(\d+)\]\s*$", re.I)
 _ASSIGN_RE = re.compile(r"^(\w+)\s*=\s*(.+)$")
-_DEG_RE = re.compile(r"\bdeg\b", re.I)
+_DEG_RE = re.compile(r"(?<![A-Za-z_])deg\b", re.I)  # `20deg` too: no \b between 0 and d
 
 #: `motors:` keys besides the per-foot `<key>_t<N>` ones. drive_phase_offset is the
 #: old crank_phase_lag.
@@ -320,7 +320,7 @@ class _TgParser:
                     self.i += 1
                 self.disk.update(_parse_brace_dict(text))
                 for k in ("tilt", "pitch", "crank_phase"):
-                    if re.search(rf"\b{k}\s*:[^,}}]*\bdeg\b", text, re.I):
+                    if re.search(rf"\b{k}\s*:[^,}}]*{_DEG_RE.pattern}", text, re.I):
                         self.disk[k] = math.radians(self.disk[k])
                 continue
             drive = _DRIVE_RE.match(line)
