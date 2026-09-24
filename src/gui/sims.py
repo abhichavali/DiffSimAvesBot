@@ -49,7 +49,7 @@ PLOT_CHOICES = (
     "Mean lift per half-cycle",
 )
 SETTLE_PERIODS = 3
-_COMPILE_CACHE: dict[tuple[Path, bool], tuple[Path, int]] = {}
+WINGTIP_SITE = "L_wing_aero_blade_04"
 PLOT_CACHE_DIR = ROOT / ".gui_plot_cache"
 
 
@@ -90,24 +90,82 @@ def coupled_control_path(tg_path: Path) -> Path:
 
 
 def prepare_scene(tg_path: Path, scene_path: Path, *, color_structural_tendons: bool = False) -> Path:
-    """Compile only when the selected morphology changed."""
+    """Point the runtime at this design (env + cache clear) and compile only when the .tg changed."""
     tg_path = tg_path.resolve()
     scene_path = scene_path.resolve()
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     load_design_morphology.cache_clear()
-    stamp = (tg_path, tg_path.stat().st_mtime_ns)
-    key = (scene_path, color_structural_tendons)
     stamp_file = scene_path.with_suffix(scene_path.suffix + (".color.stamp" if color_structural_tendons else ".stamp"))
-    stamp_text = f"{tg_path}\n{stamp[1]}\n{int(color_structural_tendons)}\n"
-    if (
-        _COMPILE_CACHE.get(key) != stamp
-        and (not scene_path.exists() or not stamp_file.exists() or stamp_file.read_text() != stamp_text)
-    ):
+    stamp_text = f"{tg_path}\n{tg_path.stat().st_mtime_ns}\n{int(color_structural_tendons)}\n"
+    if not scene_path.exists() or not stamp_file.exists() or stamp_file.read_text() != stamp_text:
         compile_tg(tg_path, scene_path, color_structural_tendons=color_structural_tendons)
         stamp_file.write_text(stamp_text)
-        _COMPILE_CACHE[key] = stamp
     return scene_path
+
+
+class StrokePlaneSignal:
+    """The learned disk-mount (tilt, pitch) over crank phase that optimize_control
+    --tune-strokeplane saves beside a design as strokeplane_optimized.json."""
+
+    def __init__(self, model: mujoco.MjModel, spec: dict) -> None:
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, spec["phase_ref_joint"])
+        self.orient = DiskOrientation(model)
+        self.qadr = int(model.jnt_qposadr[jid])
+        self.coef = np.asarray(spec["tilt_coeffs"] + spec["pitch_coeffs"], dtype=float)
+        self.tilt0 = float(spec["tilt0_rad"])
+        self.pitch0 = float(spec["pitch0_rad"])
+        self.max_delta = float(spec["max_delta_rad"])
+
+    def angles(self, data: mujoco.MjData) -> tuple[float, float]:
+        th = float(data.qpos[self.qadr])
+        basis = np.array([1.0, math.cos(th), math.sin(th), math.cos(2.0 * th), math.sin(2.0 * th)])
+        mx = self.max_delta
+        return (self.tilt0 + mx * math.tanh(float(self.coef[:5] @ basis) / mx),
+                self.pitch0 + mx * math.tanh(float(self.coef[5:] @ basis) / mx))
+
+
+def settled_drive(tg_path: Path, scene_path: Path, control_path: Path | None, settle_periods: float,
+                  *, strokeplane: bool = False):
+    """Compile, rest and settle a design on the ramped crank drive: the CPU loop behind every plot.
+
+    Returns (model, data, control, aero, step, sp); step() is one physics step of the
+    drive. With ``strokeplane`` a StrokePlaneSignal beside the .tg (sp, else None) is
+    applied every step -- only the phase plots ask for it; work loops and the wing
+    path run the plain drive.
+    """
+    prepare_scene(tg_path, scene_path)
+    morph = load_morphology(tg_path)
+    model = mujoco.MjModel.from_xml_path(str(scene_path))
+    data = mujoco.MjData(model)
+    calibrate_wing_pitch_at_rest(model, data)
+    sync_crank_disks_at_rest(model, data)
+    drive_start = data.time
+
+    control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
+    aero = AeroBladeRuntime(model)
+    pitch = WingPitchLimiter(model, data)
+    actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]
+    sp_file = tg_path.parent / "strokeplane_optimized.json"
+    sp = StrokePlaneSignal(model, json.loads(sp_file.read_text())) if strokeplane and sp_file.exists() else None
+
+    def step() -> None:
+        data.qfrc_applied[:] = 0.0
+        data.ctrl[:] = 0.0
+        aero.apply(model, data)
+        pitch.apply(model, data)
+        ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
+        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
+        for aid in actuator_ids:
+            if aid >= 0:
+                data.ctrl[aid] = base_ctrl
+        if sp is not None:
+            sp.orient.set(*sp.angles(data))
+        mujoco.mj_step(model, data)
+
+    for _ in range(math.ceil(settle_periods * control.period / model.opt.timestep)):
+        step()
+    return model, data, control, aero, step, sp
 
 
 def data_by_phase(
@@ -119,75 +177,18 @@ def data_by_phase(
     settle_periods: float = SETTLE_PERIODS,
 ) -> tuple[list[float], dict[str, list[float]], str, str, str, dict[str, str]]:
     is_mean_lift_plot = plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle")
-    prepare_scene(tg_path, scene_path)
-
-    morph = load_morphology(tg_path)
-    model = mujoco.MjModel.from_xml_path(str(scene_path))
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
-    drive_start = data.time
-
-    control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
+    model, data, control, aero, step, sp_signal = settled_drive(
+        tg_path, scene_path, control_path, settle_periods, strokeplane=True)
     period = control.period
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
-    actuator_ids = {name: get_actuator_id(model, name) for name in ACTUATORS}
-    plot_ids = {name: actuator_ids[name] for name in PLOT_ACTUATORS}
+    plot_ids = {name: get_actuator_id(model, name) for name in PLOT_ACTUATORS}
     tendon_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name) for name in PLOT_ACTUATORS}
     qvel_ids = {}
     for name in PLOT_ACTUATORS:
         prefix, station = name.split("_motor_")
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{station}_disk_hinge")
         qvel_ids[name] = int(model.jnt_dofadr[jid])
-    structural_tendon_ids = [
-        tid
-        for tid in range(model.ntendon)
-        if (name := mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, tid))
-        and name.startswith("L_")
-        and "_motor_" not in name
-    ][:12]
-    structural_tendon_names = [
-        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, tid) for tid in structural_tendon_ids
-    ]
+    structural_tendon_ids, structural_tendon_names = structural_tendons(model)
     tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
-
-    # Optimized designs carry a learned stroke-plane signal (disk-mount tilt/pitch
-    # over crank phase, see optimize_control --tune-strokeplane). When the artifact
-    # sits next to the tg, apply it every step so ALL plots reflect the design.
-    sp_signal = None
-    sp_file = tg_path.parent / "strokeplane_optimized.json"
-    if sp_file.exists():
-        spd = json.loads(sp_file.read_text())
-        _jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, spd["phase_ref_joint"])
-        sp_signal = (DiskOrientation(model), int(model.jnt_qposadr[_jid]),
-                     np.asarray(spd["tilt_coeffs"] + spd["pitch_coeffs"], dtype=float),
-                     float(spd["tilt0_rad"]), float(spd["pitch0_rad"]),
-                     float(spd["max_delta_rad"]))
-
-    def strokeplane_angles() -> tuple[float, float]:
-        _, qadr, coef, tilt0, pitch0, mx = sp_signal
-        th = float(data.qpos[qadr])
-        basis = np.array([1.0, math.cos(th), math.sin(th), math.cos(2.0 * th), math.sin(2.0 * th)])
-        return (tilt0 + mx * math.tanh(float(coef[:5] @ basis) / mx),
-                pitch0 + mx * math.tanh(float(coef[5:] @ basis) / mx))
-
-    def step() -> None:
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
-        ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
-        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
-        for aid in actuator_ids.values():
-            if aid >= 0:
-                data.ctrl[aid] = base_ctrl
-        if sp_signal is not None:
-            sp_signal[0].set(*strokeplane_angles())
-        mujoco.mj_step(model, data)
-
-    for _ in range(math.ceil(settle_periods * period / model.opt.timestep)):
-        step()
 
     x_values: list[float] = []
     is_structural_plot = plot_kind in (
@@ -230,12 +231,7 @@ def data_by_phase(
             ylabel = "Mean lift (mN)"
         elif plot_kind == "Left motor tendon tension vs phase":
             for name, tid in tendon_ids.items():
-                rest_length = float(model.tendon_lengthspring[tid][0])
-                tension = (
-                    float(model.tendon_stiffness[tid]) * (float(data.ten_length[tid]) - rest_length)
-                    + float(model.tendon_damping[tid]) * float(data.ten_velocity[tid])
-                )
-                series[name].append(max(0.0, tension))
+                series[name].append(tendon_tension(model, data, tid, float(model.tendon_lengthspring[tid][0])))
             ylabel = "Motor tendon tension (N)"
         elif plot_kind in ("Angular velocity vs phase", "Angular velocity vs time"):
             for name, dof in qvel_ids.items():
@@ -243,12 +239,7 @@ def data_by_phase(
             ylabel = "|Angular velocity| (rad/s)"
         elif plot_kind == "Structural tendon tension vs phase":
             for name, tid in zip(structural_tendon_names, structural_tendon_ids):
-                rest_length = float(model.tendon_range[tid][1])
-                tension = (
-                    float(model.tendon_stiffness[tid]) * (float(data.ten_length[tid]) - rest_length)
-                    + float(model.tendon_damping[tid]) * float(data.ten_velocity[tid])
-                )
-                series[name].append(max(0.0, tension))
+                series[name].append(tendon_tension(model, data, tid, float(model.tendon_range[tid][1])))
             ylabel = "Structural tendon tension (N)"
         elif plot_kind == "Structural tendon displacement vs phase":
             for name, tid in zip(structural_tendon_names, structural_tendon_ids):
@@ -265,8 +256,8 @@ def data_by_phase(
             ylabel = "Elastic energy (J)"
         elif is_strokeplane:
             if sp_signal is not None:
-                tilt, pitv = strokeplane_angles()
-                dev_t, dev_p = tilt - sp_signal[3], pitv - sp_signal[4]
+                tilt, pitv = sp_signal.angles(data)
+                dev_t, dev_p = tilt - sp_signal.tilt0, pitv - sp_signal.pitch0
             else:  # no learned signal next to this design: flat zero deviation
                 dev_t = dev_p = 0.0
             series["tilt"].append(math.degrees(dev_t))
@@ -359,39 +350,13 @@ def work_loop_data(
     control_path: Path | None = None,
     settle_periods: float = SETTLE_PERIODS,
 ) -> dict[str, object]:
-    prepare_scene(tg_path, scene_path)
-
-    morph = load_morphology(tg_path)
-    model = mujoco.MjModel.from_xml_path(str(scene_path))
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
-    drive_start = data.time
-
-    control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
-    actuator_ids = {name: get_actuator_id(model, name) for name in ACTUATORS}
+    model, data, control, _aero, step, _sp = settled_drive(tg_path, scene_path, control_path, settle_periods)
+    actuator_ids = {name: get_actuator_id(model, name) for name in PLOT_ACTUATORS}
     motor_tendon_ids = {
         name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name)
         for name in PLOT_ACTUATORS
     }
     structural_ids, structural_names = structural_tendons(model)
-
-    def step() -> None:
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
-        ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
-        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
-        for aid in actuator_ids.values():
-            if aid >= 0:
-                data.ctrl[aid] = base_ctrl
-        mujoco.mj_step(model, data)
-
-    for _ in range(math.ceil(settle_periods * control.period / model.opt.timestep)):
-        step()
 
     shaft_loops = {
         "Downstroke motor (orange)": {"x": [], "y": [], "color": "#ff7f0e"},
@@ -460,8 +425,6 @@ def work_loop_data(
     }
 
 
-WINGTIP_SITE = "L_wing_aero_blade_04"
-
 
 def wing_path_data(
     tg_path: Path,
@@ -471,37 +434,10 @@ def wing_path_data(
     settle_periods: float = SETTLE_PERIODS,
 ) -> dict[str, list[float]]:
     """Record the wingtip site's 3D world trajectory (mm) over `periods` cycles."""
-    prepare_scene(tg_path, scene_path)
-
-    morph = load_morphology(tg_path)
-    model = mujoco.MjModel.from_xml_path(str(scene_path))
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
-    drive_start = data.time
-
-    control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
-    actuator_ids = {name: get_actuator_id(model, name) for name in ACTUATORS}
+    model, data, control, _aero, step, _sp = settled_drive(tg_path, scene_path, control_path, settle_periods)
     tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
     if tip_id < 0:
         raise ValueError(f"Missing wingtip site: {WINGTIP_SITE}")
-
-    def step() -> None:
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
-        ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
-        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
-        for aid in actuator_ids.values():
-            if aid >= 0:
-                data.ctrl[aid] = base_ctrl
-        mujoco.mj_step(model, data)
-
-    for _ in range(math.ceil(settle_periods * control.period / model.opt.timestep)):
-        step()
 
     path: dict[str, list[float]] = {"phase": [], "x": [], "y": [], "z": []}
     start_time = data.time
