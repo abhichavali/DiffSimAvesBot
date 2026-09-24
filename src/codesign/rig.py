@@ -26,8 +26,12 @@ from runtime.sim import rest_state
 
 ROOT = Path(__file__).resolve().parents[2]
 INTEGRATORS = {"euler": 0, "rk4": 1, "implicit": 2, "implicitfast": 3}
-WINGTIP_SITES = ("L_wing_aero_blade_04", "R_wing_aero_blade_04")  # L/R tip, full 3D stroke
 DISK_BODIES = ("L_t1_disk", "L_t4_disk", "R_t1_disk", "R_t4_disk")
+
+
+def wingtip_sites(morph) -> tuple[str, str]:
+    """The L/R outermost aero blade sites: the wing tips, whose 3D path is the stroke."""
+    return tuple(f"{s}_wing_aero_blade_{morph.wing.aero.blades:02d}" for s in "LR")
 
 
 class Rig(NamedTuple):
@@ -75,8 +79,9 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     drive = rollout.build_drive_config(model, morph, control, ramp_duration=0.0)
     pitch = wing_pitch.build_wing_pitch_config(model, morph, data)
     aero = aero_runtime.build_aero_config(model, morph, substep=aero_substep)
-    tip_ids = jnp.asarray([mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, s)
-                           for s in WINGTIP_SITES], dtype=jnp.int32)
+    tip_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, s) for s in wingtip_sites(morph)]
+    assert min(tip_ids) >= 0, f"wingtip sites {wingtip_sites(morph)} missing from the model"
+    tip_ids = jnp.asarray(tip_ids, dtype=jnp.int32)
     return Rig(model, mjx.put_model(model), mjx.put_data(model, data), control, drive, pitch,
                aero, tip_ids, structural_tendon_pairs(model, individual=not lock_wings),
                motor_tendon_ids(model), morph)

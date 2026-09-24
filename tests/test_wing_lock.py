@@ -21,7 +21,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from codesign.rig import ROOT, WINGTIP_SITES, lr_tendon_pairs, setup
+from codesign.rig import ROOT, lr_tendon_pairs, setup, wingtip_sites
 from runtime.sim import PlateWingSim
 
 TG = ROOT / "designs" / "hummer" / "hover-soft-it009p" / "shoulder.tg"
@@ -38,7 +38,7 @@ def roll(model, morph, control, cycles=CYCLES):
     """Drive the shared crank command with aero+pitch live; return per-wing traces."""
     sim = PlateWingSim(model, morph, aero_substep=4)
     data, aids = sim.data, sim.crank_ids
-    tips = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, s) for s in WINGTIP_SITES]
+    tips = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, s) for s in wingtip_sites(morph)]
     a0, a, b = control.a0, np.asarray(control.a), np.asarray(control.b)
     harm = np.arange(1, len(a) + 1)
     omega = control.omega

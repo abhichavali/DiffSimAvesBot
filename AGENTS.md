@@ -134,8 +134,7 @@ CPU path is unchanged and is the reference the port is validated against.
 - Morphology: `_park_length` ignores pitch; degree-conversion heuristics; unknown `.tg`
   keys are silently accepted; the R fixed strut keeps the L site quats; the
   `attach_along_edge` default is 1.2 in one place and 0.0 in another.
-- Wingtip site `*_aero_blade_04` is hard-coded (GUI, demos, codesign), wrong when
-  `blades != 4`.
+- Wingtip site `*_aero_blade_04` is hard-coded (GUI, demos), wrong when `blades != 4`.
 - GUI: the angular-velocity plot's xlim leaves it blank; tension uses the range max
   instead of the spring length; Cmd-U recaptures A and B; the plot-cache key ignores
   physics code; Stop does not stop a diff-sim chain; `run_gui`'s `RunConfig.loss` is never
