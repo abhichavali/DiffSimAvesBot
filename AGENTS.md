@@ -103,7 +103,10 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
 - **Aero** follows the mounted wing mesh (strips, per-strip hinge offset, root offset come
   from `wing_geometry.py`); lift follows the chordwise flow whichever edge leads; aero is
   recomputed every `aero_substep` (default 4) steps and its generalized force held in
-  between, identically on CPU and MJX. Keep the CPU (`runtime/aero.py`) and MJX
+  between: CPU `PlateWingSim`, the codesign MJX rollout and `run_mjx_fixed_frequency`
+  hold the same way. MJX's `build_aero_config(substep=)` only sizes the added-mass
+  finite-difference window; the hold is the caller's, and `rollout.simulate` and
+  `opt/hover_policy.py` recompute every step. Keep the CPU (`runtime/aero.py`) and MJX
   (`runtime/mjx/aero.py`) implementations consistent: change both or neither.
 - Do not hand-edit a compiled `scene.xml`; edit the `.tg` and recompile.
 - Commits: one change per commit, imperative subject in the repo's style (`git log`).

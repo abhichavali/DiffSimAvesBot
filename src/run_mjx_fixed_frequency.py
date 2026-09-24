@@ -2,8 +2,9 @@
 
     uv run python src/run_mjx_fixed_frequency.py [--tg designs/hummer/hover/shoulder.tg] [--periods 5]
 
-Same default design, warmup ramp, windows and printout as the CPU runner, so the two
-printouts differ only by CPU vs MJX.
+Same default design, warmup ramp, windows, aero cadence (recompute every
+DEFAULT_AERO_SUBSTEP steps, hold in between) and printout as the CPU runner, so the
+two printouts differ only by CPU vs MJX.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from design_paths import DEFAULT_HUMMER_TG
 from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from run_fixed_frequency import print_lift_stats
+from runtime.aero import DEFAULT_AERO_SUBSTEP
 from runtime.control_signal import load_control_for_morphology
 from runtime.mjx import aero_runtime, rollout, wing_pitch
 from runtime.sim import rest_state
@@ -47,24 +49,33 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
     dx = mjx.put_data(model, data)
     drive = rollout.build_drive_config(model, morph, control, ramp_duration=warmup_periods * period)
     pitch = wing_pitch.build_wing_pitch_config(model, morph, data)
-    aero = aero_runtime.build_aero_config(model, morph)
+    substep = DEFAULT_AERO_SUBSTEP
+    aero = aero_runtime.build_aero_config(model, morph, substep=substep)
 
     def step(carry, record):
-        d, state = carry
+        d, state, qfrc, lift, i = carry
 
         def aero_qfrc(dd):
-            qfrc, net_force_world, new_state, _, _ = aero_runtime.aero_wrench(mx, dd, aero, state)
-            return qfrc, (net_force_world[2], new_state)
+            # Recompute every `substep` steps and hold the force (and its lift) in
+            # between, as PlateWingSim does.
+            def recompute(_):
+                q, net_force_world, new_state, _, _ = aero_runtime.aero_wrench(mx, dd, aero, state)
+                return q, net_force_world[2], new_state
 
-        d, (lift, state) = rollout.physics_step(mx, d, rollout.drive_ctrl(d.ctrl, d.time, drive), pitch, aero_qfrc)
-        return (d, state), jnp.where(record, lift, 0.0)
+            q, l, s = jax.lax.cond(i % substep == 0, recompute, lambda _: (qfrc, lift, state), None)
+            return q, (q, l, s)
+
+        d, (qfrc, lift, state) = rollout.physics_step(
+            mx, d, rollout.drive_ctrl(d.ctrl, d.time, drive), pitch, aero_qfrc)
+        return (d, state, qfrc, lift, i + 1), jnp.where(record, lift, 0.0)
 
     def scan(carry):
         records = jnp.concatenate([jnp.zeros(warmup_steps, dtype=bool), jnp.ones(sample_steps, dtype=bool)])
         return jax.lax.scan(step, carry, records)
 
-    carry0 = (dx, aero_runtime.init_aero_state(aero))
-    (_final, _state), lifts_all = jax.jit(scan)(carry0)
+    carry0 = (dx, aero_runtime.init_aero_state(aero), jnp.zeros_like(dx.qvel), jnp.zeros((), dx.qvel.dtype),
+              jnp.int32(0))
+    _, lifts_all = jax.jit(scan)(carry0)
     print_lift_stats(control, periods, np.asarray(lifts_all[warmup_steps:]))
 
 
