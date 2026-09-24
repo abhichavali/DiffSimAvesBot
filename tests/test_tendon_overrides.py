@@ -1,23 +1,28 @@
-"""Per-tendon material overrides: color / pretension / stiffness.
+"""Tendon materials and overrides, the motor tendons' wiring, and the inset motor anchor.
 
 Run: uv run pytest -q tests/test_tendon_overrides.py
-Covers the new logic units without a full mesh-dependent compile.
+These stop at emit_mjcf (no probe), so they are quick.
 """
 
 import math
-import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from morphology.mjcf_parts import color_to_rgba
 from morphology.compile import compile_morphology
 from morphology.emit_mjcf import emit_mjcf
+from morphology.mjcf_parts import color_to_rgba
 from morphology.model import TendonDefaults, TendonMaterial, TendonNet
 from morphology.tendon_net import resolve_material_props
 from morphology.tg_parser import _parse_brace_dict, _parse_material_dict, load_morphology
 
+BASELINE = Path(__file__).resolve().parents[1] / "designs" / "hummer" / "legacy-baseline" / "shoulder.tg"
 
-def testcolor_to_rgba():
+
+def emitted(tg: Path) -> ET.Element:
+    return ET.fromstring(emit_mjcf(compile_morphology(load_morphology(tg))))
+
+
+def test_color_to_rgba():
     assert color_to_rgba("1 0 0 1") == "1 0 0 1"        # rgba passthrough
     assert color_to_rgba("0.5 0.5 0.5") == "0.5 0.5 0.5 1"  # alpha padded
     assert color_to_rgba("00ff00") == "0.0 1.0 0.0 1"   # 6-digit hex (no '#')
@@ -42,69 +47,51 @@ def test_resolve_falls_back_to_defaults():
 
 
 def test_motor_tendon_rest_length():
-    morph = load_morphology(Path(__file__).resolve().parents[1] / "designs" / "hummer" / "legacy-baseline" / "shoulder.tg")
+    morph = load_morphology(BASELINE)
     assert morph.motors.tendon_rest_length == 0.053
     assert morph.motors.crank_phase_lag_rad == math.radians(180)
     assert [foot.station for foot in morph.motors.feet] == [1, 4]
 
 
-def test_motor_tendon_rest_length_foot_override(tmp_path=None):
-    baseline = Path(__file__).resolve().parents[1] / "designs" / "hummer" / "legacy-baseline" / "shoulder.tg"
-    text = baseline.read_text()
-    if "tendon_rest_length_t1" in text:
-        text = "\n".join(
-            "    tendon_rest_length_t1 = 47.7 mm" if "tendon_rest_length_t1" in line else line
-            for line in text.splitlines()
-        ) + "\n"
-    else:
-        text = text.replace(
-            "    tendon_rest_length = 53 mm\n",
-            "    tendon_rest_length = 53 mm\n    tendon_rest_length_t1 = 47.7 mm\n",
-        )
-    if tmp_path is None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "shoulder.tg"
-            path.write_text(text)
-            morph = load_morphology(path)
-    else:
-        path = tmp_path / "shoulder.tg"
-        path.write_text(text)
-        morph = load_morphology(path)
-
+def test_motor_tendon_rest_length_foot_override(tmp_path):
+    path = tmp_path / "shoulder.tg"
+    path.write_text("\n".join(
+        "    tendon_rest_length_t1 = 47.7 mm" if "tendon_rest_length_t1" in line else line
+        for line in BASELINE.read_text().splitlines()
+    ) + "\n")
+    morph = load_morphology(path)
     assert morph.motors.tendon_rest_length == 0.053
     assert math.isclose(morph.motors.feet[0].tendon_rest_length, 0.0477)
     assert morph.motors.feet[1].tendon_rest_length is None
 
 
 def test_motor_tendons_are_crossed():
-    morph = load_morphology(Path(__file__).resolve().parents[1] / "designs" / "hummer" / "legacy-baseline" / "shoulder.tg")
-    root = ET.fromstring(emit_mjcf(compile_morphology(morph)))
-    tendons = {el.attrib["name"]: [site.attrib["site"] for site in el] for el in root.find("tendon")}
+    tendons = {el.attrib["name"]: [site.attrib["site"] for site in el] for el in emitted(BASELINE).find("tendon")}
     assert tendons["L_motor_t1"] == ["L_part_1_motor_t4", "crank_disks_L_t1"]
     assert tendons["L_motor_t4"] == ["L_part_1_motor_t1", "crank_disks_L_t4"]
 
 
-def test_individual_structural_tendon_override(tmp_path=None):
-    baseline = Path(__file__).resolve().parents[1] / "designs" / "hummer" / "legacy-baseline" / "shoulder.tg"
-    text = baseline.read_text().replace(
+def test_individual_structural_tendon_override(tmp_path):
+    path = tmp_path / "shoulder.tg"
+    path.write_text(BASELINE.read_text().replace(
         "motors:\n",
         "    overrides:\n"
         "        L_t1_to_t1_2 { stiffness: 123, pretension: 0.7 }\n"
         "        R_t1_to_t1_2 { stiffness: 456, pretension: 0.9 }\n"
         "motors:\n",
         1,
-    )
-    if tmp_path is None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "shoulder.tg"
-            path.write_text(text)
-            morph = load_morphology(path)
-    else:
-        path = tmp_path / "shoulder.tg"
-        path.write_text(text)
-        morph = load_morphology(path)
-    root = ET.fromstring(emit_mjcf(compile_morphology(morph)))
-    tendons = {el.attrib["name"]: el.attrib for el in root.find("tendon")}
+    ))
+    tendons = {el.attrib["name"]: el.attrib for el in emitted(path).find("tendon")}
     assert tendons["L_t1_to_t1_2"]["stiffness"] == "123.0"
     assert tendons["R_t1_to_t1_2"]["stiffness"] == "456.0"
 
+
+def test_inset_motor_anchor_is_bridged_by_a_rod(tmp_path):
+    path = tmp_path / "shoulder.tg"
+    path.write_text(BASELINE.read_text().replace("attach_radius = 1.0", "attach_radius = 0.5", 1))
+    root = emitted(path)
+    for side in "LR":
+        strut = root.find(f".//body[@name='{side}_part_1']")
+        assert [g.get("name") for g in strut.iter("geom") if "motor_rod" in g.get("name", "")] == [
+            f"{side}_part_1_motor_rod_0", f"{side}_part_1_motor_rod_1"]
+        assert strut.find(f"site[@name='{side}_part_1_motor_t1']") is not None
