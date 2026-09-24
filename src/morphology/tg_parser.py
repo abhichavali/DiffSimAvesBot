@@ -42,7 +42,7 @@ from morphology.model import (
     WingPitch,
     World,
 )
-from morphology.symmetry import SemanticAnchor, canonical_edge_id
+from morphology.tendon_net import SemanticAnchor, canonical_edge_id
 
 _ANCHOR_RE = re.compile(r"^([MF])\[(\d+)([AB])\]$")
 _EDGE_RE = re.compile(

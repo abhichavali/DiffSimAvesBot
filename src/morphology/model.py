@@ -33,11 +33,6 @@ class ArcPlane(str, Enum):
     YZ = "YZ"  # fixed strut: arc in y–z, width along x
 
 
-class StrutSide(str, Enum):
-    MOBILE = "M"
-    FIXED = "F"
-
-
 class Face(str, Enum):
     A = "A"
     B = "B"

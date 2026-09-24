@@ -8,11 +8,10 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-from morphology.compiled import CompiledMorphology, CompiledShoulder
+from morphology.compiled import CompiledDisk, CompiledMorphology, CompiledShoulder
+from morphology.geometry import mirror_quat, world_node
 from morphology.motor_tendons import MotorTendonRange
-from morphology.geometry import world_node
-from morphology.symmetry import mirror_quat_wxyz, resolve_material_props
-from morphology.tendons import anchor_node_name, edge_topology_key, legacy_edge_name
+from morphology.tendon_net import anchor_node_name, resolve_material_props
 
 MATPLOTLIB_BLUE_RGBA = "0.12156862745098039 0.4666666666666667 0.7058823529411765 1"
 MATPLOTLIB_ORANGE_RGBA = "1.0 0.4980392156862745 0.054901960784313725 1"
@@ -574,7 +573,7 @@ def _emit_bone_wing(parent: ET.Element, shoulder: CompiledShoulder, morph,
     b_wrist_manus_quat = shoulder.wrist.manus_quat if shoulder.wrist else None
     quat = b.mount_quat()
     if prefix == "R":
-        quat = mirror_quat_wxyz(quat)
+        quat = mirror_quat(quat)
     twist_axis = "0 0 1" if prefix == "L" else "0 0 -1"
     # Feather vanes are the one thing here with an offset off the y=0 plane, so
     # they are also the one thing that has to mirror explicitly (p_R = M p_L).
@@ -792,14 +791,14 @@ def _site(parent, body_name, node_name, pos, quat=None):
     ET.SubElement(parent, "site", **attrs)
 
 
-def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], morph) -> None:
+def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: CompiledDisk, morph) -> None:
     spec = morph.motors.disk
     disk_rgba = MATPLOTLIB_BLUE_RGBA if disk_name.endswith("_t1") else MATPLOTLIB_ORANGE_RGBA
     pillar = ET.SubElement(
         parent,
         "body",
         name=f"{disk_name}_pillar",
-        pos=_vec3(disk["pillar_pos"]),
+        pos=_vec3(disk.pillar_pos),
     )
     ET.SubElement(
         pillar,
@@ -820,7 +819,7 @@ def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], m
         conaffinity="0",
         group="2",
     )
-    euler = disk["euler"]
+    euler = disk.euler
     disk_body = ET.SubElement(
         pillar,
         "body",
@@ -855,7 +854,7 @@ def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], m
         conaffinity="0",
         group="2",
     )
-    rim = disk["rim_pos"]
+    rim = disk.rim_pos
     # If the tendon pin sits past the disk rim (crank_throw > radius), draw a rigid
     # crank arm from the hinge axis out to the pin so the lever is physical.
     pin_r = float(np.linalg.norm(rim[:2]))
@@ -878,7 +877,7 @@ def _emit_crank_disk(parent: ET.Element, disk_name: str, disk: Dict[str, Any], m
         name=f"crank_disks_{disk_name}",
         pos=_vec3(rim),
         size="0.002",
-        rgba=disk["rim_rgba"],
+        rgba=disk.rim_rgba,
         group="3",
     )
     cables = morph.wing.bones.cables if morph.wing.bones else None
@@ -977,12 +976,9 @@ def _add_wrist_tendons(tendon_el, shoulder: CompiledShoulder, morph,
     w = morph.wing.bones.wrist
     prefix = shoulder.side
     wrist = shoulder.wrist
-    for index, edge in enumerate(wrist.structural_edges):
-        ma = edge.anchor_a if edge.anchor_a.side == "M" else edge.anchor_b
-        fa = edge.anchor_b if edge.anchor_a.side == "M" else edge.anchor_a
-        m_node = anchor_node_name(ma)
-        f_node = anchor_node_name(fa)
-        length = wrist.tendon_lengths[edge_topology_key(edge)]
+    for index, (edge, length) in enumerate(zip(wrist.structural_edges, wrist.tendon_lengths)):
+        m_node = anchor_node_name(edge.mobile)
+        f_node = anchor_node_name(edge.fixed)
         attrs = {
             "name": f"{prefix}_wrist_{m_node}_to_{f_node}",
             "class": "string",
@@ -1010,13 +1006,10 @@ def _add_tendons(
 
     for shoulder in compiled.shoulders:
         prefix = shoulder.side
-        for index, edge in enumerate(shoulder.structural_edges):
-            ma = edge.anchor_a if edge.anchor_a.side == "M" else edge.anchor_b
-            fa = edge.anchor_b if edge.anchor_a.side == "M" else edge.anchor_a
-            m_node = anchor_node_name(ma)
-            f_node = anchor_node_name(fa)
-            name = legacy_edge_name(prefix, m_node, f_node)
-            length = shoulder.tendon_lengths[edge_topology_key(edge)]
+        for index, (edge, length) in enumerate(zip(shoulder.structural_edges, shoulder.tendon_lengths)):
+            m_node = anchor_node_name(edge.mobile)
+            f_node = anchor_node_name(edge.fixed)
+            name = f"{prefix}_{m_node}_to_{f_node}"
             stiff, damp, pret, color = resolve_material_props(morph.tendons, edge)
             if name in morph.tendons.individual_overrides:
                 mat = morph.tendons.individual_overrides[name]
@@ -1086,8 +1079,8 @@ def derive_motor_length(
     foot_world = world_node(m_node, shoulder.mobile_pos, shoulder.mobile_quat)
     disk_name = f"{shoulder.side}_t{station}"
     disk = shoulder.disks[disk_name]
-    pillar = np.array(disk["pillar_pos"], dtype=float)
-    rim = np.array(disk["rim_pos"], dtype=float)
+    pillar = np.array(disk.pillar_pos, dtype=float)
+    rim = np.array(disk.rim_pos, dtype=float)
     tilt = morph.motors.disk.tilt_rad if shoulder.side == "L" else -morph.motors.disk.tilt_rad
     # ponytail: rest-length ignores disk pitch_rad (orbit pitch about Y). Only sets the
     # un-driven park length; pitch is mirror-symmetric so L/R stay balanced (sync +1.00,

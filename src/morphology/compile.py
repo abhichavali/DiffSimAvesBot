@@ -1,143 +1,88 @@
-"""Main morphology compiler pipeline."""
+"""The morphology compiler: Morphology -> CompiledMorphology -> MJCF string.
+
+compile_morphology derives the left shoulder (strut pair, rest poses, motor
+anchors, the 12 posed structural tendons, crank disks and, for the eagle, the
+wrist tensegrity) and y-mirrors it into the right one. compile_to_mjcf emits a
+probe scene, measures the motor tendons on it, and emits the final scene.
+"""
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import math
-from typing import Any, Dict, Tuple
+from typing import Dict
 
 import numpy as np
 
-from morphology.compiled import CompiledMorphology, CompiledShoulder, CompiledWrist
+from morphology.compiled import CompiledDisk, CompiledMorphology, CompiledShoulder, CompiledWrist
 from morphology.emit_mjcf import emit_mjcf
 from morphology.geometry import (
-    ArcPlane,
-    apply_scale_to_strut,
-    build_strut_geometry,
+    StrutGeometry,
     compose,
     compute_body_poses,
-    derive_arc_center,
-    derive_center_of_pressure,
     derive_disk_pillar_pos,
     derive_disk_rim_local,
-    derive_fixed_width_axis_offset,
-    fixed_body_orientation,
-    mobile_body_orientation,
+    mirror_quat,
+    mirror_y,
     motor_anchor_node,
     quat_from_axis_angle,
     quat_mul,
     quat_rotate,
-    scaled_rod,
-    WingSpec,
+    strut_pair,
+    strut_quat,
     world_node,
 )
-from morphology.model import Arrange, Face, Morphology, TendonGenerator
+from morphology.model import Morphology
 from morphology.motor_tendons import measure_motor_tendon_ranges
-from morphology.symmetry import StructuralEdge, expand_sigma_tendons
-from morphology.tendons import (
-    SHOULDER_GENERATORS,
-    anchor_node_name,
-    derive_tendon_length,
-    edge_topology_key,
-)
+from morphology.tendon_net import derive_tendon_length, expand_sigma_tendons
+
+_IDENTITY_QUAT = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
 
 
 def compile_morphology(morph: Morphology) -> CompiledMorphology:
     morph.validate()
-    scale = morph.world.scale
-
-    radius = morph.arc.radius
-    width = morph.arc.width
-    stations = morph.arc.stations_deg
-
-    mobile_center = derive_arc_center(radius, stations, ArcPlane.XZ)
-    fixed_center = derive_arc_center(
-        radius,
-        stations,
-        ArcPlane.YZ,
-        mobile_center_x=mobile_center[0],
-    )
-    fixed_x = derive_fixed_width_axis_offset(mobile_center[0], morph.arrange)
-
-    mobile_geom = build_strut_geometry(
-        radius, width, stations, ArcPlane.XZ, center=mobile_center
-    )
-    fixed_geom = build_strut_geometry(
-        radius,
-        width,
-        stations,
-        ArcPlane.YZ,
-        center=fixed_center,
-        width_axis_offset=fixed_x,
-    )
-
-    mobile_geom = apply_scale_to_strut(mobile_geom, scale)
-    fixed_geom = apply_scale_to_strut(fixed_geom, scale)
-
-    arc_r, arc_m = scaled_rod(morph.arc.arc_rod.radius, morph.arc.arc_rod.mass, scale)
-    rung_r, rung_m = scaled_rod(morph.arc.rung_rod.radius, morph.arc.rung_rod.mass, scale)
-    mobile_geom.arc_rod = (arc_r, arc_m)
-    mobile_geom.rung_rod = (rung_r, rung_m)
-    fixed_geom.arc_rod = (arc_r, arc_m)
-    fixed_geom.rung_rod = (rung_r, rung_m)
-
+    arc = morph.arc
+    mobile_geom, fixed_geom = strut_pair(arc.radius, arc.width, arc.stations_deg, morph.arrange.inplane_offset,
+                                         morph.world.scale, arc.arc_rod, arc.rung_rod)
     mobile_pos, mobile_quat, fixed_pos, fixed_quat = compute_body_poses(morph)
 
-    motor_nodes: Dict[str, np.ndarray] = {}
     for foot in morph.motors.feet:
         name, point, edge_point = motor_anchor_node(
             foot.station, foot.attach_along_edge_rad, mobile_geom, foot.attach_radius
         )
-        motor_nodes[name] = point
         mobile_geom.nodes[name] = point
-        if name in mobile_geom.site_quats:
-            del mobile_geom.site_quats[name]
-        src = mobile_geom.site_quats.get(f"t{foot.station}", np.array([0.707107, 0.707107, 0.0, 0.0]))
-        mobile_geom.site_quats[name] = src
+        mobile_geom.site_quats[name] = mobile_geom.site_quats[f"t{foot.station}"]
         if edge_point is not None:
             edge_name = f"mrod_t{foot.station}"
             mobile_geom.nodes[edge_name] = edge_point
             mobile_geom.motor_rod_pairs.append((edge_name, name))
 
     edges = expand_sigma_tendons(morph.tendons)
-    tendon_lengths: Dict[str, float] = {}
-    for edge in edges:
-        length = derive_tendon_length(
-            edge, mobile_geom, fixed_geom, mobile_pos, mobile_quat, fixed_pos, fixed_quat
-        )
-        key = edge_topology_key(edge)
-        tendon_lengths[key] = length
-
-    disks = _compile_disks(morph, mobile_geom, mobile_pos, mobile_quat)
-
-    wrist = _compile_wrist(morph, mobile_geom, mobile_pos, mobile_quat)
-
     left = CompiledShoulder(
         side="L",
-        mobile_body="L_part_1",
-        fixed_body="L_part_2",
         mobile_pos=mobile_pos,
         mobile_quat=mobile_quat,
         fixed_pos=fixed_pos,
         fixed_quat=fixed_quat,
         mobile_geom=mobile_geom,
         fixed_geom=fixed_geom,
-        motor_nodes=motor_nodes,
         structural_edges=edges,
-        tendon_lengths=tendon_lengths,
-        disks=disks,
-        wrist=wrist,
+        tendon_lengths=[
+            derive_tendon_length(e, mobile_geom, fixed_geom, mobile_pos, mobile_quat, fixed_pos, fixed_quat)
+            for e in edges
+        ],
+        disks=_compile_disks(morph, mobile_geom, mobile_pos, mobile_quat),
+        wrist=_compile_wrist(morph, mobile_geom, mobile_pos, mobile_quat),
     )
-    right = _mirror_shoulder(left, morph)
-    wing_cop = derive_center_of_pressure(
-        WingSpec(rod_length=morph.wing.rod_length * scale, mount_arm=morph.wing.mount_arm * scale)
-    )
+    return CompiledMorphology(morph=morph, shoulders=(left, _mirror_shoulder(left, morph)))
 
-    return CompiledMorphology(
-        morph=morph,
-        shoulders=(left, right),
-        wing_cop_local=wing_cop,
-    )
+
+def compile_to_mjcf(morph: Morphology, *, color_structural_tendons: bool = False) -> str:
+    compiled = compile_morphology(morph)
+    motor_ranges = measure_motor_tendon_ranges(emit_mjcf(compiled), morph)
+    return emit_mjcf(compiled, motor_tendon_ranges=motor_ranges,
+                     color_structural_tendons=color_structural_tendons)
 
 
 def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
@@ -157,31 +102,12 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
     if bones is None or bones.wrist is None:
         return None
     w = bones.wrist
-    scale = morph.world.scale
-
-    radius = morph.arc.radius * w.scale
-    arrange = Arrange(
-        gap=w.gap / scale,  # apply_scale_to_strut shrinks the pair afterwards
-        angle_deg=0.0,
-        mobile_dx=0.0,
-        # Same proportion of the arc radius the shoulder uses, so the two struts
-        # nest the same way at any size.
-        inplane_offset=morph.arrange.inplane_offset * w.scale,
+    # Same proportion of the arc radius the shoulder uses for the in-plane
+    # offset, so the two struts nest the same way at any size.
+    distal_geom, proximal_geom = strut_pair(
+        morph.arc.radius * w.scale, w.width, w.stations_deg, morph.arrange.inplane_offset * w.scale,
+        morph.world.scale, w.arc_rod, w.rung_rod,
     )
-    mob_center = derive_arc_center(radius, w.stations_deg, ArcPlane.XZ)
-    fix_center = derive_arc_center(radius, w.stations_deg, ArcPlane.YZ,
-                                   mobile_center_x=mob_center[0])
-    fix_x = derive_fixed_width_axis_offset(mob_center[0], arrange)
-
-    distal_geom = build_strut_geometry(radius, w.width, w.stations_deg, ArcPlane.XZ,
-                                       center=mob_center)
-    proximal_geom = build_strut_geometry(radius, w.width, w.stations_deg, ArcPlane.YZ,
-                                         center=fix_center, width_axis_offset=fix_x)
-    distal_geom = apply_scale_to_strut(distal_geom, scale)
-    proximal_geom = apply_scale_to_strut(proximal_geom, scale)
-    for geom in (distal_geom, proximal_geom):
-        geom.arc_rod = scaled_rod(w.arc_rod.radius, w.arc_rod.mass, scale)
-        geom.rung_rod = scaled_rod(w.rung_rod.radius, w.rung_rod.mass, scale)
 
     # Canonical placement, mirroring compute_body_poses: the two struts are
     # separated along +y, distal (mobile) inboard of proximal (fixed) by `gap`.
@@ -189,8 +115,8 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
     # ulna's -z, so the distal strut lands OUTBOARD of the proximal one.
     carry = quat_from_axis_angle(np.array([1.0, 0.0, 0.0]), -math.pi / 2.0)
 
-    prox_quat = quat_mul(carry, fixed_body_orientation())
-    dist_quat_rel = quat_mul(carry, mobile_body_orientation())
+    prox_quat = quat_mul(carry, strut_quat())
+    dist_quat_rel = quat_mul(carry, strut_quat())
 
     # Forward kinematics to the ulna's distal end at qpos = 0.
     hum_pos, hum_quat = compose(mobile_pos, mobile_quat,
@@ -220,23 +146,16 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
                                                   dist_body, dist_quat_rel)
 
     edges = expand_sigma_tendons(morph.tendons)
-    lengths: Dict[str, float] = {}
-    for edge in edges:
-        lengths[edge_topology_key(edge)] = derive_tendon_length(
-            edge, distal_geom, proximal_geom,
-            distal_pos_world, distal_quat_world,
-            proximal_pos_world, proximal_quat_world,
-        )
+    lengths = [
+        derive_tendon_length(e, distal_geom, proximal_geom, distal_pos_world, distal_quat_world,
+                             proximal_pos_world, proximal_quat_world)
+        for e in edges
+    ]
 
-    # The hand starts AT the distal strut, so the joint bridges a real gap: ulna
-    # ends, tensegrity, hand begins. Hanging the manus back at the forearm's tip
-    # instead (which keeps the planform identical) buries the strut pair inside
-    # the hand, and then the joint reads as a cage lying on the feathers rather
-    # than as the thing holding them on.
-    # The hand starts exactly one gap outboard of the forearm's tip, stated
-    # directly rather than inferred from the distal strut's arc — centring the
-    # pair moves that arc, and hanging the manus off it once put the hand INBOARD
-    # of the joint it is supposed to be distal to.
+    # The hand starts exactly one gap outboard of the forearm's tip, so the joint
+    # bridges a real gap: ulna ends, tensegrity, hand begins. Hanging the manus
+    # back at the forearm's tip buries the strut pair inside the hand, and hanging
+    # it off the distal strut's arc once put the hand INBOARD of its own joint.
     inv_distal = np.array([distal_quat_world[0], *(-distal_quat_world[1:])])
     hand_world = tip_pos + quat_rotate(tip_quat, np.array([0.0, 0.0, w.gap]))
     manus_pos = quat_rotate(inv_distal, hand_world - distal_pos_world)
@@ -257,153 +176,85 @@ def _compile_wrist(morph: Morphology, mobile_geom, mobile_pos, mobile_quat):
     )
 
 
-_IDENTITY_QUAT = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-
-
-def _compile_disks(
-    morph: Morphology,
-    mobile_geom,
-    mobile_pos: np.ndarray,
-    mobile_quat: np.ndarray,
-) -> Dict[str, Dict[str, Any]]:
-    disks: Dict[str, Dict[str, Any]] = {}
-    foot_worlds: Dict[int, np.ndarray] = {}
-    for foot in morph.motors.feet:
-        node = mobile_geom.nodes[f"t{foot.station}"]
-        foot_worlds[foot.station] = world_node(node, mobile_pos, mobile_quat)
-
-    for foot in morph.motors.feet:
-        st = foot.station
-        sibling = 4 if st == 1 else 1
-        foot_world = foot_worlds[st]
-        name = f"L_t{st}"
-        disk_spec = morph.motors.disk
+def _compile_disks(morph: Morphology, mobile_geom, mobile_pos, mobile_quat) -> Dict[str, CompiledDisk]:
+    feet = morph.motors.feet
+    foot_worlds = {f.station: world_node(mobile_geom.nodes[f"t{f.station}"], mobile_pos, mobile_quat)
+                   for f in feet}
+    disks: Dict[str, CompiledDisk] = {}
+    for foot in feet:
+        spec = morph.motors.disk
         if foot.crank_throw is not None:
-            disk_spec = dataclasses.replace(disk_spec, crank_throw=foot.crank_throw)
+            spec = dataclasses.replace(spec, crank_throw=foot.crank_throw)
         if foot.foot_outset is not None:
-            disk_spec = dataclasses.replace(disk_spec, foot_outset=foot.foot_outset)
-        disks[name] = {
-            "pillar_pos": derive_disk_pillar_pos(
-                foot_world,
-                foot_worlds[sibling],
-                disk_spec,
-                morph.placement.mount_height,
-            ),
-            "euler": [morph.motors.disk.tilt_rad, morph.motors.disk.pitch_rad, 0.0],
-            "rim_pos": derive_disk_rim_local(disk_spec),
-            "rim_rgba": "0.2 0.8 0.2 1",
-            "foot_station": foot.station,
-        }
+            spec = dataclasses.replace(spec, foot_outset=foot.foot_outset)
+        sibling = 4 if foot.station == 1 else 1
+        disks[f"L_t{foot.station}"] = CompiledDisk(
+            pillar_pos=derive_disk_pillar_pos(foot_worlds[foot.station], foot_worlds[sibling], spec),
+            euler=[morph.motors.disk.tilt_rad, morph.motors.disk.pitch_rad, 0.0],
+            rim_pos=derive_disk_rim_local(spec),
+            rim_rgba="0.2 0.8 0.2 1",
+        )
     return disks
 
 
+def _mirror_strut(geom: StrutGeometry, *, quats: bool = True) -> StrutGeometry:
+    """The y-mirror of a strut; `quats=False` keeps the left side's site frames."""
+    out = copy.deepcopy(geom)
+    out.nodes = {k: mirror_y(v) for k, v in geom.nodes.items()}
+    if quats:
+        out.site_quats = {k: mirror_quat(v) for k, v in geom.site_quats.items()}
+    return out
+
+
 def _mirror_shoulder(left: CompiledShoulder, morph: Morphology) -> CompiledShoulder:
-    from morphology.symmetry import mirror_quat_wxyz, mirror_vec3
-
-    def mirror_point(p: np.ndarray) -> np.ndarray:
-        return np.array(mirror_vec3(tuple(p)))
-
-    def mirror_nodes(nodes: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-        return {k: mirror_point(v) for k, v in nodes.items()}
-
-    def mirror_quat(q: np.ndarray) -> np.ndarray:
-        return np.array(mirror_quat_wxyz(tuple(q)))
-
-    mobile_pos = mirror_point(left.mobile_pos)
-    fixed_pos = mirror_point(left.fixed_pos)
-    mobile_quat = mirror_quat(left.mobile_quat)
-    fixed_quat = mirror_quat(left.fixed_quat)
-
-    mobile_geom = left.mobile_geom
-    fixed_geom = left.fixed_geom
-
-    import copy
-
-    mobile_geom_r = copy.deepcopy(mobile_geom)
-    fixed_geom_r = copy.deepcopy(fixed_geom)
-    mobile_geom_r.nodes = mirror_nodes(mobile_geom.nodes)
-    fixed_geom_r.nodes = mirror_nodes(fixed_geom.nodes)
-    mobile_geom_r.midpoint = mirror_point(mobile_geom.midpoint)
-    mobile_geom_r.site_quats = {k: mirror_quat(v) for k, v in mobile_geom.site_quats.items()}
-
-    motor_nodes = {k: mirror_point(v) for k, v in left.motor_nodes.items()}
-    for k, v in motor_nodes.items():
-        mobile_geom_r.nodes[k] = v
-
-    edges = left.structural_edges
-    tendon_lengths = dict(left.tendon_lengths)
-
-    disks: Dict[str, Dict[str, Any]] = {}
-    for name, spec in left.disks.items():
-        rname = name.replace("L_", "R_")
-        pillar = mirror_point(np.array(spec["pillar_pos"]))
-        # Disk-local rim mirror across Y-plane: the disk body is tilted by
-        # +tilt on L and -tilt on R about its local X axis. With X preserved
-        # under that mirror, only the local Y component of rim_pos flips —
-        # negating X too puts the motor-tendon anchor on the wrong side of the
-        # rim and forces the right wing into a non-mirrored flap.
-        rim = list(spec["rim_pos"])
-        rim[1] = -float(rim[1])
-        disks[rname] = {
-            **spec,
-            "pillar_pos": pillar,
-            "euler": [-morph.motors.disk.tilt_rad, morph.motors.disk.pitch_rad, 0.0],
-            "rim_pos": rim,
-            "rim_rgba": "0.2 0.2 0.8 1",
-        }
+    """The right shoulder: the exact y-mirror of the left."""
+    disks: Dict[str, CompiledDisk] = {}
+    for name, disk in left.disks.items():
+        # The R disk body is tilted -tilt where L is +tilt about its local X, so a
+        # y-mirror of a disk-local point flips only its y. Negating x too puts the
+        # motor-tendon pin on the wrong side of the rim and the right wing flaps
+        # out of mirror.
+        rim = disk.rim_pos.copy()
+        rim[1] = -rim[1]
+        disks[name.replace("L_", "R_")] = CompiledDisk(
+            pillar_pos=mirror_y(disk.pillar_pos),
+            euler=[-morph.motors.disk.tilt_rad, morph.motors.disk.pitch_rad, 0.0],
+            rim_pos=rim,
+            rim_rgba="0.2 0.2 0.8 1",
+        )
 
     wrist = None
     if left.wrist is not None:
         lw = left.wrist
-        prox_r = copy.deepcopy(lw.proximal_geom)
-        dist_r = copy.deepcopy(lw.distal_geom)
-        prox_r.nodes = mirror_nodes(lw.proximal_geom.nodes)
-        dist_r.nodes = mirror_nodes(lw.distal_geom.nodes)
-        prox_r.midpoint = mirror_point(lw.proximal_geom.midpoint)
-        dist_r.midpoint = mirror_point(lw.distal_geom.midpoint)
-        prox_r.site_quats = {k: mirror_quat(v) for k, v in lw.proximal_geom.site_quats.items()}
-        dist_r.site_quats = {k: mirror_quat(v) for k, v in lw.distal_geom.site_quats.items()}
         # A relative transform mirrors the same way a world one does: for
         # world_R = M world_L M to hold at every link, each link's own rel must
         # satisfy rel_R = M rel_L M. So both the ulna-local proximal pose and the
         # distal-local manus pose mirror, not just the world-frame distal pose.
         wrist = CompiledWrist(
-            proximal_pos=mirror_point(lw.proximal_pos),
+            proximal_pos=mirror_y(lw.proximal_pos),
             proximal_quat=mirror_quat(lw.proximal_quat),
-            distal_pos=mirror_point(lw.distal_pos),
+            distal_pos=mirror_y(lw.distal_pos),
             distal_quat=mirror_quat(lw.distal_quat),
-            proximal_geom=prox_r,
-            distal_geom=dist_r,
+            proximal_geom=_mirror_strut(lw.proximal_geom),
+            distal_geom=_mirror_strut(lw.distal_geom),
             structural_edges=lw.structural_edges,
-            tendon_lengths=dict(lw.tendon_lengths),
-            manus_pos=mirror_point(lw.manus_pos),
+            tendon_lengths=lw.tendon_lengths,
+            manus_pos=mirror_y(lw.manus_pos),
             manus_quat=mirror_quat(lw.manus_quat),
         )
 
     return CompiledShoulder(
         side="R",
-        mobile_body="R_part_1",
-        fixed_body="R_part_2",
-        mobile_pos=mobile_pos,
-        mobile_quat=mobile_quat,
-        fixed_pos=fixed_pos,
-        fixed_quat=fixed_quat,
-        mobile_geom=mobile_geom_r,
-        fixed_geom=fixed_geom_r,
-        motor_nodes=motor_nodes,
-        structural_edges=edges,
-        tendon_lengths=tendon_lengths,
+        mobile_pos=mirror_y(left.mobile_pos),
+        mobile_quat=mirror_quat(left.mobile_quat),
+        fixed_pos=mirror_y(left.fixed_pos),
+        fixed_quat=mirror_quat(left.fixed_quat),
+        mobile_geom=_mirror_strut(left.mobile_geom),
+        # The fixed strut keeps the left side's site frames (cosmetic: sites do
+        # not enter the dynamics).
+        fixed_geom=_mirror_strut(left.fixed_geom, quats=False),
+        structural_edges=left.structural_edges,
+        tendon_lengths=left.tendon_lengths,
         disks=disks,
         wrist=wrist,
     )
-
-
-def compile_to_mjcf(morph: Morphology, *, color_structural_tendons: bool = False) -> str:
-    compiled = compile_morphology(morph)
-    motor_ranges = measure_motor_tendon_ranges(emit_mjcf(compiled), morph)
-    return emit_mjcf(compiled, motor_tendon_ranges=motor_ranges,
-                     color_structural_tendons=color_structural_tendons)
-
-
-def default_generators() -> Tuple[TendonGenerator, ...]:
-    return tuple(TendonGenerator(**g) for g in SHOULDER_GENERATORS)

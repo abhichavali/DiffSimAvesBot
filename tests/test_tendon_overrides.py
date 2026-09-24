@@ -13,7 +13,7 @@ from morphology.emit_mjcf import _color_to_rgba
 from morphology.compile import compile_morphology
 from morphology.emit_mjcf import emit_mjcf
 from morphology.model import TendonDefaults, TendonMaterial, TendonNet
-from morphology.symmetry import resolve_material_props
+from morphology.tendon_net import resolve_material_props
 from morphology.tg_parser import _parse_brace_dict, _parse_material_dict, load_morphology
 
 
