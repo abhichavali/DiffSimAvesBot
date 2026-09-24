@@ -20,6 +20,17 @@ def _ry(theta: float) -> np.ndarray:
     return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]], dtype=float)
 
 
+# Velocity -> lift direction for each sign of the chordwise velocity: ry(-sign * pi/2).
+_LIFT_ROTATION = {sign: _ry(-sign * np.pi / 2) for sign in (1.0, -1.0)}
+
+
+def _cross(a, b) -> np.ndarray:
+    """``np.cross`` of two 3-vectors in numpy's exact operation order, without its ~30 us overhead."""
+    a0, a1, a2 = a
+    b0, b1, b2 = b
+    return np.array([a1 * b2 - a2 * b1, a2 * b0 - a0 * b2, a0 * b1 - a1 * b0])
+
+
 def _cd(alpha, a, b, c, d):
     """Hovering drag coefficient (cosine fit) at angle of attack ``alpha`` [rad]."""
     alphadeg = alpha * 180 / np.pi
@@ -89,16 +100,12 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # Rotational drag, summed over strips (gated by span cutoff).
     Fik_lt = 0
     Tik_lt = 0
+    wsum = float(omega_w[1] + omega_b[1])  # a Python float: same IEEE ops, 4x cheaper than np.float64
+    abswsum = abs(wsum)
+    span = Rw / NumBlade
     for k in range(1, NumBlade + 1):
         m = k / NumBlade
-        Rcurr = span_cutoffs[k - 1]
-
-        rdi = 0 if (Rw * i) > Rcurr else 1
-
-        wsum = omega_w[1] + omega_b[1]
-        abswsum = abs(wsum)
-
-        span = Rw / NumBlade
+        rdi = 0 if (Rw * i) > span_cutoffs[k - 1] else 1
         local = chord * (x_rot - m)
 
         Fik_lt += sFik * rdi * 0.5 * rho * wsum * abswsum * span * Crd * local * abs(local) * chord / NumBlade
@@ -109,8 +116,9 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # --------------------------------------------------------
 
     rle = -i * Rw
+    strip = (0.0, rle, 0.0)
 
-    vle = np.cross(omega_w + omega_b, np.array([0, rle, 0])) + vel_h
+    vle = _cross(omega_w + omega_b, strip) + vel_h
     vle[1] = 0
 
     # Previous-step element velocity for the added-mass finite difference. ``dt``
@@ -119,7 +127,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # ``vel_h`` for the old rotation-only behaviour.
     vh_prev = vel_h if vel_h_prev is None else vel_h_prev
     omega_wLI = omega_w - omega_w_d * dt
-    vleLI = np.cross(omega_wLI + omega_b, np.array([0, rle, 0])) + vh_prev
+    vleLI = _cross(omega_wLI + omega_b, strip) + vh_prev
     vleLI[1] = 0
 
     acc_xw = (vle[0] - vleLI[0]) / dt
@@ -128,7 +136,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # Velocity direction & folded angle of attack in [0, pi/2] (arctan2 of
     # absolute components is robust to vz == 0; lift/drag *direction* is set
     # separately below, so quadrant folding is fine for a symmetric section).
-    norm_v = np.linalg.norm(vle)
+    norm_v = np.sqrt(vle.dot(vle))  # np.linalg.norm's own formula
     if norm_v != 0:
         dir_vle = vle / norm_v
         alpha = np.arctan2(abs(dir_vle[0]), abs(dir_vle[2]))
@@ -141,7 +149,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
 
     # Non-zero sign so vx == 0 does not collapse the +-90 deg rotation to identity.
     lift_sign = 1.0 if vle[0] >= 0 else -1.0
-    dir_lift = _ry(-lift_sign * np.pi / 2) @ dir_vle
+    dir_lift = _LIFT_ROTATION[lift_sign] @ dir_vle
 
     # --------------------------------------------------------
     # Translational lift & drag
@@ -153,7 +161,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     FLi = q * _cl(alpha, e, f, g, h) * chord * (Rw / NumBlade) * dir_lift
 
     r_cof_trans = x_rot - (ct1 * abs(alpha) / np.pi + ct2)
-    r_cof_trans = np.clip(r_cof_trans, x_rot - 1, x_rot)
+    r_cof_trans = min(max(r_cof_trans, x_rot - 1), x_rot)  # np.clip, minus its overhead
     r_cof_trans *= chord
 
     # --------------------------------------------------------
@@ -187,9 +195,9 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
          + np.array([F_add2_i, 0, 0])
 
     Taui = (
-        np.cross([0, 0, sCof * r_cof_trans], FDi + sLift * FLi)
-        + np.cross([0, 0, sCof * r_cof_add], F_add_i + np.array([F_add2_i, 0, 0]))
-        + np.cross([0, 0, sCof * r_cof_rot], sRot * F_rot_i)
+        _cross((0.0, 0.0, sCof * r_cof_trans), FDi + sLift * FLi)
+        + _cross((0.0, 0.0, sCof * r_cof_add), F_add_i + np.array([F_add2_i, 0, 0]))
+        + _cross((0.0, 0.0, sCof * r_cof_rot), sRot * F_rot_i)
         + np.array([0, Tik_lt, 0])
     )
 
@@ -245,6 +253,8 @@ class AeroBladeRuntime:
             self._resolve_wing(model, "R"),
         ]
         self._step_counter = 0
+        self._jacp = np.zeros((3, model.nv))
+        self._jacr = np.zeros((3, model.nv))
 
     def apply(self, model, data) -> None:
         recompute = (self._step_counter % self.substep) == 0
@@ -296,8 +306,7 @@ class AeroBladeRuntime:
         # steady terms but the added-mass term finite-differences velocity (x
         # lamda/dt), so it blew up into a ~17x MJX<->CPU lift gap. jac @ qvel uses
         # the current qvel and matches the MJX runtime to ~1e-4 (the transfer fix).
-        jacp = np.zeros((3, model.nv))
-        jacr = np.zeros((3, model.nv))
+        jacp, jacr = self._jacp, self._jacr
         mujoco.mj_jacSite(model, data, jacp, jacr, wing.root_site_id)
         omega_global = jacr @ data.qvel
         velocity_global = jacp @ data.qvel
