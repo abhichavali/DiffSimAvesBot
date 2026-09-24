@@ -53,7 +53,8 @@ section 8. Set `H=root@HOST`, `PORT`, `R=/workspace/DiffSimAvesBot`.
 ```bash
 ssh -p $PORT $H "apt-get install -y rsync; mkdir -p $R"      # fresh boxes lack both
 rsync -az --delete -e "ssh -p $PORT" --exclude .git --exclude .venv --exclude __pycache__ \
-  --exclude data --exclude 'opt/runs*' ./ $H:$R/
+  --exclude data --exclude 'opt/runs*' --exclude 'run_*.log' --exclude 'run_*.done' ./ $H:$R/
+# the run_*.log/.done excludes keep --delete from wiping a live run's log on a re-sync
 ssh -p $PORT $H "cd $R && (command -v uv || curl -LsSf https://astral.sh/uv/install.sh | sh) \
   && export PATH=\$HOME/.local/bin:\$PATH && uv sync -q && uv pip install -q 'jax[cuda12]==0.10.2'"
 ```

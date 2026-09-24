@@ -45,7 +45,9 @@ Names that mislead:
 ## Commands
 
 Python is managed with `uv`: `uv sync`, `uv run python <script>`, `uv add <pkg>`. No lint
-suite is configured. Every tool takes `--tg` and `--help`.
+suite is configured. Most CLIs take `--tg` (defaults live in `src/design_paths.py`) and `--help`;
+exceptions: `opt/design_io.py` takes a design dir, `src/view_hover.py` takes `--run`, and
+`plot_fixed_frequency_gui.py` parses no arguments (`--help` launches the GUI).
 
 ```bash
 uv run python src/compile_tg.py --tg designs/hummer/hover/shoulder.tg --out scene.xml
