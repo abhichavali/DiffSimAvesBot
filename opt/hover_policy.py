@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -264,7 +265,7 @@ def main():
     # keeps trajectories bounded, the diff-sim refines cleanly.
     theta0 = jnp.asarray(pd_init_theta(cfg)) if args.pd_init else jnp.zeros(N_CTRL * N_FEAT + N_CTRL)
 
-    meta = dict(tg=str(args.tg), dt_ms=model.opt.timestep * 1e3, gravity=grav,
+    meta = dict(tg=os.path.relpath(Path(args.tg).resolve(), ROOT), dt_ms=model.opt.timestep * 1e3, gravity=grav,
                 aero_substep=args.aero_substep, a0=cfg.a0, f_max=cfg.f_max, tau_max=cfg.tau_max,
                 qadr=cfg.qadr, dofadr=cfg.dofadr, com0=[float(x) for x in np.array(com0)],
                 n_feat=N_FEAT, n_ctrl=N_CTRL, filter_alpha=filter_alpha)
