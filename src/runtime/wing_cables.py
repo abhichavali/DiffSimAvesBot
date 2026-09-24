@@ -17,10 +17,9 @@ wherever it likes.
 
 from __future__ import annotations
 
-from typing import Dict, Sequence
+from typing import Sequence
 
 import mujoco
-import numpy as np
 
 CABLE_TAGS = ("humerus", "ulna", "manus")
 
@@ -33,18 +32,18 @@ def cable_names(model) -> list[str]:
     ]
 
 
-def measure_extended_lengths(model) -> Dict[str, float]:
+def measure_extended_lengths(model) -> dict[str, float]:
     """Each cable's span at the compiled rest pose, which is the extended wing."""
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
-    out: Dict[str, float] = {}
+    out: dict[str, float] = {}
     for name in cable_names(model):
         tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name)
         out[name] = float(data.ten_length[tid])
     return out
 
 
-def apply_tension(model, fractions: Sequence[float], extended: Dict[str, float] | None = None) -> None:
+def apply_tension(model, fractions: Sequence[float], extended: dict[str, float] | None = None) -> None:
     """Set both cables' rest lengths to ``fractions`` of their extended span.
 
     ``fractions`` is (humerus, ulna, manus). Mutates the model in place — the same
@@ -75,24 +74,3 @@ def release_fold_servos(model) -> None:
         model.actuator_gainprm[aid, 0] = 0.0
         model.actuator_biasprm[aid, 1] = 0.0
         model.actuator_biasprm[aid, 2] = 0.0
-
-
-def wing_pose(model, data, side: str = "L") -> Dict[str, float]:
-    """Span, elbow angle and wingtip offset — what a cable setting is judged on.
-
-    Span is the wingtip's distance from the shoulder, which is the number that
-    says "extended" or "contracted" regardless of how the two joints divided the
-    work between them.
-    """
-    humerus = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{side}_humerus")
-    tip = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, f"{side}_wingtip")
-    rot = np.asarray(data.xmat[humerus]).reshape(3, 3)
-    local = rot.T @ (np.asarray(data.site_xpos[tip]) - np.asarray(data.xpos[humerus]))
-    jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_elbow")
-    elbow = float(data.qpos[model.jnt_qposadr[jid]]) if jid >= 0 else float("nan")
-    return {
-        "span": float(np.linalg.norm(local)),
-        "reach": float(local[2]),  # along the humerus' own span axis
-        "cranial": float(-local[0]),  # how far the tip has swung ahead of the bone line
-        "elbow": elbow,
-    }

@@ -1,3 +1,9 @@
+"""The drive signal: a control .tg's Fourier series, and the ramp that eases it in.
+
+``load_control_for_morphology`` reads the control file a design names (and checks
+the two agree on the bird); ``eval_control`` is the crank velocity command at time t.
+"""
+
 from __future__ import annotations
 
 import math
@@ -104,6 +110,4 @@ def _parse_scalar(text: str) -> float:
     )
     if not match:
         raise ValueError(f"Invalid control scalar: {text}")
-    value = float(match.group(1))
-    unit = (match.group(2) or "").lower()
-    return value if unit in ("", "hz") else value
+    return float(match.group(1))
