@@ -25,7 +25,7 @@ compiler) -> MJCF -> `src/runtime` (CPU step; `mjx/` port) -> `src/codesign` + `
 | `src/runtime/mjx/` | JAX/MJX port (jit/vmap, differentiable) | `aero.py`, `aero_runtime.py` (`aero_wrench`), `rollout.py` (`physics_step`, `build_drive_config`, `simulate`) |
 | `src/codesign/` | co-design library | `rig`, `genome`, `metrics` (`build_rollout`), `loss`, `train`, `cpu_check`, `artifacts` (design dirs: write + read back) |
 | `opt/` | co-design CLIs | `optimize_control.py`, `evolve_codesign.py`, `design_io.py` (CPU replay/certify), `run_gui.py`; see `opt/README.md` |
-| `src/*.py` | runners and viewers | `run_fixed_frequency.py`, `run_mjx_fixed_frequency.py`, `view_fixed_frequency.py`, `view_eagle.py`; `flying.py` (bench scene -> free-flying airframe) |
+| `src/*.py` | runners and viewers | `run_fixed_frequency.py`, `run_mjx_fixed_frequency.py`, `view_fixed_frequency.py`, `view_eagle.py`, `view_free_hover.py` (free flight under a flight control); `flying.py` (bench scene -> free-flying airframe) |
 | `src/demos/` | headless MP4 renders | `render_*.py` (`--self-check` asserts without rendering) |
 | `plot_fixed_frequency_gui.py`, `src/gui/` | Tk design inspector and its simulations | |
 | `tests/`, `tests/golden/` | pytest suite; golden behavior harness | `tests/golden/harness.py` docstring |
@@ -66,7 +66,7 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
   `opt/design_io.py <dir> --integrator euler implicitfast rk4 --periods 24` and the same
   with `--timestep 0.03 --integrator euler implicitfast`; the worst peak printed is the
   number. Compare lift per passive-pitch mode (see Gotchas).
-- **Viewers** (`src/view_fixed_frequency.py`, `src/view_eagle.py`) need `mjpython` on
+- **Viewers** (`src/view_fixed_frequency.py`, `src/view_eagle.py`, `src/view_free_hover.py`) need `mjpython` on
   macOS; see Gotchas for the command. Headless alternatives:
   `view_eagle.py --gif out/eagle.gif`, `src/demos/render_*.py`.
 - **Renders**: `src/demos/render_*.py --self-check`. The free-flight clips
@@ -125,6 +125,22 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
   bird is flown only through its four crank motors.
 - Do not hand-edit a compiled `scene.xml`; edit the `.tg` and recompile.
 - Commits: one change per commit, imperative subject in the repo's style (`git log`).
+
+## Free flight: flight control files (`src/hover/`)
+
+- `designs/hummer/free-hover/` is the free-standing bird (226 mN; `flying.to_airframe`). A **flight control**
+  `.tg` carries its whole policy: per-crank harmonics `a_<n>.<crank>` / `b_<n>.<crank>` (absolute rad/s,
+  cranks `L_t1 L_t4 R_t1 R_t4`), `hover_attitude = w x y z` (release attitude), `phase_lock` (crank encoder
+  lock, 1/s) and optionally `closed_loop = <mlp>.npz` (per-wingbeat MLP; omit = open loop). Plain controls
+  are unchanged; `drive_command` returns one command per crank only when a file has per-crank keys.
+- Load/write with `hover.policy` (`load_flight_policy`, `write_flight_control`). `hover.launch` = the
+  phase-locked drive, launch cradle (holds the mean pose while the flapping settles; removed at release)
+  and strobed per-wingbeat state. No force of any kind acts after release.
+- Tools: `python -m hover.trim --out new.tg` (open-loop trim), `python -m hover.lqr --out lqr.npz`,
+  `opt/distill_hover.py` (LQR -> MLP), `opt/verify_hover.py` / `opt/push_sweep.py` (CPU checks),
+  `mjpython src/view_free_hover.py` (P = push, O = toggle closed loop). The GUI's Viewer tab launches it
+  for a flight control. `opt/train_hover.py` (MJX BPTT) is kept for reference: gradients through more
+  than one wingbeat of this model are useless (they diverged from scratch and from the LQR start).
 
 ## Behavior contract: the golden harness
 

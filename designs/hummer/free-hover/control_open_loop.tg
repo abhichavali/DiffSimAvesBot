@@ -1,0 +1,41 @@
+# FREE-HOVER open-loop policy found by CMA-ES (phase-locked drive, trim-preserving directions). No
+# feedback: flies ~49 wingbeats (~5.7 s) before tipping over, across dt 0.10-0.16 ms (the Newton trim in
+# control.tg flown open loop: 38-47). Open loop is unstable: it cannot hold position or recover from pushes.
+bird = hummer
+harmonics = 3
+fundamental_frequency = 8.6171922644 Hz
+a0 = 54.1434158249
+a_1 = 0
+a_2 = 0
+a_3 = 0
+b_1 = 0
+b_2 = 0
+b_3 = 0
+# per-crank harmonics [rad/s] (the shared a_n/b_n above are unused by this file)
+a_1.L_t1 = -0.058898447
+a_2.L_t1 = 0.897505575
+a_3.L_t1 = -0.01052080227
+b_1.L_t1 = -1.125807602
+b_2.L_t1 = -3.664310056
+b_3.L_t1 = 1.185912075
+a_1.L_t4 = -3.569058096
+a_2.L_t4 = 0.1874288888
+a_3.L_t4 = -1.108156435
+b_1.L_t4 = -0.8603415914
+b_2.L_t4 = -0.6053609352
+b_3.L_t4 = 1.724138493
+a_1.R_t1 = 2.851503078
+a_2.R_t1 = 3.3000794
+a_3.R_t1 = -1.185687635
+b_1.R_t1 = -2.88492106
+b_2.R_t1 = -3.533320687
+b_3.R_t1 = 0.210899878
+a_1.R_t4 = -3.773813042
+a_2.R_t4 = 3.310526561
+a_3.R_t4 = 1.013552562
+b_1.R_t4 = -2.139251437
+b_2.R_t4 = -0.6060790052
+b_3.R_t4 = 0.04446237165
+# free-flight policy (hover.policy)
+hover_attitude = 0.983824397185 -0.0111010740162 0.178789931715 0.000694245480765
+phase_lock = 20

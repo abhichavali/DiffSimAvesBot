@@ -5,14 +5,14 @@ State = the strobed deviation (hover.launch.strobe - orbit), input = corrections
 rotations/kicks of the whole bird for A, harmonic perturbations for B (position columns are exact: the
 dynamics are translation invariant).
 
-    python -m hover.lqr --trim trim_locked.json --out lqr.npz
+    python -m hover.lqr [--control designs/hummer/free-hover/control.tg] --out lqr.npz
 """
 from __future__ import annotations
 
 import argparse
 import copy
-import json
 import os
+from pathlib import Path
 from multiprocessing import Pool
 
 import mujoco
@@ -21,34 +21,34 @@ from scipy.linalg import solve_discrete_are
 
 from design_paths import FREE_HOVER_TG
 from hover import launch as L
-from hover import trim as T
+from hover.policy import load_flight_policy
 
 _W = {}
 
 
-def _init(trim_path):
-    t = json.load(open(trim_path)); x, att0 = np.array(t["x"]), np.array(t["att0"])
-    bird = L.load_bird(FREE_HOVER_TG, theta_g=x[0])
-    _W.update(bird=bird, x=x, rel=L.release(bird, x[:T.NT], T.attitude(att0, x[T.NT:]), T.K))
+def _init(tg, control):
+    fp = load_flight_policy(control)
+    bird = L.load_bird(tg, control=control)
+    _W.update(bird=bird, theta=fp.theta, rel=L.release(bird, fp.theta, fp.attitude, fp.K, k_phi=fp.phase_lock))
 
 
 def one_beat(args):
     """Strobed state one wingbeat after a rigid perturbation d12 (att: rot-vector, vel, w) and input du (24)."""
     d12, du = args
-    bird, x, rel = _W["bird"], _W["x"], _W["rel"]
+    bird, theta, rel = _W["bird"], _W["theta"], _W["rel"]
     sim = copy.deepcopy(rel.sim); drive = copy.copy(rel.drive); drive.sim = sim; drive.L_des = rel.drive.L_des.copy()
     m, d = sim.model, sim.data
     if np.linalg.norm(d12[3:6]) > 0:
         a = np.linalg.norm(d12[3:6]); q = np.zeros(4); mujoco.mju_axisAngle2Quat(q, d12[3:6] / a, a); L.rotate_bird(m, d, q)
     L.kick(m, d, d12)
-    drive.set_theta(x[:T.NT] + np.concatenate([[0.0], du]))
+    drive.set_theta(theta + np.concatenate([[0.0], du]))
     drive.beat()
     mujoco.mj_forward(m, d)
     return L.strobe(bird, d, rel.com_ref, rel.q_ref) - rel.x_orbit
 
 
-def linearize(trim_path, pool):
-    nu = 8 * T.K
+def linearize(pool, K):
+    nu = 8 * K
     sx = np.array([0.01] * 3 + [0.02] * 3 + [0.1] * 3)            # att, vel, w steps
     su = np.full(nu, 0.01)
     tasks = [(np.zeros(12), np.zeros(nu))]
@@ -77,11 +77,13 @@ def lqr(A, B, *, q_pos=0.02, q_att=0.05, q_vel=0.1, q_w=0.5, r=0.05):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--trim", required=True)
+    ap.add_argument("--tg", type=Path, default=FREE_HOVER_TG)
+    ap.add_argument("--control", type=Path, default=FREE_HOVER_TG.parent / "control.tg")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
-    with Pool(os.cpu_count(), initializer=_init, initargs=(a.trim,)) as pool:
-        A, B, drift = linearize(a.trim, pool)
+    K = load_flight_policy(a.control).K
+    with Pool(os.cpu_count(), initializer=_init, initargs=(a.tg, a.control)) as pool:
+        A, B, drift = linearize(pool, K)
     K = lqr(A, B)
     ol = np.sort(np.abs(np.linalg.eigvals(A)))[::-1]; cl = np.sort(np.abs(np.linalg.eigvals(A - B @ K)))[::-1]
     print("open-loop |eig| per wingbeat:", np.round(ol, 3))

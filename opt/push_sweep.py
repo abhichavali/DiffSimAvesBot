@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""How hard a push can the hover controller take? One push at wingbeat 20, then 60 more wingbeats, on CPU.
+"""How hard a push can a flight control take? One push at wingbeat 20, then 60 more wingbeats, on CPU.
 
-    PYTHONPATH=src python opt/push_sweep.py --trim designs/hummer/free-hover/open_loop.json --params mlp.pkl
+    PYTHONPATH=src python opt/push_sweep.py [--control designs/hummer/free-hover/control.tg]
 """
 import argparse
-import json
-import pickle
 import sys
 from multiprocessing import Pool
 from pathlib import Path
@@ -16,8 +14,7 @@ import numpy as np
 
 from design_paths import FREE_HOVER_TG
 from hover import launch as L
-from hover import trim as T
-from verify_hover import mlp_policy
+from verify_hover import load
 
 PUSHES = [(f"{axis} {mag:g} {unit}", np.eye(12)[idx] * mag)
           for axis, idx, unit, mags in (("side vel", 7, "m/s", (0.2, 0.4, 0.6, 0.8)), ("fwd vel", 6, "m/s", (0.4, 0.8)),
@@ -27,16 +24,15 @@ PUSHES = [(f"{axis} {mag:g} {unit}", np.eye(12)[idx] * mag)
 _W = {}
 
 
-def _init(trim, params):
-    t = json.load(open(trim)); x, att0 = np.array(t["x"]), np.array(t["att0"])
-    bird = L.load_bird(FREE_HOVER_TG, theta_g=x[0])
-    _W.update(bird=bird, x=x, rel=L.release(bird, x[:T.NT], T.attitude(att0, x[T.NT:]), T.K),
-              pol=mlp_policy(pickle.load(open(params, "rb"))))
+def _init(tg, control):
+    bird, rel, fp = load(tg, control)
+    _W.update(bird=bird, rel=rel, fp=fp)
 
 
 def run(push):
     name, d = push
-    tr = L.fly(_W["bird"], _W["rel"], _W["x"][:T.NT], 80, policy=_W["pol"], kicks={20: d})
+    fp = _W["fp"]
+    tr = L.fly(_W["bird"], _W["rel"], fp.theta, 80, policy=fp.correction if fp.mlp else None, kicks={20: d})
     tilt = np.degrees(np.linalg.norm(tr[:, 3:5], axis=1)); pos = np.linalg.norm(tr[:, :3], axis=1) * 1e3
     ok = len(tr) == 81 and tilt[-10:].mean() < 2.0
     return name, ok, len(tr) - 1, tilt.max(), pos.max(), tilt[-10:].mean()
@@ -44,10 +40,10 @@ def run(push):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--trim", required=True)
-    ap.add_argument("--params", required=True)
+    ap.add_argument("--tg", type=Path, default=FREE_HOVER_TG)
+    ap.add_argument("--control", type=Path, default=FREE_HOVER_TG.parent / "control.tg")
     a = ap.parse_args()
-    with Pool(initializer=_init, initargs=(a.trim, a.params)) as p:
+    with Pool(initializer=_init, initargs=(a.tg, a.control)) as p:
         for name, ok, n, tmax, pmax, tend in p.map(run, PUSHES):
             print(f"{name:22s}: {'RECOVERED' if ok else 'LOST at wb %d' % n if n < 80 else 'not settled'} | peak tilt {tmax:5.1f} deg, "
                   f"peak excursion {pmax:5.0f} mm, final tilt {tend:4.1f} deg", flush=True)

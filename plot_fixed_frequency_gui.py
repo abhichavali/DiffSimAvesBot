@@ -49,6 +49,7 @@ from gui.sims import (
 )
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control
+from hover.policy import has_flight_policy
 from runtime.crank import CRANK_ACTUATORS
 
 
@@ -507,8 +508,10 @@ class DesignPane:
         ttk.Label(
             self.viewer_tab,
             text="Launches the MuJoCo passive viewer for the selected morphology and control "
-            "(set in Settings). Each launch re-reads the .tg files, so click again after editing "
-            "to reload. A new launch closes the previous viewer window.",
+            "(set in Settings). A flight control (e.g. designs/hummer/free-hover/control.tg) flies the "
+            "free-standing bird under its open- and closed-loop policy (P = push, O = toggle closed loop); "
+            "any other control drives the bench rig. Each launch re-reads the .tg files, so click again "
+            "after editing to reload. A new launch closes the previous viewer window.",
             wraplength=720,
             justify=tk.LEFT,
         ).pack(side=tk.TOP, anchor=tk.W, padx=12)
@@ -527,16 +530,20 @@ class DesignPane:
             launcher = str(mjpython)
             # uv's standalone Python links @executable_path/../lib/libpython*, which mjpython can't find.
             env = {**os.environ, "DYLD_LIBRARY_PATH": str(Path(sys.base_prefix) / "lib")}
+        # A flight control (hover.policy: per-crank drive + hover_attitude [+ closed_loop]) flies the
+        # free-standing bird; any other control drives the bench rig.
+        flight = has_flight_policy(self.control_var.get())
         cmd = [
             launcher,
-            str(ROOT / "src" / "view_fixed_frequency.py"),
+            str(ROOT / "src" / ("view_free_hover.py" if flight else "view_fixed_frequency.py")),
             "--tg", self.tg_var.get(),
             "--control", self.control_var.get(),
-            "--scene", str(self.viewer_scene_path),
             "--speed", str(float(self.viewer_speed.get())),
         ]
-        if self.viewer_color.get():
-            cmd.append("--color")
+        if not flight:
+            cmd += ["--scene", str(self.viewer_scene_path)]
+            if self.viewer_color.get():
+                cmd.append("--color")
         self.viewer_proc = subprocess.Popen(cmd, cwd=str(ROOT), env=env)
         self.status.set(f"Launched viewer for {_short_path(self.tg_var.get())}")
 

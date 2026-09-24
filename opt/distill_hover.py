@@ -3,10 +3,9 @@
 
 Fits hover.env.policy(params, s) to u = clip(-K s, +-U_MAX) on states spanning push-sized disturbances.
 
-    PYTHONPATH=src uv run python opt/distill_hover.py --lqr designs/hummer/free-hover/lqr.npz --out mlp_lqr.pkl
+    PYTHONPATH=src uv run python opt/distill_hover.py --lqr designs/hummer/free-hover/lqr.npz --out mlp.npz
 """
 import argparse
-import pickle
 import sys
 from pathlib import Path
 
@@ -17,6 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from hover import env as E
+from hover.policy import save_mlp
 
 STATE_STD = np.array([0.03] * 3 + [0.05] * 3 + [0.15] * 3 + [0.7] * 3, np.float32)   # m, rad, m/s, rad/s
 
@@ -49,7 +49,7 @@ def main():
                                         params, m, v)
         if it % 1000 == 0 or it == 1:
             print(f"step {it}: relative MSE vs LQR {float(l):.5f}", flush=True)
-    pickle.dump(jax.tree_util.tree_map(np.asarray, params), open(a.out, "wb"))
+    save_mlp(a.out, jax.tree_util.tree_map(np.asarray, params), E.OBS_SCALE, E.U_MAX)
     print(f"-> {a.out}")
 
 

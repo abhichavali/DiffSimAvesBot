@@ -40,7 +40,9 @@ numbers. Never hand-edit a compiled `scene.xml`: edit the `.tg` and recompile.
   `upstroke_pitch` / `downstroke_pitch` (half-bands) + `upstroke_stiffness` /
   `downstroke_stiffness`.
 - **control.tg**: `bird`, `harmonics = K`, `fundamental_frequency = <Hz> Hz` (must equal
-  a0 / 2pi: the crank is a velocity servo), `a0` (rad/s), `a_n` / `b_n` absolute.
+  a0 / 2pi: the crank is a velocity servo), `a0` (rad/s), `a_n` / `b_n` absolute. A **flight control**
+  (free-standing bird, `src/hover/policy.py`) adds per-crank `a_n.<crank>` / `b_n.<crank>`,
+  `hover_attitude`, `phase_lock` and optional `closed_loop = <mlp>.npz`; see AGENTS.md "Free flight".
   Harmonics are phased on a clock that starts at rollout start (after the rest settle).
 
 ## Workflow

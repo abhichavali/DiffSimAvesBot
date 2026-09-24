@@ -16,6 +16,13 @@ from morphology.model import BIRDS
 from morphology.tg_parser import load_morphology
 
 
+# Per-crank harmonic keys are `a_<n>.<crank>` / `b_<n>.<crank>` (absolute rad/s, like a_n) with the crank
+# names below, in runtime.crank.CRANK_ACTUATORS order. The flight keys belong to the free-flight policy
+# (hover.policy) and are not part of the drive.
+CRANKS = ("L_t1", "L_t4", "R_t1", "R_t4")
+FLIGHT_KEYS = ("hover_attitude", "phase_lock", "closed_loop")
+
+
 @dataclass(frozen=True)
 class FourierControl:
     harmonics: int
@@ -24,6 +31,9 @@ class FourierControl:
     a: tuple[float, ...]
     b: tuple[float, ...]
     bird: str = ""  # one of morphology.model.BIRDS; required in every control .tg
+    # (a, b) per crank in CRANKS order when the file has per-crank keys; a crank without its own
+    # key for a harmonic takes the shared a_n / b_n. None = every crank runs the shared series.
+    per_crank: tuple[tuple[tuple[float, ...], tuple[float, ...]], ...] | None = None
 
     @property
     def omega(self) -> float:
@@ -62,6 +72,8 @@ def load_control(path: Path) -> FourierControl:
         if key == "bird":
             bird = value
             continue
+        if key in FLIGHT_KEYS:
+            continue
         values[key] = _parse_scalar(value)
     if bird not in BIRDS:
         raise ValueError(
@@ -77,6 +89,18 @@ def load_control(path: Path) -> FourierControl:
         raise ValueError(f"{path}: fundamental_frequency must be positive")
     a = tuple(float(values.get(f"a_{i}", 0.0)) for i in range(1, harmonics + 1))
     b = tuple(float(values.get(f"b_{i}", 0.0)) for i in range(1, harmonics + 1))
+    per_crank = None
+    crank_keys = [k for k in values if "." in k]
+    if crank_keys:
+        valid = {f"{ab}_{i}.{c}" for ab in "ab" for i in range(1, harmonics + 1) for c in CRANKS}
+        bad = sorted(set(crank_keys) - valid)
+        if bad:
+            raise ValueError(f"{path}: unknown per-crank keys {bad}; expected a_<n>.<crank> / b_<n>.<crank>, "
+                             f"n <= harmonics, crank in {CRANKS}")
+        per_crank = tuple(
+            (tuple(float(values.get(f"a_{i}.{c}", a[i - 1])) for i in range(1, harmonics + 1)),
+             tuple(float(values.get(f"b_{i}.{c}", b[i - 1])) for i in range(1, harmonics + 1)))
+            for c in CRANKS)
     return FourierControl(
         harmonics=harmonics,
         fundamental_frequency_hz=frequency,
@@ -84,6 +108,7 @@ def load_control(path: Path) -> FourierControl:
         a=a,
         b=b,
         bird=bird,
+        per_crank=per_crank,
     )
 
 
@@ -107,10 +132,27 @@ def eval_control(control: FourierControl, t: float) -> float:
     return value
 
 
+def eval_control_cranks(control: FourierControl, t: float) -> list[float]:
+    """The series at ``t`` for each crank (CRANKS order): per-crank harmonics when the file has them."""
+    if control.per_crank is None:
+        return [eval_control(control, t)] * len(CRANKS)
+    phase = control.omega * t
+    return [control.a0 + sum(a_n * math.cos(n * phase) + b_n * math.sin(n * phase)
+                             for n, (a_n, b_n) in enumerate(zip(a, b), start=1))
+            for a, b in control.per_crank]
+
+
 def drive_command(control: FourierControl, motor_direction: float, t: float,
-                  t0: float = 0.0, ramp_seconds: float = 0.0) -> float:
-    """The crank velocity command at ``t``: the ramped, direction-signed Fourier drive."""
-    return ramp_factor(t, t0, ramp_seconds) * motor_direction * eval_control(control, t)
+                  t0: float = 0.0, ramp_seconds: float = 0.0) -> float | list[float]:
+    """The crank velocity command at ``t``: the ramped, direction-signed Fourier drive.
+
+    One command for every crank, or one per crank (CRANKS order) when the control has
+    per-crank harmonics; PlateWingSim.step takes either.
+    """
+    k = ramp_factor(t, t0, ramp_seconds) * motor_direction
+    if control.per_crank is None:
+        return k * eval_control(control, t)
+    return [k * w for w in eval_control_cranks(control, t)]
 
 
 def _parse_scalar(text: str) -> float:

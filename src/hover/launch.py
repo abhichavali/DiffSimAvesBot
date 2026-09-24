@@ -27,7 +27,7 @@ import numpy as np
 import flying
 from morphology.compile import compile_file
 from morphology.tg_parser import load_morphology
-from runtime.control_signal import load_control_for_morphology
+from runtime.control_signal import load_control, load_control_for_morphology
 from runtime.sim import PlateWingSim
 
 K_PHI = 20.0            # crank phase-lock gain [1/s]
@@ -71,11 +71,12 @@ class Bird:
     af: int              # airframe body id
 
 
-def load_bird(tg, *, dt_ms=0.13, theta_g=0.0) -> Bird:
-    """The free-standing bird, with dt snapped so one wingbeat at e^g x the design rate is an integer
-    number of steps (exact phase locking of the per-wingbeat strobe)."""
+def load_bird(tg, *, control=None, dt_ms=0.13, theta_g=0.0) -> Bird:
+    """The free-standing bird, with dt snapped so one wingbeat at e^g x the control's rate is an
+    integer number of steps (exact phase locking of the per-wingbeat strobe). ``control`` = a control
+    .tg path (default: the one the design names)."""
     morph = load_morphology(tg)
-    ctl = load_control_for_morphology(tg)
+    ctl = load_control(control) if control else load_control_for_morphology(tg)
     m = mujoco.MjModel.from_xml_string(flying.to_airframe(compile_file(tg)))
     m.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
     wf = ctl.omega * math.exp(theta_g)
@@ -88,8 +89,8 @@ def load_bird(tg, *, dt_ms=0.13, theta_g=0.0) -> Bird:
 class Drive:
     """The phase-locked per-crank Fourier drive (CPU)."""
 
-    def __init__(self, bird: Bird, sim: PlateWingSim, theta, K):
-        self.bird, self.sim, self.K = bird, sim, K
+    def __init__(self, bird: Bird, sim: PlateWingSim, theta, K, k_phi=K_PHI):
+        self.bird, self.sim, self.K, self.k_phi = bird, sim, K, k_phi
         self.set_theta(theta)
         self.phi = 0.0
         self.L_des = sim.data.actuator_length[sim.crank_ids].copy()
@@ -101,7 +102,7 @@ class Drive:
         ks = np.arange(1, self.K + 1)
         w = self.bird.a0 * math.exp(self.g) * (1 + (self.a * np.cos(ks * self.phi) + self.b * np.sin(ks * self.phi)).sum(1))
         d = self.sim.data
-        ctrl = w + K_PHI * (self.L_des - d.actuator_length[self.sim.crank_ids])
+        ctrl = w + self.k_phi * (self.L_des - d.actuator_length[self.sim.crank_ids])
         lift = self.sim.step(list(ctrl))
         dt = self.bird.model.opt.timestep
         self.L_des += w * dt
@@ -133,7 +134,7 @@ class Released:
     cradle_wrench: np.ndarray    # mean cradle [force, moment] (world) over its last n_avg wingbeats = trim error
 
 
-def release(bird: Bird, theta, attitude, K, *, n_cradle=12, n_avg=6,
+def release(bird: Bird, theta, attitude, K, *, n_cradle=12, n_avg=6, k_phi=K_PHI,
             body_inertia=4e-5 + flying.BODY_INERTIA) -> Released:
     """Settle the bird on ``theta`` at ``attitude`` (wxyz) in the mean-only cradle, then release it."""
     m, af = bird.model, bird.af
@@ -145,7 +146,7 @@ def release(bird: Bird, theta, attitude, K, *, n_cradle=12, n_avg=6,
     kp, kd, ki = M * ws**2, 2 * 0.8 * M * ws, M * ws**3 / 4
     kr, krd, kri = I * ws**2, 2 * 0.8 * I * ws, I * ws**3 / 4
     com0, q0 = d.subtree_com[0].copy(), d.xquat[af].copy()
-    drive = Drive(bird, sim, theta, K)
+    drive = Drive(bird, sim, theta, K, k_phi)
     n = round(2 * math.pi / (bird.omega * math.exp(drive.g)) / m.opt.timestep)
     buf, iE, acc = deque(maxlen=n), np.zeros(6), []
     for i in range(n_cradle * n):

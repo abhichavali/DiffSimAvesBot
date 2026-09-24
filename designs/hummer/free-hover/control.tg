@@ -1,14 +1,42 @@
+# FREE-HOVER flight policy (src/hover). Open loop: the phase-locked Newton trim (python -m hover.trim) -
+# a shared crank speed a0 plus 3 per-crank harmonics; closed loop: a per-wingbeat MLP distilled from the
+# LQR (python -m hover.lqr, opt/distill_hover.py). Hovers 14 s+ and recovers from 0.8 m/s / 4 rad/s pushes.
 bird = hummer
-harmonics = 5
-fundamental_frequency = 10.345 Hz
-a0 = 65
+harmonics = 3
+fundamental_frequency = 8.5415527010 Hz
+a0 = 53.6681584313
 a_1 = 0
-b_1 = 0
 a_2 = 0
-b_2 = 0
 a_3 = 0
+b_1 = 0
+b_2 = 0
 b_3 = 0
-a_4 = 0
-b_4 = 0
-a_5 = 0
-b_5 = 0
+# per-crank harmonics [rad/s] (the shared a_n/b_n above are unused by this file)
+a_1.L_t1 = 0.7169911954
+a_2.L_t1 = -0.003368577481
+a_3.L_t1 = -0.9412816756
+b_1.L_t1 = -1.346535807
+b_2.L_t1 = -4.274854432
+b_3.L_t1 = 0.939685628
+a_1.L_t4 = -3.798421638
+a_2.L_t4 = 1.576295388
+a_3.L_t4 = -0.527052344
+b_1.L_t4 = -0.7953817594
+b_2.L_t4 = 0.3610180402
+b_3.L_t4 = 1.665489144
+a_1.R_t1 = 0.2661269589
+a_2.R_t1 = 2.458891527
+a_3.R_t1 = -0.1895820844
+b_1.R_t1 = -2.622639044
+b_2.R_t1 = -0.5285363414
+b_3.R_t1 = -0.2513417976
+a_1.R_t4 = -3.819199572
+a_2.R_t4 = 3.770012962
+a_3.R_t4 = 0.8114090457
+b_1.R_t4 = -2.01792961
+b_2.R_t4 = 0.6368398411
+b_3.R_t4 = 0.5005187782
+# free-flight policy (hover.policy)
+hover_attitude = 0.982637124354 -0.0168423093447 0.184771074478 -0.000518163825496
+phase_lock = 20
+closed_loop = mlp_closed_loop.npz

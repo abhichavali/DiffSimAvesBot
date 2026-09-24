@@ -367,7 +367,8 @@
      0.0,
      0.0
     ],
-    "bird": "hummer"
+    "bird": "hummer",
+    "per_crank": null
    }
   },
   "model/shoulder": {
@@ -7298,7 +7299,8 @@
      0.0,
      0.0
     ],
-    "bird": "hummer"
+    "bird": "hummer",
+    "per_crank": null
    }
   },
   "model/baseline": {
@@ -14309,7 +14311,8 @@
     "b": [
      0.0
     ],
-    "bird": "eagle"
+    "bird": "eagle",
+    "per_crank": null
    }
   },
   "model/eagle": {
@@ -20733,7 +20736,8 @@
      0.0720956,
      -0.0666356
     ],
-    "bird": "hummer"
+    "bird": "hummer",
+    "per_crank": null
    }
   },
   "model/soft_it009p": {
@@ -27809,7 +27813,8 @@
      0.0,
      0.0
     ],
-    "bird": "hummer"
+    "bird": "hummer",
+    "per_crank": null
    }
   },
   "model/tuned": {
@@ -34740,7 +34745,8 @@
      0.0,
      0.0
     ],
-    "bird": "hummer"
+    "bird": "hummer",
+    "per_crank": null
    }
   },
   "model/hovering": {
@@ -41816,7 +41822,8 @@
      0.0,
      0.0
     ],
-    "bird": "hummer"
+    "bird": "hummer",
+    "per_crank": null
    }
   },
   "model/it009p": {
@@ -48888,7 +48895,8 @@
      0.60557,
      -0.0075186
     ],
-    "bird": "hummer"
+    "bird": "hummer",
+    "per_crank": null
    }
   },
   "model/tuned_hacked": {
