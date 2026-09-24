@@ -19,5 +19,5 @@ per-cycle peaks (see `docs/ROBUST_CODESIGN_METHODOLOGY.md`).
 | `hummer/checkpoints/it015/` | hummer | Codesign run-4 it015, sinusoid (control = the seed's). | seed -> this | peak 158.4 mNm (-9.3%) | - |
 | `hummer/checkpoints/it018/` | hummer | Codesign run-4 it018, warm-start parent of the flagship. | seed -> this | peak 157.1 mNm (-10.1%) | - |
 | `hummer/checkpoints/it021-harmonic/` | hummer | Codesign run-4 it021: harmonics, dt-specialized (a negative example). | seed -> this | peak 157.6 mNm, 162 at dt 0.04/0.09 | - |
-| `hummer/checkpoints/tuned-dt-hacked/` | hummer | Seed tendons plus large harmonics (`a_2` = -1.86): a known dt-hacked design. | seed -> this | a0 65.40 | `opt/diag_mjx_cpu_parity.py` |
+| `hummer/checkpoints/tuned-dt-hacked/` | hummer | Seed-derived, lightly retuned tendons (mean k 246.1 N/m; motor rest 54.2 mm, motor k 1035 N/m) plus large harmonics (`a_2` = -1.86): a known dt-hacked design. | seed -> this | a0 65.40 | `opt/diag_mjx_cpu_parity.py` |
 | `eagle/` | eagle | AvesEagle: the same shoulder carrying a three-linkage bone wing (humerus / ulna / manus). | - | 2.5 Hz (a0 15.708), lag 12 deg | `view_eagle` |
