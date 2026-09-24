@@ -1,4 +1,12 @@
-"""Typed morphology object model (Option B — dataclasses)."""
+"""The typed design tree a .tg parses into: Morphology and its dataclasses.
+
+Plain data with SI units (angles in radians unless a field says _deg), plus the
+bird tags that keep plate-wing and bone-wing tools apart. tg_parser builds it;
+the compiler and the runtime read it. A key missing from a .tg takes the
+default here (tg_parser marks the few exceptions). Parsed but read by no code:
+StrutInstance (the `strut F/M` planes), DiskSpec.outboard, WingAero.force_scale
+and WingAero.include_body_torque.
+"""
 
 from __future__ import annotations
 

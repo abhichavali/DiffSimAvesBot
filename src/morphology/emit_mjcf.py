@@ -1,9 +1,9 @@
 """Emit the MuJoCo MJCF scene from a compiled morphology.
 
 Scene, defaults, the two shoulders (strut bodies, the hummer's plate wing, the
-crank disks), structural and motor tendons, and the crank velocity motors. The
-eagle's bone wing, wrist, cables and servos come from emit_eagle at the marked
-hook points, so element order is the same either way.
+crank disks), structural and motor tendons, and the crank velocity motors. For
+an eagle (a `bones:` wing) the bone wing, cable pins, wrist net, cables and bone
+servos come from emit_eagle, called where they sit in the element order.
 """
 
 from __future__ import annotations
