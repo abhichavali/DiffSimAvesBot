@@ -31,11 +31,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--trim", type=Path, required=True)
     ap.add_argument("--out", type=Path, default=Path("opt/runs_hover_cl"))
-    ap.add_argument("--iters", type=int, default=400)
     ap.add_argument("--batch", type=int, default=32)
-    ap.add_argument("--beats", type=int, default=4, help="starting horizon (wingbeats)")
-    ap.add_argument("--max-beats", type=int, default=24)
-    ap.add_argument("--grow-below", type=float, default=0.6, help="lengthen the horizon when the loss is below this")
+    ap.add_argument("--schedule", type=str, default="4:40,8:60,16:100",
+                    help="horizon curriculum 'beats:iters,...' (overrides --beats/--iters/--max-beats)")
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--hidden", type=int, default=64)
     ap.add_argument("--kick-v", type=float, default=0.1, help="max |kick| per axis, COM velocity [m/s]")
@@ -73,8 +71,12 @@ def main():
 
     m = jax.tree_util.tree_map(jnp.zeros_like, params); v = jax.tree_util.tree_map(jnp.zeros_like, params)
     b1, b2, eps, clip = 0.9, 0.999, 1e-8, 1.0
-    beats, best = a.beats, math.inf
-    for it in range(1, a.iters + 1):
+    plan = [b for part in a.schedule.split(",") for b in [int(part.split(":")[0])] * int(part.split(":")[1])]
+    best, beats = math.inf, plan[0]
+    for it, beats_it in enumerate(plan, 1):
+        if beats_it != beats:
+            beats, best = beats_it, math.inf
+            print(f"[hover] horizon -> {beats} wingbeats", flush=True)
         t0 = time.time()
         (l, (S, U)), g = grad_fn(beats)(params, kicks(a.batch))
         l = float(l)
@@ -94,9 +96,6 @@ def main():
         if l < best:
             best = l
             pickle.dump(jax.tree_util.tree_map(np.asarray, params), open(a.out / f"params_best_b{beats}.pkl", "wb"))
-        if l < a.grow_below and beats < a.max_beats:
-            beats = min(a.max_beats, beats * 2); best = math.inf
-            print(f"[hover] horizon -> {beats} wingbeats", flush=True)
     json.dump({"trim": str(a.trim), "hidden": a.hidden, "u_max": E.U_MAX, "beats": beats, "args": vars(a) | {"trim": str(a.trim), "out": str(a.out), "init": str(a.init)}},
               open(a.out / "meta.json", "w"), indent=1)
 
