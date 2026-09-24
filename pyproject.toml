@@ -1,7 +1,7 @@
 [project]
 name = "DiffSimAvesBot"
 version = "0.1.0"
-description = "Barebones .tg to MuJoCo tensegrity runner"
+description = "Tensegrity flapping-wing robot: .tg designs, MuJoCo CPU + MJX simulation, co-design"
 requires-python = ">=3.11"
 dependencies = [
     "jax>=0.10.2",
