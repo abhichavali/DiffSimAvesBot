@@ -20,7 +20,7 @@ pairs), `genome.py` (the packed theta), `metrics.py` (theta -> `Metrics` rollout
 
 ## Run
 
-Smoke test (CPU, about a minute):
+Smoke test (CPU, ~15 s):
 ```sh
 uv run python opt/optimize_control.py --tg designs/hummer/hover-soft-it009p/shoulder.tg \
     --warmup-periods 0.2 --sample-periods 0.2 --iters-per-stage 1 --harmonics 2 --out /tmp/oc
