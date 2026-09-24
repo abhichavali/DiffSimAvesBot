@@ -13,8 +13,7 @@ These instructions apply to all coding agents (Cursor, Claude, Gemini, Copilot, 
   `libpython` until you point it there:
   - `DYLD_LIBRARY_PATH=$(uv run python -c 'import sys;print(sys.base_prefix)')/lib uv run mjpython src/view_fixed_frequency.py`
   - Headless paths need no mjpython: `view_eagle --gif`, `src/demos/render_*.py`, the
-    golden viewer item. The design-inspector GUI's Viewer tab launches
-    `.venv/bin/mjpython` without that variable, so it hits the same failure.
+    golden viewer item. The design-inspector GUI's Viewer tab sets the variable itself.
 
 ## Common commands
 

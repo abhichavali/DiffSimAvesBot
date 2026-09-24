@@ -12,6 +12,7 @@ tab launches src/view_fixed_frequency.py under mjpython.
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -517,12 +518,15 @@ class DesignPane:
             self.viewer_proc.terminate()
         # macOS requires mujoco's mjpython (not plain python) for launch_passive.
         launcher = sys.executable
+        env = None
         if sys.platform == "darwin":
             mjpython = Path(sys.executable).with_name("mjpython")
             if not mjpython.exists():
                 self.status.set(f"mjpython not found next to {sys.executable}; viewer needs it on macOS.")
                 return
             launcher = str(mjpython)
+            # uv's standalone Python links @executable_path/../lib/libpython*, which mjpython can't find.
+            env = {**os.environ, "DYLD_LIBRARY_PATH": str(Path(sys.base_prefix) / "lib")}
         cmd = [
             launcher,
             str(ROOT / "src" / "view_fixed_frequency.py"),
@@ -533,7 +537,7 @@ class DesignPane:
         ]
         if self.viewer_color.get():
             cmd.append("--color")
-        self.viewer_proc = subprocess.Popen(cmd, cwd=str(ROOT))
+        self.viewer_proc = subprocess.Popen(cmd, cwd=str(ROOT), env=env)
         self.status.set(f"Launched viewer for {_short_path(self.tg_var.get())}")
 
     def close_viewer(self) -> None:
