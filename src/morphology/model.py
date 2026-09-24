@@ -4,8 +4,7 @@ Plain data with SI units (angles in radians unless a field says _deg), plus the
 bird tags that keep plate-wing and bone-wing tools apart. tg_parser builds it;
 the compiler and the runtime read it. A key missing from a .tg takes the
 default here (tg_parser marks the few exceptions). Parsed but read by no code:
-StrutInstance (the `strut F/M` planes), DiskSpec.outboard, WingAero.force_scale
-and WingAero.include_body_torque.
+StrutInstance (the `strut F/M` planes) and DiskSpec.outboard.
 """
 
 from __future__ import annotations
@@ -211,8 +210,6 @@ class WingPitch:
 @dataclass
 class WingAero:
     blades: int = 4
-    force_scale: float = 1_000_000.0
-    include_body_torque: bool = False
 
 
 @dataclass

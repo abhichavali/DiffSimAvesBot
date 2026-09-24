@@ -461,11 +461,7 @@ class _TgParser:
                     upstroke_pitch_rad=float(wing_pitch.get("upstroke_pitch", free_angle)),
                     downstroke_pitch_rad=float(wing_pitch.get("downstroke_pitch", free_angle)),
                 ),
-                aero=WingAero(
-                    blades=int(aero.get("blades", WingAero.blades)),
-                    force_scale=float(aero.get("force_scale", WingAero.force_scale)),
-                    include_body_torque=bool(aero.get("body_torque", WingAero.include_body_torque)),
-                ),
+                aero=WingAero(blades=int(aero.get("blades", WingAero.blades))),
                 bones=self._bones(),
             ),
         )

@@ -102,6 +102,3 @@ wing on M.midpoint:
         armature   = 1e-6
     aero:
         blades      = 4
-        force_scale = 1e6
-        body_torque = off
-        cop         = derived
