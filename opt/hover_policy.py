@@ -210,7 +210,7 @@ def make_loss(mx, dx0, drive, pitch_cfg, aero_cfg, cfg: HoverCfg, *,
             wrench = jnp.zeros_like(dx.qvel).at[dof : dof + 3].add(force).at[dof + 3 : dof + 6].add(tau)
             dx = dx.replace(qfrc_applied=dx.qfrc_applied + q + wrench)
             dx = mjx.step(mx, dx)
-            carry = mroll._match_dtypes((dx, ns, ema), carry0)
+            carry = mroll.match_dtypes((dx, ns, ema), carry0)
             # Score the NET drift (ema of every channel): the flap bob averages out,
             # so the floor -> 0 for a true hover and the gradient targets station-keeping
             # (raw per-step velocity would swamp the loss with the irreducible bob).
@@ -324,7 +324,7 @@ def main():
     cfg = cfg0._replace(f_max=args.f_max, tau_max=args.tau_max)
 
     drive = mroll.build_drive_config(model)
-    pitch_cfg = mwp.config_from_runtime(model, centers=mroll._pitch_centers(model, data))
+    pitch_cfg = mwp.config_from_runtime(model, centers=mroll.pitch_centers(model, data))
     aero_cfg = aero_runtime.build_aero_config(model, substep=args.aero_substep)
     mx = mjx.put_model(model)
     dx0 = mjx.put_data(model, data)

@@ -26,17 +26,21 @@ still traces once and vmaps over the stacked models.
     uv run python opt/evolve_codesign.py --out opt/codesign_seeds --gens 40 --pop 96
     uv run python opt/evolve_codesign.py --geom-genes placement.mount_height,arrange.gap
 """
-import argparse, json, math, time
+import argparse, json, math, sys, time
 from pathlib import Path
 import numpy as np
 import jax, jax.numpy as jnp
-import mujoco
-
-import optimize_control as oc
-import tg_scalars
-from runtime.morphology_runtime import HOVER_BASE_TG
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+import tg_scalars  # noqa: E402
+from codesign.artifacts import fourier_control_tg, motor_json, repoint_control, tendon_pairs_json  # noqa: E402
+from codesign.genome import Genome  # noqa: E402
+from codesign.metrics import Metrics, build_rollout  # noqa: E402
+from codesign.rig import flap_t1_mask, setup, step_counts  # noqa: E402
+from morphology.tg_parser import load_morphology  # noqa: E402
+from runtime.morphology_runtime import HOVER_BASE_TG  # noqa: E402
 
 
 def log(msg):
@@ -79,30 +83,18 @@ def build_metrics(tg, scene, aero_substep, timestep_ms, K=5, tune_motor=True, n_
     ids, wing chords, pitch rest centers) and none of the exposed geometry genes
     touch the wing -- exposing wing.* as genes would mean stacking these too.
     """
-    model, mx, dx0, control, drive, pitch, aero, tip_ids, tendons, motor_ids = oc.setup(
-        tg, scene, aero_substep=aero_substep, integrator="euler", timestep_ms=timestep_ms)
-    base_a0 = float(drive.a0); omega = float(control.omega)
-    dt = model.opt.timestep; period = control.period
-    steps_per_cycle = max(1, round(period / dt))
-    warmup_steps = math.ceil(8.0 * period / dt)
-    sample_steps = math.ceil(3.0 * period / dt)
-    flap_names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, int(i))
-                  for i in np.asarray(drive.flap_actuator_ids)]
-    flap_t1_mask = jnp.asarray([1.0 if (n and "t1" in n) else 0.0 for n in flap_names],
-                               dtype=jnp.float32)
-    metrics = oc.build_rollout(
-        mx, dx0, drive, pitch, aero, tip_ids, omega, K, warmup_steps, sample_steps,
-        steps_per_cycle=steps_per_cycle, aero_substep=aero_substep, base_a0=base_a0,
-        tune_control=True, control_fixed=jnp.zeros(2 * K + 1, dtype=jnp.float32),
-        tune_frequency=False, tune_tendons=True, tendons=tendons, tune_pitch=False,
-        tune_motor=tune_motor, motor_ids=motor_ids, flap_t1_mask=flap_t1_mask)
-    l_ids = np.asarray(tendons[0]); n_tend = int(l_ids.shape[0])
-    tnames = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, int(i)) for i in l_ids]
-    D = (2 * K + 1) + 2 * n_tend + (2 if tune_motor else 0) + n_geom
-    info = dict(base_a0=base_a0, omega=omega, K=K, n_tend=n_tend, tnames=tnames,
-                base_stiff=np.asarray(tendons[2]), base_lenspring=np.asarray(tendons[3]),
-                l_ids=l_ids, motor_ids=np.asarray(motor_ids), tune_motor=tune_motor,
-                n_geom=n_geom)
+    rig = setup(tg, scene, aero_substep=aero_substep, integrator="euler", timestep_ms=timestep_ms)
+    omega = float(rig.control.omega)
+    steps_per_cycle, warmup_steps, sample_steps = step_counts(
+        rig.control.period, rig.model.opt.timestep, 8.0, 3.0)
+    genome = Genome(K, int(np.asarray(rig.tendons[0]).shape[0]), tendons=True, motor=tune_motor)
+    metrics = build_rollout(
+        rig, genome, omega, warmup_steps=warmup_steps, sample_steps=sample_steps,
+        steps_per_cycle=steps_per_cycle, aero_substep=aero_substep,
+        control_fixed=jnp.zeros(2 * K + 1, dtype=jnp.float32),
+        flap_t1_mask=flap_t1_mask(rig.model, rig.drive))
+    D = genome.size + n_geom
+    info = dict(rig=rig, genome=genome, omega=omega, n_geom=n_geom)
     vmetrics = jax.jit(jax.vmap(metrics) if not n_geom
                        else jax.vmap(metrics, in_axes=(0, 0, 0)))
     return vmetrics, jax.jit(metrics), D, info
@@ -141,44 +133,33 @@ def evaluate(vmetrics, genomes, batch, label="eval", models_for=None):
         log(f"[{label}] batch {bi}/{total} rows {i}:{min(i + batch, len(genomes))} start")
         g = jnp.asarray(rows, dtype=jnp.float32)
         args = (g,) if models_for is None else (g, *models_for(rows))
-        outs.append(np.asarray(vmetrics(*args)).T)  # (b, n_metrics)
+        outs.append(np.asarray(vmetrics(*args)).T)  # (b, len(Metrics._fields))
         log(f"[{label}] batch {bi}/{total} done in {time.time() - t0:.1f}s")
     return np.concatenate(outs, axis=0)
 
 
 def materialize(g, info, out_dir, tg_src, geom_names=()):
     """Write a genome as a usable design dir (shoulder.tg + control.tg + tendon/
-    motor JSON + theta_best.json), mirroring optimize_control.dump().
+    motor JSON + theta_best.json), in optimize_control's artifact layout.
 
     With geometry genes the emitted shoulder.tg carries the EVOLVED dimensions,
     not the source ones -- otherwise the winner's shape would be lost and the
     design dir would silently describe a different rig than the one scored."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    K, n = info["K"], info["n_tend"]
-    a0 = info["base_a0"] * math.exp(float(g[0]))
-    a_out = a0 * np.asarray(g[1:1 + K]); b_out = a0 * np.asarray(g[1 + K:1 + 2 * K])
-    i = 2 * K + 1
-    stiff_log = np.asarray(g[i:i + n]); pre_log = np.asarray(g[i + n:i + 2 * n]); i += 2 * n
-    bs, bl, l_ids, tn = info["base_stiff"], info["base_lenspring"], info["l_ids"], info["tnames"]
-    pairs = {tn[k]: {"stiffness": float(bs[l_ids[k]] * math.exp(stiff_log[k])),
-                     "stiffness_factor": float(math.exp(stiff_log[k])),
-                     "pretension_factor": float(math.exp(pre_log[k])),
-                     "rest_length": float(bl[l_ids[k]][0] * math.exp(pre_log[k]))}
-             for k in range(n)}
-    (out_dir / "tendon_optimized.json").write_text(json.dumps({"pairs": pairs}, indent=2))
-    if info["tune_motor"]:
-        ml = np.asarray(g[i:i + 2]); mids = info["motor_ids"]
+    rig, genome = info["rig"], info["genome"]
+    K = genome.K
+    genes = genome.split(np.asarray(g), None)
+    a0 = float(rig.drive.a0) * math.exp(float(genes.control[0]))
+    a_out = a0 * genes.control[1:1 + K]; b_out = a0 * genes.control[1 + K:]
+    (out_dir / "tendon_optimized.json").write_text(json.dumps(
+        {"pairs": tendon_pairs_json(rig.model, rig.tendons, genes.stiff, genes.pre)}, indent=2))
+    if genome.motor:
         (out_dir / "motor_tendon_optimized.json").write_text(json.dumps(
-            {"stiffness": float(bs[mids[0]] * math.exp(ml[0])),
-             "stiffness_factor": float(math.exp(ml[0])),
-             "pretension_factor": float(math.exp(ml[1]))}, indent=2))
-    lines = [f"bird = {oc.load_morphology(Path(tg_src)).bird}",
-             f"harmonics = {K}", f"fundamental_frequency = {info['omega']/math.tau:g} Hz",
-             f"a0 = {a0:.6g}"]
-    for j in range(K):
-        lines += [f"a_{j+1} = {a_out[j]:.6g}", f"b_{j+1} = {b_out[j]:.6g}"]
-    (out_dir / "control.tg").write_text("\n".join(lines) + "\n")
-    (out_dir / "control_optimized.tg").write_text("\n".join(lines) + "\n")
+            motor_json(rig.tendons, rig.motor_ids, genes.motor), indent=2))
+    control = fourier_control_tg(load_morphology(Path(tg_src)).bird, K, info["omega"] / math.tau,
+                                 a0, a_out, b_out)
+    (out_dir / "control.tg").write_text(control)
+    (out_dir / "control_optimized.tg").write_text(control)
     src_text = Path(tg_src).read_text()
     geom_out = {}
     if geom_names:
@@ -190,8 +171,7 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
         (out_dir / "geometry_optimized.json").write_text(json.dumps(
             {nm: {"value": v, "unit": by_name[nm].unit, "base": by_name[nm].number}
              for nm, v in geom_out.items()}, indent=2))
-    shoulder = oc.re.sub(r"(?m)^(\s*control\s*=\s*).*$", r"\1control.tg", src_text)
-    (out_dir / "shoulder.tg").write_text(shoulder)
+    (out_dir / "shoulder.tg").write_text(repoint_control(src_text))
     (out_dir / "theta_best.json").write_text(json.dumps(
         {"a0": float(a0), "a": [float(x) for x in a_out], "b": [float(x) for x in b_out],
          "omega": float(info["omega"]), "frequency_hz": float(info["omega"] / math.tau)}, indent=2))
@@ -265,25 +245,25 @@ def main():
                                         n_geom=n_geom)
         evs.append(vm)
         log(f"[setup] built metrics dt={dt:g}ms in {time.time() - t0:.1f}s")
-    K, n = info["K"], info["n_tend"]
-    n_motor = 2 if info["tune_motor"] else 0
+    genome = info["genome"]
+    K, n = genome.K, genome.n_tend
+    n_motor = 2 if genome.motor else 0
     print(f"[codesign] genome dim={D} (control {2*K+1} + tendon {2*n} + motor {n_motor}"
           f" + geometry {n_geom})  pop={args.pop} dts={args.timesteps}", flush=True)
 
     # Per-genome models for the geometry block. The .tg variant must sit beside
     # its source (meshdir and the `control =` include resolve relative to it),
-    # and oc.setup serializes compiles on a lock, so one scratch name per dt is
+    # and setup() serializes compiles on a lock, so one scratch name per dt is
     # enough -- batches are built one at a time.
-    geom_lo = (2 * K + 1) + 2 * n + n_motor
+    geom_lo = genome.size
 
     def model_of(row, dt):
         """Compile ONE genome's geometry into its own (mx, dx0)."""
         tgv = geom_tg(args.tg, args.tg.with_name("_ea_genome.tg"),
                       geom_names, np.asarray(row)[geom_lo:])
-        _, mxg, dxg, *_ = oc.setup(tgv, args.scene.with_name("scene_ea_genome.xml"),
-                                   aero_substep=args.aero_substep,
-                                   integrator="euler", timestep_ms=dt)
-        return mxg, dxg
+        rig = setup(tgv, args.scene.with_name("scene_ea_genome.xml"),
+                    aero_substep=args.aero_substep, integrator="euler", timestep_ms=dt)
+        return rig.mx, rig.dx0
 
     def models_for(rows, dt):
         mds = [model_of(r, dt) for r in rows]
@@ -298,17 +278,16 @@ def main():
     # Gene selection: a 0/1 mask over the genome, applied to BOTH the initial
     # population noise and every mutation, so a frozen block never leaves its
     # seed value (the EA still evaluates it -- it just isn't searched).
-    GENE_BLOCKS = {"control": (0, 2 * K + 1),
-                   "tendon_stiffness": (2 * K + 1, 2 * K + 1 + n),
-                   "tendon_pretension": (2 * K + 1 + n, 2 * K + 1 + 2 * n)}
-    if info["tune_motor"]:
-        GENE_BLOCKS["motor"] = (2 * K + 1 + 2 * n, geom_lo)
+    gene_slices = genome.slices()
+    GENE_BLOCKS = {"control": gene_slices["control"], "tendon_stiffness": gene_slices["stiff"],
+                   "tendon_pretension": gene_slices["pre"]}
+    if genome.motor:
+        GENE_BLOCKS["motor"] = gene_slices["motor"]
     gene_mask = np.zeros(D, np.float32)
     for name in want:
         if name not in GENE_BLOCKS:  # only reachable for "motor" with tune_motor off
             p.error(f"--genes: block '{name}' is not part of this genome")
-        lo, hi = GENE_BLOCKS[name]
-        gene_mask[lo:hi] = 1.0
+        gene_mask[GENE_BLOCKS[name]] = 1.0
     gene_mask[geom_lo:] = 1.0  # every geometry gene named on the CLI is searched
     print(f"[codesign] genes={want} geometry={geom_names} -> "
           f"{int(gene_mask.sum())}/{D} dims searched", flush=True)
@@ -317,12 +296,9 @@ def main():
     _ev0, _mf0 = evs_for(0)
     base = evaluate(_ev0, np.zeros((1, D), np.float32), 1,
                     label=f"baseline dt={args.timesteps[0]:g}ms", models_for=_mf0)[0]
-    # Take the first 13 by slice, not by exact-width unpack: build_rollout appends
-    # to its metrics tuple (tau_peak/tau_drift came in that way) and a rigid unpack
-    # turns every such append into a crash here. fitness_from only reads 0..11.
-    assert len(base) >= 13, f"metrics tuple shrank to {len(base)}; fitness_from reads 0..11"
-    Lb, taub, Ab, Sb, Clcb, Pinb, Ovlb, swb, Psupb, Cvb, alphab, kb, convb = \
-        [float(x) for x in base[:13]]
+    b0 = Metrics(*(float(x) for x in base))
+    Lb, taub, Ab, Clcb, Psupb, Cvb, alphab, kb = (b0.Lbar, b0.tau_hat, b0.A_stroke, b0.C_lc,
+                                                  b0.P_supplied, b0.C_valid, b0.alpha_pk, b0.k_eff)
     print(f"[baseline] L={Lb*1e3:.1f}mN tau={taub*1e3:.1f}mNm A={Ab*1e3:.1f}mm "
           f"P={Psupb*1e3:.0f}mW Clc={Clcb:.2e} Cv={Cvb:.2e} "
           f"alpha={math.degrees(alphab):.0f}deg k={kb:.2g}", flush=True)
@@ -345,21 +321,22 @@ def main():
         """
         if not all(np.all(np.isfinite(m)) for m in mlist):
             return -1e9, False
-        feas = all((m[0] >= LIFT_FLOOR and A_LO <= m[2] <= A_HI and m[1] <= TAU_CAP
-                    and m[4] <= CLC_CAP) for m in mlist)
-        taus = np.array([m[1] for m in mlist])
+        mlist = [Metrics(*m) for m in mlist]
+        feas = all((m.Lbar >= LIFT_FLOOR and A_LO <= m.A_stroke <= A_HI and m.tau_hat <= TAU_CAP
+                    and m.C_lc <= CLC_CAP) for m in mlist)
+        taus = np.array([m.tau_hat for m in mlist])
         tau_worst = taus.max(); tau_spread = taus.max() - taus.min()
-        A = np.mean([m[2] for m in mlist]); Psup = np.mean([m[8] for m in mlist])
-        swing = np.mean([m[7] for m in mlist])
-        # Recompute C_valid from raw alpha_pk/k_eff (m[10]/m[11]) against the
-        # baseline-calibrated thresholds; m[9] uses the miscalibrated defaults.
-        a_pk = np.mean([m[10] for m in mlist]); k_e = np.mean([m[11] for m in mlist])
+        A = np.mean([m.A_stroke for m in mlist]); Psup = np.mean([m.P_supplied for m in mlist])
+        swing = np.mean([m.swing for m in mlist])
+        # Recompute C_valid from raw alpha_pk/k_eff against the baseline-calibrated
+        # thresholds; Metrics.C_valid uses the miscalibrated defaults.
+        a_pk = np.mean([m.alpha_pk for m in mlist]); k_e = np.mean([m.k_eff for m in mlist])
         Cvalid = (max(0.0, a_pk - ALPHA_STALL) ** 2 / ALPHA_STALL ** 2
                   + max(0.0, k_e - K_MAX) ** 2 / K_MAX ** 2)
-        lift_short = np.mean([max(0.0, LIFT_FLOOR - m[0]) / max(LIFT_FLOOR, 1e-9) for m in mlist])
-        amp_bad = np.mean([max(0.0, A_LO - m[2], m[2] - A_HI) / max(Ab, 1e-9) for m in mlist])
+        lift_short = np.mean([max(0.0, LIFT_FLOOR - m.Lbar) / max(LIFT_FLOOR, 1e-9) for m in mlist])
+        amp_bad = np.mean([max(0.0, A_LO - m.A_stroke, m.A_stroke - A_HI) / max(Ab, 1e-9) for m in mlist])
         tau_bad = max(0.0, tau_worst - TAU_CAP) / max(taub, 1e-9)
-        clc_bad = np.mean([max(0.0, m[4] - CLC_CAP) / max(CLC_CAP, 1e-9) for m in mlist])
+        clc_bad = np.mean([max(0.0, m.C_lc - CLC_CAP) / max(CLC_CAP, 1e-9) for m in mlist])
         f = ((A / Ab - 1.0) + 0.5 * (1.0 - Psup / Psupb) + 0.5 * (1.0 - tau_worst / taub)
              - 0.5 * swing / taub - Cvalid - args.w_dt * tau_spread / taub
              - 4.0 * lift_short - 2.0 * amp_bad - 3.0 * tau_bad - 0.5 * clc_bad)
@@ -378,7 +355,7 @@ def main():
                                rng.normal(0, 0.05 * sp, (args.pop, 2 * K))], 1)   # harmonics
         stiff = rng.normal(0, 0.06 * sp, (args.pop, n)); pre = rng.normal(0, 0.04 * sp, (args.pop, n))
         blocks = [ctrl, stiff, pre]
-        if info["tune_motor"]:
+        if genome.motor:
             blocks.append(rng.normal(0, 0.04 * sp, (args.pop, 2)))
         if n_geom:
             # Geometry starts tight: these are log-factors on real dimensions, and
@@ -395,11 +372,9 @@ def main():
         # stiffen several-fold toward resonance.
         pop[:, 0] = np.clip(pop[:, 0], -0.5, 0.5)                       # a0 log
         pop[:, 1:2 * K + 1] = np.clip(pop[:, 1:2 * K + 1], -0.8, 0.8)   # harmonics depth
-        s = 2 * K + 1
-        pop[:, s:s + n] = np.clip(pop[:, s:s + n], -1.8, 1.4)           # stiffness log
-        pop[:, s + n:s + 2 * n] = np.clip(pop[:, s + n:s + 2 * n], -0.6, 0.6)  # pretension log
-        if info["tune_motor"]:
-            pop[:, s + 2 * n:geom_lo] = np.clip(pop[:, s + 2 * n:geom_lo], -0.6, 0.6)
+        for name, lo, hi in (("stiff", -1.8, 1.4), ("pre", -0.6, 0.6), ("motor", -0.6, 0.6)):
+            if name in gene_slices:
+                pop[:, gene_slices[name]] = np.clip(pop[:, gene_slices[name]], lo, hi)
         if n_geom:
             # +-0.4 log = a 0.67x..1.49x span on each dimension. Wider than that
             # and the compiled rig stops resembling the design it started from.
@@ -407,7 +382,7 @@ def main():
         return pop
 
     pop = clip(init_block())
-    arch_g, arch_f, arch_m = [], [], []
+    arch_g, arch_f = [], []
     n_elite = max(2, int(args.elite_frac * args.pop))
     for gen in range(args.gens):
         log(f"[gen {gen:02d}] start pop={args.pop} batch={args.batch}")
@@ -421,12 +396,12 @@ def main():
         for k in range(args.pop):
             if np.isfinite(fits[k]):
                 arch_g.append(pop[k].copy()); arch_f.append(fits[k])
-                arch_m.append([Ms[t][k] for t in range(len(evs))])
         order = np.argsort(fits)[::-1]
-        M0 = Ms[0][order[0]]; taus0 = [Ms[t][order[0]][1] for t in range(len(evs))]
+        M0 = Metrics(*Ms[0][order[0]])
+        taus0 = [Metrics(*Ms[t][order[0]]).tau_hat for t in range(len(evs))]
         print(f"[gen {gen:02d}] best_fit={fits[order[0]]:.3f} feas={int(oks.sum())}/{args.pop} | "
-              f"tau/dt={[round(x*1e3) for x in taus0]}mNm A={M0[2]*1e3:.0f}mm L={M0[0]*1e3:.0f}mN "
-              f"alpha={math.degrees(M0[10]):.0f}deg k={M0[11]:.2f} | archive={len(arch_g)}", flush=True)
+              f"tau/dt={[round(x*1e3) for x in taus0]}mNm A={M0.A_stroke*1e3:.0f}mm L={M0.Lbar*1e3:.0f}mN "
+              f"alpha={math.degrees(M0.alpha_pk):.0f}deg k={M0.k_eff:.2f} | archive={len(arch_g)}", flush=True)
         args.out.mkdir(parents=True, exist_ok=True)
         (args.out / "best_genome.json").write_text(json.dumps(
             {"gen": gen, "fitness": float(fits[order[0]]), "genome": [float(x) for x in pop[order[0]]]}))
@@ -482,9 +457,9 @@ def main():
         g = arch_g[idx]
         gj = jnp.asarray(g, jnp.float32)
         if n_geom:  # each sweep dt needs this genome's own compiled model
-            taus = [float(np.asarray(mj(gj, *model_of(g, d)))[1]) for d, mj in sweep]
+            taus = [float(mj(gj, *model_of(g, d)).tau_hat) for d, mj in sweep]
         else:
-            taus = [float(np.asarray(mj(gj))[1]) for _, mj in sweep]
+            taus = [float(mj(gj).tau_hat) for _, mj in sweep]
         spread = (max(taus) - min(taus)) / max(taus)
         materialize(g, info, args.out / f"seed_{si}", args.tg, geom_names)
         rec = {"seed": si, "fitness": float(arch_f[idx]),

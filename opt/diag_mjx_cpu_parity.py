@@ -1,4 +1,8 @@
-"""Component-level CPU vs MJX divergence check for one design."""
+"""Component-level CPU vs MJX divergence check for one design: per step, the aero, pitch,
+applied-force and post-step state differences between MuJoCo CPU and MJX.
+
+    uv run python opt/diag_mjx_cpu_parity.py --steps 40
+"""
 
 from __future__ import annotations
 
@@ -6,10 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-for path in (ROOT, ROOT / "src", ROOT / "opt"):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import jax
 import jax.numpy as jnp
@@ -17,7 +18,7 @@ import mujoco
 import mujoco.mjx as mjx
 import numpy as np
 
-from optimize_control import _INTEGRATORS, setup, set_unsteady_aero
+from codesign.rig import INTEGRATORS, set_unsteady_aero, setup
 from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology
 from runtime.crank import sync_crank_disks_at_rest
@@ -89,7 +90,7 @@ def main() -> None:
     ap.add_argument("--scene", type=Path, default=Path("/tmp/diag_mjx_cpu_parity_scene.xml"))
     ap.add_argument("--steps", type=int, default=40)
     ap.add_argument("--aero-substep", type=int, default=4)
-    ap.add_argument("--integrator", choices=list(_INTEGRATORS), default="euler")
+    ap.add_argument("--integrator", choices=list(INTEGRATORS), default="euler")
     args = ap.parse_args()
 
     set_unsteady_aero(False)
@@ -132,7 +133,7 @@ def main() -> None:
             f"{diff_norm(cpu.qfrc_constraint, next_dx.qfrc_constraint):.3e} "
             f"{diff_norm(cpu.ten_length, next_dx.ten_length):.3e}"
         )
-        carry = mroll._match_dtypes((next_dx, new_state, mjx_aero, net_force, carry[4] + 1), carry)
+        carry = mroll.match_dtypes((next_dx, new_state, mjx_aero, net_force, carry[4] + 1), carry)
 
 
 if __name__ == "__main__":

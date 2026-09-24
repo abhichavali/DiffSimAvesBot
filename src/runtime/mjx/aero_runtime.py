@@ -226,8 +226,3 @@ def aero_qfrc(m, d, cfg: AeroConfig, state: AeroState):
     qfrc, _net_force_world, new_state = aero_wrench(m, d, cfg, state)
     return qfrc, new_state
 
-
-def apply(m, d, cfg: AeroConfig, state: AeroState):
-    """Add the aero force to ``d.qfrc_applied``; returns (data, new_state)."""
-    qfrc, new_state = aero_qfrc(m, d, cfg, state)
-    return d.replace(qfrc_applied=d.qfrc_applied + qfrc), new_state

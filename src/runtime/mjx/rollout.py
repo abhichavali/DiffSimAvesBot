@@ -1,25 +1,15 @@
-"""Scan-based MJX rollout: motor drive + pitch + aero + ``mjx.step``.
+"""MJX drive + one physics step in the CPU runtime's order, and a plain design-drive rollout.
 
-Composes the migrated force sources into one jittable, differentiable rollout,
-mirroring the CPU loop in ``realtime.RealtimeSync.step_and_sync``:
-each step zeroes ``qfrc_applied``, sets the ramped motor ``ctrl``, adds the
-dead-zone pitch torque (:mod:`runtime.mjx.wing_pitch`) and the blade-element aero
-force (:mod:`runtime.mjx.aero_runtime`), then steps the physics. The aero
-finite-difference carry (:class:`~runtime.mjx.aero_runtime.AeroState`) is threaded
-through the ``lax.scan`` so no Python-side state is needed.
+physics_step() is the step every MJX rollout shares with the CPU loop in
+``realtime.RealtimeSync.step_and_sync``: zero ``qfrc_applied``, set the motor ``ctrl``,
+add the dead-zone pitch torque (:mod:`runtime.mjx.wing_pitch`), add the blade-element
+aero force (:mod:`runtime.mjx.aero_runtime`), then ``mjx.step``. simulate() runs it
+over the design's Fourier drive (the MJX twin of run_mjx_fixed_frequency);
+codesign.metrics runs it under a learned command.
 
-    model, data = load_model()              # CPU; calibrates wing pitch
-    final, traj = simulate(model, data, n_steps=4000)
-
-``simulate`` reads the calibrated pitch rest angles out of ``data`` so the
-dead-zone is centered exactly as the CPU pipeline leaves it.
-
-Autodiff note: differentiate the rollout with **forward mode** (``jax.jacfwd``).
-MJX's Newton/CG solver steps with a ``lax.while_loop``, which reverse-mode
-(``jax.grad``) cannot trace; forward mode handles it and is efficient for the
-small parameter sets here (e.g. the ~14 ``AeroParams``). Pass the parameter being
-optimized through ``aero_runtime.build_aero_config(..., params=...)`` so it stays
-a traced input rather than a baked constant.
+Autodiff: differentiate with **forward mode** (``jax.jacfwd``). MJX's Newton/CG
+solver steps with a ``lax.while_loop``, which reverse mode (``jax.grad``) cannot
+trace unless ``model.opt.iterations == 1``.
 """
 
 from __future__ import annotations
@@ -32,8 +22,6 @@ import mujoco
 import mujoco.mjx as mjx
 
 from runtime.mjx import aero_runtime, wing_pitch
-from runtime.mjx.aero import AeroParams
-from runtime.mjx.aero_runtime import AeroConfig, AeroState
 from runtime.mjx.wing_pitch import WingPitchConfig
 from runtime.runtime_config import get_control_parameters
 
@@ -91,7 +79,8 @@ def drive_ctrl(ctrl_like: jax.Array, t: jax.Array, cfg: DriveConfig) -> jax.Arra
     return jnp.zeros_like(ctrl_like).at[cfg.flap_actuator_ids].set(command)
 
 
-def _pitch_centers(model: mujoco.MjModel, data: mujoco.MjData) -> list[float]:
+def pitch_centers(model: mujoco.MjModel, data: mujoco.MjData) -> list[float]:
+    """The settled wing-pitch angles: the dead-zone centers of the pitch spring."""
     centers: list[float] = []
     for name in _PITCH_JOINTS:
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
@@ -101,7 +90,7 @@ def _pitch_centers(model: mujoco.MjModel, data: mujoco.MjData) -> list[float]:
     return centers
 
 
-def _match_dtypes(tree, ref_tree):
+def match_dtypes(tree, ref_tree):
     """Cast every leaf of ``tree`` to the dtype of the matching leaf in ``ref_tree``.
 
     ``mjx.step`` promotes some int32 index fields (tendon wrap / contact) to int64
@@ -122,112 +111,45 @@ def _match_dtypes(tree, ref_tree):
     )
 
 
-def make_step_fn(
-    mx,
-    drive_cfg: DriveConfig,
-    pitch_cfg: WingPitchConfig,
-    aero_cfg: AeroConfig,
-    measure_fn: Callable,
-    carry_template,
-):
-    """Build the ``lax.scan`` body: (data, aero_state) -> (carry, measurement)."""
-
-    def step(carry, _):
-        dx, aero_state = carry
-        ctrl = drive_ctrl(dx.ctrl, dx.time, drive_cfg)
-        dx = dx.replace(ctrl=ctrl, qfrc_applied=jnp.zeros_like(dx.qfrc_applied))
-        dx = wing_pitch.apply(dx, pitch_cfg)
-        dx, aero_state = aero_runtime.apply(mx, dx, aero_cfg, aero_state)
-        dx = mjx.step(mx, dx)
-        carry = _match_dtypes((dx, aero_state), carry_template)
-        return carry, measure_fn(carry[0])
-
-    return step
+_pitch_centers = pitch_centers  # TEMP re-export: remove after integration (src/run_mjx_fixed_frequency.py)
 
 
-def rollout(
-    mx,
-    dx,
-    n_steps: int,
-    drive_cfg: DriveConfig,
-    pitch_cfg: WingPitchConfig,
-    aero_cfg: AeroConfig,
-    *,
-    aero_state: AeroState | None = None,
-    measure_fn: Callable | None = None,
-):
-    """Run ``n_steps`` of the composed rollout via ``lax.scan``.
+def physics_step(mx, dx, ctrl, pitch_cfg: WingPitchConfig, aero_qfrc: Callable):
+    """One step in the CPU runtime's force order; returns ``(data, aux)``.
 
-    Returns ``(final_data, final_aero_state, trajectory)`` where ``trajectory`` is
-    the stacked per-step output of ``measure_fn`` (default: ``data.qpos``).
+    ``aero_qfrc(data) -> (qfrc, aux)`` supplies the aero generalized force (and
+    whatever the caller wants back, e.g. the updated aero state); it sees the data
+    after ctrl and pitch torque are set.
     """
-    if aero_state is None:
-        aero_state = aero_runtime.init_aero_state(aero_cfg)
-    if measure_fn is None:
-        measure_fn = lambda d: d.qpos  # noqa: E731
-
-    init_carry = (dx, aero_state)
-    step = make_step_fn(mx, drive_cfg, pitch_cfg, aero_cfg, measure_fn, init_carry)
-    (dx_final, aero_state), traj = jax.lax.scan(
-        step, init_carry, xs=None, length=n_steps
-    )
-    return dx_final, aero_state, traj
+    dx = dx.replace(ctrl=ctrl, qfrc_applied=jnp.zeros_like(dx.qfrc_applied))
+    dx = wing_pitch.apply(dx, pitch_cfg)
+    qfrc, aux = aero_qfrc(dx)
+    dx = dx.replace(qfrc_applied=dx.qfrc_applied + qfrc)
+    return mjx.step(mx, dx), aux
 
 
-def set_reverse_mode_solver(model: mujoco.MjModel, *, iterations: int = 1) -> mujoco.MjModel:
-    """Configure ``model`` so ``mjx.step`` is reverse-mode differentiable.
+def simulate(model: mujoco.MjModel, data: mujoco.MjData, n_steps: int):
+    """Put a settled CPU model/data on device and run ``n_steps`` of the design drive,
+    aero recomputed every step. Returns ``(final_data, qpos trajectory)``.
 
-    MJX's ``solver.solve`` runs the main constraint loop as a single ``body()``
-    call (no ``lax.while_loop``) **iff** ``opt.iterations == 1``; the line search
-    is already a static-length scan. So ``jax.grad`` through ``mjx.step`` works
-    only with one solver iteration. Mutates ``model.opt.iterations`` in place and
-    returns it. Trade-off: one constraint iteration is looser than the default —
-    validate drift before relying on it (see the accuracy gate).
+    The pitch dead zone is centered on ``data``'s settled pitch angles.
     """
-    if iterations != 1:
-        raise ValueError(
-            "Only iterations=1 avoids MJX's while_loop solver; for N>1 a custom "
-            "scan-based solve is required (see the documented fallback)."
-        )
-    model.opt.iterations = int(iterations)
-    return model
+    drive_cfg = build_drive_config(model)
+    pitch_cfg = wing_pitch.config_from_runtime(model, centers=pitch_centers(model, data))
+    aero_cfg = aero_runtime.build_aero_config(model)
 
+    def run(mx, dx):
+        def step(carry, _):
+            dx, aero_state = carry
+            ctrl = drive_ctrl(dx.ctrl, dx.time, drive_cfg)
+            dx, aero_state = physics_step(
+                mx, dx, ctrl, pitch_cfg,
+                lambda d: aero_runtime.aero_qfrc(mx, d, aero_cfg, aero_state))
+            carry = match_dtypes((dx, aero_state), carry0)
+            return carry, carry[0].qpos
 
-def simulate(
-    model: mujoco.MjModel,
-    data: mujoco.MjData,
-    n_steps: int,
-    *,
-    params: AeroParams = AeroParams(),
-    ramp_duration: float | None = None,
-    measure_fn: Callable | None = None,
-    differentiable: bool = False,
-    jit: bool = True,
-):
-    """Convenience: put a (calibrated) CPU model/data on device and roll out.
+        carry0 = (dx, aero_runtime.init_aero_state(aero_cfg))
+        return jax.lax.scan(step, carry0, xs=None, length=n_steps)
 
-    ``data`` is assumed already calibrated (e.g. via ``load_model``); its pitch
-    rest angles seed the dead-zone centers. With ``differentiable=True`` the
-    model's solver is set to one iteration so the rollout is reverse-mode
-    differentiable (see :func:`set_reverse_mode_solver`). Returns
-    ``(final_data, trajectory)``.
-    """
-    if differentiable:
-        set_reverse_mode_solver(model)
-    mx = mjx.put_model(model)
-    dx = mjx.put_data(model, data)
-
-    drive_cfg = build_drive_config(model, ramp_duration=ramp_duration)
-    pitch_cfg = wing_pitch.config_from_runtime(model, centers=_pitch_centers(model, data))
-    aero_cfg = aero_runtime.build_aero_config(model, params=params)
-
-    # Close over the configs (their str/int fields are static, used at trace time)
-    # and jit only over the device arrays (model + data).
-    def _run(mx_, dx_):
-        return rollout(
-            mx_, dx_, n_steps, drive_cfg, pitch_cfg, aero_cfg, measure_fn=measure_fn
-        )
-
-    run = jax.jit(_run) if jit else _run
-    dx_final, _aero_state, traj = run(mx, dx)
+    (dx_final, _aero_state), traj = jax.jit(run)(mjx.put_model(model), mjx.put_data(model, data))
     return dx_final, traj
