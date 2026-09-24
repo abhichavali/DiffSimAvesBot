@@ -10,9 +10,11 @@ rad are taken as written. `deg` is NOT converted by the lexer -- each key
 decides: every angle converts when its literal says deg (disk tilt/pitch/
 crank_phase, crank_phase_lag, attach_along_edge, the wing pitch angles and the
 eagle's bones/cables/feathers/wrist), and station angles and arrange.angle stay
-in degrees by design. Missing keys take the model's defaults; unknown keys are
-ignored except in the eagle's wing sections (bones, wrist, cables, feathers),
-which reject them.
+in degrees by design. Missing keys take the model's defaults. Unknown keys and
+malformed lines are errors: a typo would otherwise fall back to a default and
+build a different design. The few keys old files carry that nothing reads
+(archetype shape/symmetry, disk outboard, aero force_scale/body_torque/cop) are
+accepted and ignored.
 """
 
 from __future__ import annotations
@@ -63,12 +65,11 @@ _DRIVE_RE = re.compile(r"^drive\s+M\[(\d+)\]\s+and\s+M\[(\d+)\]\s*$", re.I)
 _ASSIGN_RE = re.compile(r"^(\w+)\s*=\s*(.+)$")
 _DEG_RE = re.compile(r"\bdeg\b", re.I)
 
-#: `motors:` keys, matched as line prefixes in this order (so `_t` per-foot keys
-#: win over their shared forms). drive_phase_offset is the old crank_phase_lag.
+#: `motors:` keys besides the per-foot `<key>_t<N>` ones. drive_phase_offset is the
+#: old crank_phase_lag.
 _MOTOR_KEYS = (
-    "attach_along_edge", "attach_radius", "crank_throw_t", "foot_outset_t", "tendon_rest_length_t",
-    "crank_phase_lag", "drive_phase_offset", "tendon_rest_length", "tendon_stiffness",
-    "tendon_damping", "motor_direction", "control",
+    "attach_along_edge", "attach_radius", "crank_phase_lag", "drive_phase_offset", "tendon_rest_length",
+    "tendon_stiffness", "tendon_damping", "motor_direction", "control",
 )
 _WING_SECTIONS = ("pitch", "aero", "bones", "wrist", "cables", "feathers")
 
@@ -139,7 +140,7 @@ def _parse_brace_dict(text: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for part in parts:
         if ":" not in part:
-            continue
+            raise ValueError(f"expected key: value, got {part!r} in {text}")
         key, val = part.split(":", 1)
         out[key.strip()] = _scalar_or_str(val.strip())
     return out
@@ -170,6 +171,26 @@ def _radians(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(math.radians(float(v)) for v in value)
     return math.radians(float(value))
+
+
+def _assignment(line: str) -> tuple[str, str]:
+    """`key = value` (or `key=value`) as (key, raw value)."""
+    if " = " in line:
+        key, val = line.split("=", 1)
+        return key.strip(), val.strip()
+    m = _ASSIGN_RE.match(line)
+    if not m:
+        raise ValueError(f"Unrecognized line: {line}")
+    return m.group(1), m.group(2)
+
+
+def _reject_unknown(where: str, raw: Dict[str, Any], known: str, ignored: tuple = ()) -> None:
+    """Raise on a key outside `known` (space-separated); `ignored` keys are accepted and dropped."""
+    known_keys = set(known.split())
+    unknown = sorted(set(raw) - known_keys - set(ignored))
+    if unknown:
+        raise ValueError(f"unknown {where} key(s) {', '.join(unknown)}; expected one of "
+                         + ", ".join(sorted(known_keys)))
 
 
 def _floats(raw: Dict[str, Any], default: Any, names: str) -> Dict[str, float]:
@@ -241,19 +262,15 @@ class _TgParser:
                 yield raw.strip()
 
     def _assignments(self, target: Dict[str, Any]) -> None:
-        """`key = value` lines (and a `defaults { ... }` dict) into `target`; anything else is skipped."""
+        """`key = value` lines (and a `defaults { ... }` dict) into `target`; bare `name:` headers are skipped."""
         for line in self._block():
             if line.endswith(":") and "{" not in line and "=" not in line:
                 continue
             if line.startswith("defaults "):
                 target.update(_parse_brace_dict(line[len("defaults "):].strip()))
-            elif " = " in line:
-                key, val = line.split("=", 1)
-                target[key.strip()] = _parse_scalar(val.strip())
             else:
-                m = _ASSIGN_RE.match(line)
-                if m:
-                    target[m.group(1)] = _parse_scalar(m.group(2))
+                key, val = _assignment(line)
+                target[key] = _parse_scalar(val)
 
     def _tendons(self) -> None:
         in_overrides = False
@@ -312,14 +329,13 @@ class _TgParser:
                 continue
             if line.startswith("phase ="):
                 continue
-            key = next((k for k in _MOTOR_KEYS if line.startswith(k)), None)
-            if key is None:
-                raise ValueError(f"Unrecognized motor line: {line}")
-            if key in self.per_foot:  # e.g. crank_throw_t4 = 23 mm
-                name, value = line.split("=", 1)
-                self.per_foot[key][int(name.strip()[len(key):])] = float(_parse_quantity(value.strip()))
+            key, eq, value = (part.strip() for part in line.partition("="))
+            foot = re.fullmatch(r"(\w+_t)(\d+)", key)
+            if eq and foot and foot.group(1) in self.per_foot:  # e.g. crank_throw_t4 = 23 mm
+                self.per_foot[foot.group(1)][int(foot.group(2))] = float(_parse_quantity(value))
                 continue
-            value = line.split("=", 1)[1].strip()
+            if not eq or key not in _MOTOR_KEYS:
+                raise ValueError(f"Unrecognized motor line: {line}")
             if key in ("crank_phase_lag", "drive_phase_offset", "attach_along_edge"):
                 angle = float(_parse_scalar(value))
                 key = "crank_phase_lag" if key == "drive_phase_offset" else key
@@ -336,11 +352,8 @@ class _TgParser:
                 section = line[:-1]
                 self.declared.add(section)
                 continue
-            if " = " not in line:
-                continue
-            key, val = line.split("=", 1)
-            key = key.strip()
-            parsed = _parse_scalar(val.strip())
+            key, val = _assignment(line)
+            parsed = _parse_scalar(val)
             if _DEG_RE.search(val) and (
                 section in ("bones", "cables", "feathers")
                 or (section == "wrist" and key != "stations")  # stations stay in degrees
@@ -365,6 +378,18 @@ class _TgParser:
 
         w, disk, m = self.world, self.disk, self.motors
         wing_pitch, aero = self.wing_sections["pitch"], self.wing_sections["aero"]
+        _reject_unknown("world", w, "gravity timestep integrator scale meshdir")
+        _reject_unknown("archetype", arch, "radius stations width arc_rod rung_rod",
+                        ignored=("shape", "symmetry sigma"))
+        _reject_unknown("arrange", self.arrange, "gap angle mobile_dx inplane_offset")
+        _reject_unknown("placement", self.placement, "mount_height lateral_offset")
+        _reject_unknown("tendon defaults", self.tendon_defaults, "color stiffness damping pretension width")
+        _reject_unknown("disk", disk, "tilt pitch ctrl solref crank_throw crank_phase radius kv foot_outset "
+                                      "disk_dx disk_dy", ignored=("outboard",))
+        _reject_unknown("wing", self.wing, "rod_length mount_arm mesh")
+        _reject_unknown("wing pitch", wing_pitch, "free_angle stiffness upstroke_stiffness downstroke_stiffness "
+                                                  "damping initial range armature upstroke_pitch downstroke_pitch")
+        _reject_unknown("wing aero", aero, "blades", ignored=("force_scale", "body_torque", "cop"))
         # Older files give one `free_angle` (the whole dead band) and one `stiffness`.
         free_angle = float(wing_pitch.get("free_angle", math.radians(30))) / 2.0
         pitch_stiffness = float(wing_pitch.get("stiffness", 0.5))
@@ -460,13 +485,7 @@ class _TgParser:
             if section in self.declared:
                 raise ValueError(f"wing {section}: section is empty — remove it, or give it keys")
             return None
-        known_keys = set(known.split())
-        unknown = sorted(set(raw) - known_keys)
-        if unknown:
-            raise ValueError(
-                f"unknown wing {section} key(s) {', '.join(unknown)}; expected one of "
-                + ", ".join(sorted(known_keys))
-            )
+        _reject_unknown(f"wing {section}", raw, known)
         return raw
 
     def _bones(self) -> Optional[WingBones]:

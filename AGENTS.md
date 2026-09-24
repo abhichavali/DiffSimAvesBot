@@ -130,7 +130,6 @@ CPU path is unchanged and is the reference the port is validated against.
 ## Known bugs (left unfixed on purpose: each fix changes outputs)
 
 - Codesign: see `opt/README.md` "Known issues".
-- Morphology: unknown `.tg` keys are silently accepted; the R fixed strut keeps the L
-  site quats.
+- Morphology: the R fixed strut keeps the L site quats.
 - GUI: `run_gui`'s `RunConfig.loss` is never read; a leaked `mkdtemp`.
 - `opt/hover_policy.py` writes an absolute `tg` and no `pd_gains` into `hover_meta.json`.

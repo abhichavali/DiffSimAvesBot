@@ -60,6 +60,9 @@ def expand_sigma_tendons(net: TendonNet) -> List[StructuralEdge]:
             edges.append(StructuralEdge(mobile, fixed, net.edge_overrides.get(eid, gen.material)))
     if len(edges) != 12:
         raise ValueError(f"σ expansion produced {len(edges)} edges, expected 12")
+    unused = sorted(set(net.edge_overrides) - seen)
+    if unused:
+        raise ValueError(f"tendon overrides name no structural edge: {', '.join(unused)}")
     return edges
 
 

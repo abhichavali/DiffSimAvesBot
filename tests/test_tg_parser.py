@@ -1,11 +1,14 @@
-"""The .tg parser: units on angle literals.
+"""The .tg parser: units on angle literals, and typos that must not parse.
 
 Run: uv run pytest -q tests/test_tg_parser.py
 """
 
 import math
 
+import pytest
+
 from design_paths import DEFAULT_HUMMER_TG
+from morphology.compile import compile_morphology
 from morphology.tg_parser import _TgParser
 
 HOVER = DEFAULT_HUMMER_TG.read_text()
@@ -32,3 +35,22 @@ def test_angles_follow_their_unit():
 def test_attach_along_edge_defaults_to_motor_foot():
     feet = parse("    attach_along_edge = 0.0 rad\n", "").motors.feet
     assert feet[0].attach_along_edge_rad == 0.0
+
+
+@pytest.mark.parametrize("old, new", [
+    ("timestep   = 0.13 ms", "timstep    = 0.13 ms"),  # world key typo (fell back to 0.375 ms)
+    ("timestep   = 0.13 ms", "timestep: 0.13 ms"),  # not an assignment (was skipped)
+    ("stiffness  = 0.05", "stifness   = 0.05"),  # wing pitch (fell back to 0.5)
+    ("blades      = 4", "blade       = 8"),  # wing aero
+    ("control = control.tg", "controller = x.tg"),  # motors keys matched as prefixes
+    ("pitch: 20 deg", "pitch 20 deg"),  # brace-dict part without a colon
+    ("    overrides:\n", "    overrides:\n        R_t3_to_t9 { stiffness: 1 N/m }\n"),  # no such tendon
+    ("    overrides:\n", "    overrides:\n        M[1A] -- F[1A] { stiffness: 1 N/m }\n"),  # no such edge
+])
+def test_typos_raise(old, new):
+    with pytest.raises(ValueError):
+        compile_morphology(parse(old, new))
+
+
+def test_assignment_without_spaces():
+    assert parse("rod_length = 18.0 mm", "rod_length=30 mm").wing.rod_length == 0.03

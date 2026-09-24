@@ -38,7 +38,7 @@ from morphology.geometry import (
 )
 from morphology.model import Morphology
 from morphology.motor_tendons import measure_motor_tendon_ranges
-from morphology.tendon_net import derive_tendon_length, expand_sigma_tendons
+from morphology.tendon_net import anchor_node_name, derive_tendon_length, expand_sigma_tendons
 from morphology.tg_parser import load_morphology
 from morphology.wing_geometry import ROOT
 
@@ -64,6 +64,10 @@ def compile_morphology(morph: Morphology) -> CompiledMorphology:
             mobile_geom.motor_rod_pairs.append((edge_name, name))
 
     edges = expand_sigma_tendons(morph.tendons)
+    names = {f"{side}_{anchor_node_name(e.mobile)}_to_{anchor_node_name(e.fixed)}" for side in "LR" for e in edges}
+    unused = sorted(set(morph.tendons.individual_overrides) - names)
+    if unused:
+        raise ValueError(f"tendon overrides name no structural tendon: {', '.join(unused)}")
     left = CompiledShoulder(
         side="L",
         mobile_pos=mobile_pos,
