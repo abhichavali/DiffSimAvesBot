@@ -44,7 +44,6 @@ import mujoco.mjx as mjx  # noqa: E402
 import numpy as np  # noqa: E402
 
 import flying  # noqa: E402
-from codesign.rig import compile_lock  # noqa: E402
 from compile_tg import compile_tg  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.control_signal import load_control_for_morphology  # noqa: E402
@@ -58,10 +57,9 @@ from runtime.mjx import aero_runtime, rollout as mroll, wing_pitch as mwp  # noq
 # model build (free-flying it009p, gravity matched to lift)
 # --------------------------------------------------------------------------- #
 def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_substep):
-    with compile_lock():
-        tmp = scene_out.with_suffix(".bench.xml")
-        compile_tg(tg_path, tmp)
-        xml = flying.to_airframe(tmp.read_text())
+    tmp = scene_out.with_suffix(".bench.xml")
+    compile_tg(tg_path, tmp)
+    xml = flying.to_airframe(tmp.read_text())
     scene_out.write_text(xml)
     morph = load_morphology(tg_path)
     model = mujoco.MjModel.from_xml_path(str(scene_out))

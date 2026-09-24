@@ -252,9 +252,8 @@ def main():
           f" + geometry {n_geom})  pop={args.pop} dts={args.timesteps}", flush=True)
 
     # Per-genome models for the geometry block. The .tg variant must sit beside
-    # its source (meshdir and the `control =` include resolve relative to it),
-    # and setup() serializes compiles on a lock, so one scratch name per dt is
-    # enough -- batches are built one at a time.
+    # its source (the `control =` include resolves relative to it), and batches
+    # are built one at a time, so one scratch name is enough.
     geom_lo = genome.size
 
     def model_of(row, dt):

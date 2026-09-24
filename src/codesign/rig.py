@@ -8,7 +8,6 @@ term in both aero implementations; they read it at trace time, so call it before
 
 from __future__ import annotations
 
-import contextlib
 import fcntl
 import math
 from pathlib import Path
@@ -60,16 +59,6 @@ def set_unsteady_aero(enabled: bool):
     ma.OMEGA_DOT_CAP, ma.LIN_ACC_CAP = o, l
 
 
-@contextlib.contextmanager
-def compile_lock():
-    """Serialize compile_tg across processes: it writes SHARED files
-    (templates/generated-joint/*.xml) whatever the scene path, and concurrent
-    optimizer processes racing there produce empty or partial XML."""
-    with open(ROOT / "opt" / ".compile.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
-
-
 def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator: str = "euler",
           phase_lag: float | None = None, timestep_ms: float | None = None,
           lock_wings: bool = False) -> Rig:
@@ -82,7 +71,11 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     agree per step (implicitfast diverges between the two solvers, so designs
     optimized under it overfit MJX and fail CPU validation).
     """
-    with compile_lock():
+    # Concurrent optimizer / EA processes share the default --scene (and the EA its
+    # scene_ea_genome.xml): hold a lock across the write and the load, or one loads
+    # another's half-written XML.
+    with open(ROOT / "opt" / ".compile.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
         compile_tg(tg_path, scene_path)
         model = mujoco.MjModel.from_xml_path(str(scene_path))
     model.opt.integrator = INTEGRATORS[integrator]

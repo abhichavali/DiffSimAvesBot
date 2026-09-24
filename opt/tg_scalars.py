@@ -133,8 +133,8 @@ def substitute(text: str, params: list[Param], updates: dict[str, float]) -> str
 def write_variant(src: Path, dst: Path, updates: dict[str, float]) -> Path:
     """Write `src` to `dst` with `updates` applied.
 
-    `dst` must sit in the same directory as `src`: meshdir and the `control =`
-    include are both resolved relative to the .tg being compiled.
+    `dst` must sit in the same directory as `src`: the `control =` include is
+    resolved relative to the .tg being compiled.
     """
     if dst.parent != src.parent:
         raise ValueError(f"variant must live beside its source ({src.parent}), got {dst.parent}")
