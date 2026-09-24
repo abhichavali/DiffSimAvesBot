@@ -165,7 +165,7 @@ put the hinge on the leading edge of a wing starting at the hinge, not on the dr
   the unsymmetrized `.tg` values.
 - `--init-codesign` slices by position, so a `theta_full.json` from a `--tune-pitch` or
   `--tune-frequency` run is mis-decoded.
-- `evolve_codesign.py` hard-codes K=5 harmonics and ranks on `tau_hat`, not `tau_peak`.
+- `evolve_codesign.py` hard-codes K=5 harmonics.
 - `--wavelet` writes a `control.tg` (`basis = wavelet`, `w_j = ...`) that no runtime tool
   loads (`load_control` rejects it), and `design_io` KeyErrors on its `theta_best.json`.
 - The validity-penalized Adam stage (`--w-valid`, `--alpha-stall-deg`, `--k-max`, ...)

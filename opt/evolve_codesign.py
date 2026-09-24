@@ -11,7 +11,9 @@ To attack the timestep axis directly, fitness is evaluated at TWO timesteps
 (default 0.06 + 0.03 ms): a genome must be feasible at BOTH, is scored on the
 WORSE peak torque, and pays a penalty for the cross-timestep torque spread. So a
 design that only looks good at one dt is culled. (The baseline is dt-invariant,
-~225 mNm at every dt, so this is a fair, well-posed target.)
+~225 mNm at every dt, so this is a fair, well-posed target.) Torque here is the exact
+per-cycle peak (Metrics.tau_peak), the number CPU certification measures, not the
+Lp10 gradient proxy tau_hat: the EA needs no gradient.
 
 Genome = [control(2K+1)] [tendon stiff(n) + pre(n)] [motor(2)] [geometry(G)]
 
@@ -297,7 +299,7 @@ def main():
     base = evaluate(_ev0, np.zeros((1, D), np.float32), 1,
                     label=f"baseline dt={args.timesteps[0]:g}ms", models_for=_mf0)[0]
     b0 = Metrics(*(float(x) for x in base))
-    Lb, taub, Ab, Clcb, Psupb, Cvb, alphab, kb = (b0.Lbar, b0.tau_hat, b0.A_stroke, b0.C_lc,
+    Lb, taub, Ab, Clcb, Psupb, Cvb, alphab, kb = (b0.Lbar, b0.tau_peak, b0.A_stroke, b0.C_lc,
                                                   b0.P_supplied, b0.C_valid, b0.alpha_pk, b0.k_eff)
     print(f"[baseline] L={Lb*1e3:.1f}mN tau={taub*1e3:.1f}mNm A={Ab*1e3:.1f}mm "
           f"P={Psupb*1e3:.0f}mW Clc={Clcb:.2e} Cv={Cvb:.2e} "
@@ -322,9 +324,9 @@ def main():
         if not all(np.all(np.isfinite(m)) for m in mlist):
             return -1e9, False
         mlist = [Metrics(*m) for m in mlist]
-        feas = all((m.Lbar >= LIFT_FLOOR and A_LO <= m.A_stroke <= A_HI and m.tau_hat <= TAU_CAP
+        feas = all((m.Lbar >= LIFT_FLOOR and A_LO <= m.A_stroke <= A_HI and m.tau_peak <= TAU_CAP
                     and m.C_lc <= CLC_CAP) for m in mlist)
-        taus = np.array([m.tau_hat for m in mlist])
+        taus = np.array([m.tau_peak for m in mlist])
         tau_worst = taus.max(); tau_spread = taus.max() - taus.min()
         A = np.mean([m.A_stroke for m in mlist]); Psup = np.mean([m.P_supplied for m in mlist])
         swing = np.mean([m.swing for m in mlist])
@@ -398,7 +400,7 @@ def main():
                 arch_g.append(pop[k].copy()); arch_f.append(fits[k])
         order = np.argsort(fits)[::-1]
         M0 = Metrics(*Ms[0][order[0]])
-        taus0 = [Metrics(*Ms[t][order[0]]).tau_hat for t in range(len(evs))]
+        taus0 = [Metrics(*Ms[t][order[0]]).tau_peak for t in range(len(evs))]
         print(f"[gen {gen:02d}] best_fit={fits[order[0]]:.3f} feas={int(oks.sum())}/{args.pop} | "
               f"tau/dt={[round(x*1e3) for x in taus0]}mNm A={M0.A_stroke*1e3:.0f}mm L={M0.Lbar*1e3:.0f}mN "
               f"alpha={math.degrees(M0.alpha_pk):.0f}deg k={M0.k_eff:.2f} | archive={len(arch_g)}", flush=True)
@@ -457,9 +459,9 @@ def main():
         g = arch_g[idx]
         gj = jnp.asarray(g, jnp.float32)
         if n_geom:  # each sweep dt needs this genome's own compiled model
-            taus = [float(mj(gj, *model_of(g, d)).tau_hat) for d, mj in sweep]
+            taus = [float(mj(gj, *model_of(g, d)).tau_peak) for d, mj in sweep]
         else:
-            taus = [float(mj(gj).tau_hat) for _, mj in sweep]
+            taus = [float(mj(gj).tau_peak) for _, mj in sweep]
         spread = (max(taus) - min(taus)) / max(taus)
         materialize(g, info, args.out / f"seed_{si}", args.tg, geom_names)
         rec = {"seed": si, "fitness": float(arch_f[idx]),
