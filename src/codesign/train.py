@@ -24,9 +24,10 @@ import jax.numpy as jnp
 import numpy as np
 
 from codesign.artifacts import write_design
-from codesign.cpu_check import cpu_gate, cpu_rollout, to_cpu
+from codesign.cpu_check import cpu_gate, cpu_rollout, gate_summary, to_cpu
 from codesign.genome import Genome, initial_theta, load_control_seed, wavelet_dictionary
-from codesign.loss import LossAux, make_loss, objective_norm, objective_value, variant_set
+from codesign.loss import (OBJ_METRIC, make_loss, objective_norm, objective_row, objective_value,
+                           variant_set)
 from codesign.metrics import Metrics, build_rollout
 from codesign.rig import flap_t1_mask, setup, step_counts, strokeplane_info, variant
 from runtime.aero import set_unsteady_aero
@@ -38,27 +39,71 @@ ADAM_B1, ADAM_B2, ADAM_EPS = 0.9, 0.999, 1e-8
 def full_matrix(bank_jit, theta):
     """Forward-evaluate EVERY bank cell, scored on the EXACT per-cycle peak (tau_peak):
     the Lp proxy under-reads narrow torque spikes by 15-25% and is duty-cycle hackable.
-    Returns (rows, robust peak, gap, min lift, max |drift|)."""
-    rows = []
+    Returns (rows, Metrics per cell): the rows are what log.json records, and
+    cpu_check.gate_summary reduces them."""
+    rows, ms = [], []
     for (ig, dm), f in bank_jit.items():
         m = Metrics(*(float(x) for x in f(theta)))
+        ms.append(m)
         rows.append({"integrator": ig, "timestep_ms": dm, "L": m.Lbar, "T": m.tau_peak,
                      "T_lp": m.tau_hat, "drift": m.tau_drift, "A": m.A_stroke, "swing": m.swing,
                      "P": m.P_supplied, "overlap": m.C_overlap, "tau_rms": m.tau_rms,
                      "power_crest": m.power_crest, "lift_ripple": m.lift_ripple})
-    rob = max(r["T"] for r in rows)
-    gap = (rob - min(r["T"] for r in rows)) / max(rob, 1e-9)
-    driftmax = max(abs(r["drift"]) for r in rows)
-    return rows, rob, gap, min(r["L"] for r in rows), driftmax
+    return rows, ms
 
 
-def robust_row(rows, rob, liftmin) -> dict:
+def robust_row(ms, rob, liftmin) -> dict:
     """The worst cell of the matrix for whatever is minimized (lift: the MIN)."""
-    return {"tau": rob, "power": max(r["P"] for r in rows), "lift": liftmin,
-            "swing": max(r["swing"] for r in rows), "overlap": max(r["overlap"] for r in rows),
-            "tau_rms": max(r["tau_rms"] for r in rows),
-            "power_crest": max(r["power_crest"] for r in rows),
-            "lift_ripple": max(r["lift_ripple"] for r in rows)}
+    return {"tau": rob, "lift": liftmin,
+            **{k: max(getattr(m, f) for m in ms) for k, f in OBJ_METRIC.items()}}
+
+
+def build_rotate_batches(cfg, bank, dt_bank, rng, n_qvel, variant_metrics, loss_kwargs):
+    """--rotate-batch: random K-subsets of the bank, each with >= 2 integrators and >= 2 dts
+    (so every batch exercises both robustness axes), each its own jitted loss.
+    Returns [(member labels, grad fn)]."""
+    keys = list(bank)
+    kbatch = min(cfg.rotate_batch, len(keys))
+
+    def _ok(bt):
+        return (len({v[0] for v in bt}) >= min(2, kbatch)
+                and (len({v[1] for v in bt}) >= min(2, kbatch) or len(dt_bank) == 1))
+
+    batches = []
+    for _ in range(1000):
+        if len(batches) >= cfg.n_batches:
+            break
+        bt = tuple(sorted(rng.sample(keys, kbatch)))
+        if _ok(bt) and bt not in batches:
+            batches.append(bt)
+    if not batches:
+        raise SystemExit("--rotate-batch: no valid batch composition from the bank")
+    rotate_fns = []
+    # Warmup jitter: each member also draws its warmup length, so the short sample
+    # window lands at a different point of any slow torque beat per member.
+    wu_bank = tuple(cfg.warmup_bank) if cfg.warmup_bank else (cfg.warmup_periods,)
+    for centers in batches:
+        # Floor jittered dts at the smallest bank center.
+        bt = tuple(
+            (ig, max(dm * (1.0 + rng.uniform(-cfg.dt_jitter, cfg.dt_jitter)), min(dt_bank)),
+             rng.choice(wu_bank))
+            for ig, dm in centers
+        )
+        ms = [variant_metrics(ig, dm * 1e-3, warmup_periods=wu) for ig, dm, wu in bt]
+        labels = [f"{ig}@{dm:g}/w{wu:g}" for ig, dm, wu in bt]
+        if cfg.precision_perturb:
+            ig, dm, wu = bt[0]
+            noise = np.asarray([rng.gauss(0.0, cfg.precision_perturb) for _ in range(n_qvel)])
+            ms.append(variant_metrics(ig, dm * 1e-3, warmup_periods=wu, qvel_noise=noise))
+            labels.append(f"{ig}@{dm:g}/w{wu:g}+eps")
+        rotate_fns.append((tuple(labels), make_loss(variant_set(*ms[:3], extra=ms[3:]),
+                                                    **loss_kwargs)))
+    print(f"[rotate] bank={len(bank)} center variants (3 integrators x dts {dt_bank} ms), "
+          f"{len(batches)} batches of {kbatch}"
+          f" jitter={cfg.dt_jitter:g} precision_perturb={cfg.precision_perturb:g}:")
+    for labels, _ in rotate_fns:
+        print("  " + " + ".join(labels))
+    return rotate_fns
 
 
 def unscored(theta, **extra) -> dict:
@@ -169,53 +214,11 @@ def run(cfg) -> None:
                        tau_guard=cfg.tau_guard)
     grad_fn = make_loss(variant_set(metrics, impl, rk4, extra), **loss_kwargs)
 
-    # Rotating mini-batches: random K-subsets of the bank, each with >= 2 integrators and
-    # >= 2 dts (so every batch exercises both robustness axes), each its own jitted loss.
     rotate_fns = None
     rng = random.Random(cfg.batch_seed)
     if cfg.rotate_batch:
-        keys = list(bank)
-        kbatch = min(cfg.rotate_batch, len(keys))
-
-        def _ok(bt):
-            return (len({v[0] for v in bt}) >= min(2, kbatch)
-                    and (len({v[1] for v in bt}) >= min(2, kbatch) or len(dt_bank) == 1))
-
-        batches = []
-        for _ in range(1000):
-            if len(batches) >= cfg.n_batches:
-                break
-            bt = tuple(sorted(rng.sample(keys, kbatch)))
-            if _ok(bt) and bt not in batches:
-                batches.append(bt)
-        if not batches:
-            raise SystemExit("--rotate-batch: no valid batch composition from the bank")
-        rotate_fns = []
-        # Warmup jitter: each member also draws its warmup length, so the short sample
-        # window lands at a different point of any slow torque beat per member.
-        wu_bank = tuple(cfg.warmup_bank) if cfg.warmup_bank else (cfg.warmup_periods,)
-        for centers in batches:
-            # Floor jittered dts at the smallest bank center.
-            bt = tuple(
-                (ig, max(dm * (1.0 + rng.uniform(-cfg.dt_jitter, cfg.dt_jitter)), min(dt_bank)),
-                 rng.choice(wu_bank))
-                for ig, dm in centers
-            )
-            ms = [variant_metrics(ig, dm * 1e-3, warmup_periods=wu) for ig, dm, wu in bt]
-            labels = [f"{ig}@{dm:g}/w{wu:g}" for ig, dm, wu in bt]
-            if cfg.precision_perturb:
-                ig, dm, wu = bt[0]
-                noise = np.asarray([rng.gauss(0.0, cfg.precision_perturb)
-                                    for _ in range(int(rig.dx0.qvel.shape[0]))])
-                ms.append(variant_metrics(ig, dm * 1e-3, warmup_periods=wu, qvel_noise=noise))
-                labels.append(f"{ig}@{dm:g}/w{wu:g}+eps")
-            rotate_fns.append((tuple(labels), make_loss(variant_set(*ms[:3], extra=ms[3:]),
-                                                        **loss_kwargs)))
-        print(f"[rotate] bank={len(bank)} center variants (3 integrators x dts {dt_bank} ms), "
-              f"{len(batches)} batches of {kbatch}"
-              f" jitter={cfg.dt_jitter:g} precision_perturb={cfg.precision_perturb:g}:")
-        for labels, _ in rotate_fns:
-            print("  " + " + ".join(labels))
+        rotate_fns = build_rotate_batches(cfg, bank, dt_bank, rng, int(rig.dx0.qvel.shape[0]),
+                                          variant_metrics, loss_kwargs)
 
     adam_m = jnp.zeros_like(theta)
     adam_v = jnp.zeros_like(theta)
@@ -258,9 +261,7 @@ def run(cfg) -> None:
         amp_gate_lo = A_target * (1.0 - cfg.amp_band_pct)
         amp_gate_hi = A_target * (1.0 + cfg.amp_band_pct)
     # obj0: the baseline in the objective's own units, so the lift trade converts right.
-    obj0 = obj_of({"tau": m0.tau_hat, "power": m0.P_supplied, "lift": m0.Lbar, "swing": m0.swing,
-                   "overlap": m0.C_overlap, "tau_rms": m0.tau_rms, "power_crest": m0.power_crest,
-                   "lift_ripple": m0.lift_ripple})
+    obj0 = obj_of(objective_row(m0.tau_hat, m0))
 
     def score_of(metric, swing, Lbar):
         if not cfg.single_stage:
@@ -283,6 +284,99 @@ def run(cfg) -> None:
                 ok = ok and Lbar >= cfg.lift_floor
             return ok
         return Lbar >= cfg.lift_floor
+
+    def full_check(theta_eval, it):
+        """Rotate mode's full-matrix MJX gate: score theta_eval on every bank cell, print and
+        log the robust row, and select it into best / stage_best / robust_best."""
+        nonlocal rob0, liftmin0, best, stage_best, robust_best
+        rows, ms = full_matrix(bank_jit, theta_eval)
+        rob, gapf, liftmin, driftf = gate_summary(rows)
+        if not math.isfinite(liftmin0):
+            rob0, liftmin0 = rob, liftmin
+        amps = [r["A"] for r in rows]
+        swmax = max(r["swing"] for r in rows)
+        feas = amp_gate_lo <= min(amps) and max(amps) <= amp_gate_hi
+        if cfg.single_stage and cfg.lift_torque_tradeoff is None:
+            feas = feas and liftmin >= cfg.lift_floor  # robust-min lift clears the floor
+        stationary = driftf <= cfg.drift_gate * max(rob, 1e-9)
+        transfers = gapf <= cfg.full_gap and liftmin >= 0.9 * liftmin0 and stationary
+        powf = max(r["P"] for r in rows)
+        objf = obj_of(robust_row(ms, rob, liftmin))
+        if cfg.objective != "torque":
+            # A power-hacked cell rejects like a torque-hacked one.
+            pgap = (powf - min(r["P"] for r in rows)) / max(powf, 1e-9)
+            transfers = transfers and pgap <= cfg.full_gap
+        scoref = score_of(objf, swmax, liftmin)
+        tag = ("TRANSFERS" if feas else "LIFT/AMP-OUT") if transfers \
+            else (f"HACK(gap {gapf*100:.0f}%)" if gapf > cfg.full_gap
+                  else f"DRIFT({driftf/max(rob,1e-9)*100:.0f}%)")
+        print(f"    [full it{it:03d}] robust={rob*1e3:6.1f} mNm "
+              f"({(rob-rob0)/rob0*100:+.0f}% vs base)  gap={gapf*100:.0f}%  "
+              f"liftmin={liftmin*1e3:6.1f} mN  P={powf*1e3:5.0f} mW  "
+              f"P/L={powf/max(liftmin,1e-9):5.1f} W/N ({(objf-obj0)/obj0*100:+.0f}% obj)  "
+              f"drift={driftf*1e3:.1f} mNm  [{tag}]", flush=True)
+        log[-1].update(full_robust=rob, full_gap=gapf, full_liftmin=liftmin,
+                       full_drift=driftf, full_power=powf, full_obj=objf,
+                       full_rows=rows)
+        sel_f = {"score": scoref, "tau": rob, "swing": swmax, "theta": theta_eval,
+                 "Lbar": liftmin}
+        if feas and scoref < best["score"]:
+            best = sel_f
+        if feas and scoref < stage_best["score"]:
+            stage_best = sel_f
+        if feas and transfers and scoref < robust_best["score"]:
+            robust_best = dict(sel_f)
+            dump(robust_best, log, out_dir=cfg.out / "robust_best")
+
+    def cpu_check(theta_eval, it, m):
+        """The CPU transfer gate: replay theta_eval (whose MJX Metrics are ``m``) on CPU
+        MuJoCo over cpu_cells, print and log it, and select it into cpu_best."""
+        nonlocal cpuT0, cpuT0r, cpuL0, cpu_obj0, cpu_best
+        cpu_vars, robust, gap, cpuL, cdrift = cpu_gate(
+            cfg.scene, cpu_design(theta_eval), cpu_cells, **cpu_kw)
+        cpuT = cpu_vars[0]["T"]
+        cpuTi = next((x["T"] for x in cpu_vars if x["integrator"] == "implicitfast"), cpuT)
+        cpuTr = next((x["T"] for x in cpu_vars if x["integrator"] == "rk4"), cpuTi)
+        if not math.isfinite(cpuT0r):
+            cpuT0, cpuT0r, cpuL0 = cpuT, robust, cpuL
+        stationary = cdrift <= cfg.drift_gate * max(robust, 1e-9)
+        transfers = gap <= cfg.cpu_gap and stationary
+        cpuP = max(x["P"] for x in cpu_vars)
+        # The CPU rollout has no shape metrics, so for those objectives the CPU side
+        # keeps selecting on robust PEAK torque as a transfer guard; the shape winner
+        # comes from the full-matrix check, which sees every metric.
+        cpu_obj = (obj_of({"tau": robust, "power": cpuP, "lift": cpuL})
+                   if cfg.objective in ("torque", "power", "energy") else robust)
+        if not math.isfinite(cpu_obj0):
+            cpu_obj0 = cpu_obj
+        if cfg.objective != "torque":
+            pgap = (cpuP - min(x["P"] for x in cpu_vars)) / max(cpuP, 1e-9)
+            transfers = transfers and pgap <= cfg.cpu_gap
+        dpk = (robust - cpuT0r) / cpuT0r * 100 if cpuT0r else float("nan")
+        tag = "TRANSFERS" if transfers else (
+            f"HACK(gap {gap*100:.0f}%)" if gap > cfg.cpu_gap
+            else f"DRIFT({cdrift/max(robust,1e-9)*100:.0f}%)")
+        desc = " ".join(f"{x['integrator']}@{(x['timestep_ms'] or 0):g}={x['T']*1e3:.0f}"
+                        for x in cpu_vars)
+        print(f"    [cpu it{it:03d}] mjx={m.tau_hat*1e3:6.1f}  {desc}  "
+              f"robust={robust*1e3:6.1f} mNm ({dpk:+.0f}% vs base)  "
+              f"Lmin={cpuL*1e3:6.1f} mN  P={cpuP*1e3:5.0f} mW  "
+              f"P/L={cpuP/max(cpuL,1e-9):5.1f} W/N "
+              f"({(cpu_obj-cpu_obj0)/max(cpu_obj0,1e-9)*100:+.0f}% obj)  "
+              f"drift={cdrift*1e3:.1f} mNm  [{tag}]", flush=True)
+        log[-1].update(cpu_tau=cpuT, cpu_tau_impl=cpuTi, cpu_tau_rk4=cpuTr,
+                       cpu_L=cpuL, cpu_gap=gap, cpu_drift=cdrift,
+                       cpu_power=cpuP, cpu_obj=cpu_obj, cpu_variants=cpu_vars)
+        # CPU-selected best: lowest robust score among MJX-feasible designs that keep
+        # lift AND transfer between integrators -- the gate against integrator hacks.
+        cpu_lift_ok = (cpuL >= cfg.lift_floor
+                       if (cfg.single_stage and cfg.lift_torque_tradeoff is None)
+                       else cpuL >= 0.9 * cpuL0)
+        if (is_feasible(m.Lbar, m.A_stroke) and cpu_lift_ok and transfers
+                and cpu_obj < cpu_best["score"]):
+            cpu_best = {"score": cpu_obj, "tau": robust, "swing": m.swing, "theta": theta_eval,
+                        "Lbar": m.Lbar, "cpu_euler": cpuT, "cpu_impl": cpuTi,
+                        "cpu_rk4": cpuTr, "cpu_gap": gap}
 
     best = unscored(theta)
     if cfg.single_stage:
@@ -335,7 +429,8 @@ def run(cfg) -> None:
                     grad = grad.at[slices["sp"]].set(0.0)  # unlocks with the harmonics
             if tendon_freeze is not None:
                 grad = grad.at[tendon_freeze].set(0.0)
-            a = LossAux(*(float(x) for x in aux))
+            a = jax.tree.map(float, aux)
+            m = a.metrics
             t += 1
             adam_m = ADAM_B1 * adam_m + (1 - ADAM_B1) * grad
             adam_v = ADAM_B2 * adam_v + (1 - ADAM_B2) * grad**2
@@ -343,138 +438,57 @@ def run(cfg) -> None:
             vhat = adam_v / (1 - ADAM_B2**t)
             theta = theta - lr_cur * lr_scale * mhat / (jnp.sqrt(vhat) + ADAM_EPS)
 
-            log.append({"stage_tau_max": tau_max, "iter": it, "loss": a.loss, "Lbar": a.Lbar,
-                        "tau_hat": a.tau_hat, "tau_impl": a.tau_impl, "tau_rk4": a.tau_rk4,
+            log.append({"stage_tau_max": tau_max, "iter": it, "loss": a.loss, "Lbar": m.Lbar,
+                        "tau_hat": m.tau_hat, "tau_impl": a.tau_impl, "tau_rk4": a.tau_rk4,
                         "tau_peak": a.tau_peak, "tau_drift": a.tau_drift,
                         "tau_robust": a.tau_robust, "mjx_gap": a.tau_spread / max(a.tau_robust, 1e-9),
-                        "A_stroke": a.A_stroke, "power": a.P_supplied, "swing": a.swing,
-                        "S": a.S, "C_lc": a.C_lc, "P_inactive": a.P_inactive, "overlap": a.C_overlap,
-                        "C_valid": a.C_valid, "alpha_pk": a.alpha_pk, "k_eff": a.k_eff,
-                        "conv_err": a.conv_err, "softmax_beta": robust_beta})
+                        "A_stroke": m.A_stroke, "power": m.P_supplied, "swing": m.swing,
+                        "S": m.S, "C_lc": m.C_lc, "P_inactive": m.P_inactive, "overlap": m.C_overlap,
+                        "C_valid": m.C_valid, "alpha_pk": m.alpha_pk, "k_eff": m.k_eff,
+                        "conv_err": m.conv_err, "softmax_beta": robust_beta})
             # Select on the ROBUST peak so the winner is integrator-agnostic by construction.
-            row = {"tau": a.tau_robust, "power": a.P_supplied, "lift": a.Lbar, "swing": a.swing,
-                   "overlap": a.C_overlap, "tau_rms": a.tau_rms, "power_crest": a.power_crest,
-                   "lift_ripple": a.lift_ripple}
-            score = score_of(obj_of(row), a.swing, a.Lbar)
-            sel = {"score": score, "tau": a.tau_robust, "swing": a.swing, "theta": theta_eval,
-                   "Lbar": a.Lbar}
+            row = objective_row(a.tau_robust, m)
+            score = score_of(obj_of(row), m.swing, m.Lbar)
+            sel = {"score": score, "tau": a.tau_robust, "swing": m.swing, "theta": theta_eval,
+                   "Lbar": m.Lbar}
             # Rotate mode selects at the full-matrix check (a batch is an optimistic
             # subset) -- unless full checks are off, when nothing else would select.
             select_here = (not rotate_fns) or not cfg.full_check_every
-            if select_here and is_feasible(a.Lbar, a.A_stroke) and score < best["score"]:
+            if select_here and is_feasible(m.Lbar, m.A_stroke) and score < best["score"]:
                 best = sel
-            if select_here and is_feasible(a.Lbar, a.A_stroke) and score < stage_best["score"]:
+            if select_here and is_feasible(m.Lbar, m.A_stroke) and score < stage_best["score"]:
                 stage_best = sel
             gap_pct = a.tau_spread / max(a.tau_robust, 1e-9) * 100
             if rotate_fns:
                 tri = f" [{'/'.join(batch_keys)} rob={a.tau_robust*1e3:.1f} gap={gap_pct:.0f}%]"
             else:
-                tri = (f" [e{a.tau_hat*1e3:.0f}/i{a.tau_impl*1e3:.0f}/r{a.tau_rk4*1e3:.0f} "
+                tri = (f" [e{m.tau_hat*1e3:.0f}/i{a.tau_impl*1e3:.0f}/r{a.tau_rk4*1e3:.0f} "
                        f"rob={a.tau_robust*1e3:.1f} gap={gap_pct:.0f}%]"
                        if (cfg.tri_integrator or cfg.tri_timestep) else "")
-            print(f"  it{it:03d} loss={a.loss:.4f}  L={a.Lbar*1e3:6.1f}mN  tau={a.tau_hat*1e3:6.1f}mNm  "
+            print(f"  it{it:03d} loss={a.loss:.4f}  L={m.Lbar*1e3:6.1f}mN  tau={m.tau_hat*1e3:6.1f}mNm  "
                   f"pk={a.tau_peak*1e3:6.1f}mNm dr={a.tau_drift*1e3:+5.1f}  "
-                  f"swing={a.swing*1e3:5.1f}mNm  rms={a.tau_rms*1e3:5.1f}  pc={a.power_crest:5.3f}  "
-                  f"lr={a.lift_ripple:5.3f}  ovl={a.C_overlap:5.3f}  obj={obj_of(row)/max(obj0,1e-12):6.4f}  "
-                  f"A={a.A_stroke*1e3:5.2f}mm  P={a.P_supplied*1e3:5.0f}mW  "
-                  f"S={a.S:.3g}  Cv={a.C_valid:.2g} a={math.degrees(a.alpha_pk):.0f} k={a.k_eff:.2g} "
-                  f"conv={a.conv_err:.1e} beta={robust_beta:.0f} Pin={a.P_inactive:.3g}{tri}", flush=True)
+                  f"swing={m.swing*1e3:5.1f}mNm  rms={m.tau_rms*1e3:5.1f}  pc={m.power_crest:5.3f}  "
+                  f"lr={m.lift_ripple:5.3f}  ovl={m.C_overlap:5.3f}  obj={obj_of(row)/max(obj0,1e-12):6.4f}  "
+                  f"A={m.A_stroke*1e3:5.2f}mm  P={m.P_supplied*1e3:5.0f}mW  "
+                  f"S={m.S:.3g}  Cv={m.C_valid:.2g} a={math.degrees(m.alpha_pk):.0f} k={m.k_eff:.2g} "
+                  f"conv={m.conv_err:.1e} beta={robust_beta:.0f} Pin={m.P_inactive:.3g}{tri}", flush=True)
             if it % 3 == 0:
                 dump(sel, log, out_dir=cfg.out / "checkpoints" / f"it{it:03d}")
             if cfg.control_after and it == cfg.control_after:
                 # The waveform goes live on the NEXT step, so this is the a0-only design:
                 # the reference every "did harmonics help?" claim is measured against.
                 if rotate_fns and cfg.full_check_every:
-                    pr, prob, _, plift, _ = full_matrix(bank_jit, theta_eval)
+                    pr, pms = full_matrix(bank_jit, theta_eval)
+                    prob, _, plift, _ = gate_summary(pr)
                     print(f"    [preharmonics it{it:03d}] robust obj="
-                          f"{obj_of(robust_row(pr, prob, plift))/max(obj0,1e-12):.4f} x baseline  "
+                          f"{obj_of(robust_row(pms, prob, plift))/max(obj0,1e-12):.4f} x baseline  "
                           f"liftmin={plift*1e3:.1f} mN", flush=True)
                 dump(sel, log, out_dir=cfg.out / "preharmonics")
             if (rotate_fns and cfg.full_check_every
                     and it % cfg.full_check_every == 0 and train_i > 0):
-                rows, rob, gapf, liftmin, driftf = full_matrix(bank_jit, theta_eval)
-                if not math.isfinite(liftmin0):
-                    rob0, liftmin0 = rob, liftmin
-                amps = [r["A"] for r in rows]
-                swmax = max(r["swing"] for r in rows)
-                feas = amp_gate_lo <= min(amps) and max(amps) <= amp_gate_hi
-                if cfg.single_stage and cfg.lift_torque_tradeoff is None:
-                    feas = feas and liftmin >= cfg.lift_floor  # robust-min lift clears the floor
-                stationary = driftf <= cfg.drift_gate * max(rob, 1e-9)
-                transfers = gapf <= cfg.full_gap and liftmin >= 0.9 * liftmin0 and stationary
-                powf = max(r["P"] for r in rows)
-                objf = obj_of(robust_row(rows, rob, liftmin))
-                if cfg.objective != "torque":
-                    # A power-hacked cell rejects like a torque-hacked one.
-                    pgap = (powf - min(r["P"] for r in rows)) / max(powf, 1e-9)
-                    transfers = transfers and pgap <= cfg.full_gap
-                scoref = score_of(objf, swmax, liftmin)
-                tag = ("TRANSFERS" if feas else "LIFT/AMP-OUT") if transfers \
-                    else (f"HACK(gap {gapf*100:.0f}%)" if gapf > cfg.full_gap
-                          else f"DRIFT({driftf/max(rob,1e-9)*100:.0f}%)")
-                print(f"    [full it{it:03d}] robust={rob*1e3:6.1f} mNm "
-                      f"({(rob-rob0)/rob0*100:+.0f}% vs base)  gap={gapf*100:.0f}%  "
-                      f"liftmin={liftmin*1e3:6.1f} mN  P={powf*1e3:5.0f} mW  "
-                      f"P/L={powf/max(liftmin,1e-9):5.1f} W/N ({(objf-obj0)/obj0*100:+.0f}% obj)  "
-                      f"drift={driftf*1e3:.1f} mNm  [{tag}]", flush=True)
-                log[-1].update(full_robust=rob, full_gap=gapf, full_liftmin=liftmin,
-                               full_drift=driftf, full_power=powf, full_obj=objf,
-                               full_rows=rows)
-                sel_f = {"score": scoref, "tau": rob, "swing": swmax, "theta": theta_eval,
-                         "Lbar": liftmin}
-                if feas and scoref < best["score"]:
-                    best = sel_f
-                if feas and scoref < stage_best["score"]:
-                    stage_best = sel_f
-                if feas and transfers and scoref < robust_best["score"]:
-                    robust_best = dict(sel_f)
-                    dump(robust_best, log, out_dir=cfg.out / "robust_best")
+                full_check(theta_eval, it)
             if cfg.cpu_every and it % cfg.cpu_every == 0 and train_i > 0:
-                cpu_vars, robust, gap, cpuL, cdrift = cpu_gate(
-                    cfg.scene, cpu_design(theta_eval), cpu_cells, **cpu_kw)
-                cpuT = cpu_vars[0]["T"]
-                cpuTi = next((x["T"] for x in cpu_vars if x["integrator"] == "implicitfast"), cpuT)
-                cpuTr = next((x["T"] for x in cpu_vars if x["integrator"] == "rk4"), cpuTi)
-                if not math.isfinite(cpuT0r):
-                    cpuT0, cpuT0r, cpuL0 = cpuT, robust, cpuL
-                stationary = cdrift <= cfg.drift_gate * max(robust, 1e-9)
-                transfers = gap <= cfg.cpu_gap and stationary
-                cpuP = max(x["P"] for x in cpu_vars)
-                # The CPU rollout has no shape metrics, so for those objectives the CPU side
-                # keeps selecting on robust PEAK torque as a transfer guard; the shape winner
-                # comes from the full-matrix check, which sees every metric.
-                cpu_obj = (obj_of({"tau": robust, "power": cpuP, "lift": cpuL})
-                           if cfg.objective in ("torque", "power", "energy") else robust)
-                if not math.isfinite(cpu_obj0):
-                    cpu_obj0 = cpu_obj
-                if cfg.objective != "torque":
-                    pgap = (cpuP - min(x["P"] for x in cpu_vars)) / max(cpuP, 1e-9)
-                    transfers = transfers and pgap <= cfg.cpu_gap
-                dpk = (robust - cpuT0r) / cpuT0r * 100 if cpuT0r else float("nan")
-                tag = "TRANSFERS" if transfers else (
-                    f"HACK(gap {gap*100:.0f}%)" if gap > cfg.cpu_gap
-                    else f"DRIFT({cdrift/max(robust,1e-9)*100:.0f}%)")
-                desc = " ".join(f"{x['integrator']}@{(x['timestep_ms'] or 0):g}={x['T']*1e3:.0f}"
-                                for x in cpu_vars)
-                print(f"    [cpu it{it:03d}] mjx={a.tau_hat*1e3:6.1f}  {desc}  "
-                      f"robust={robust*1e3:6.1f} mNm ({dpk:+.0f}% vs base)  "
-                      f"Lmin={cpuL*1e3:6.1f} mN  P={cpuP*1e3:5.0f} mW  "
-                      f"P/L={cpuP/max(cpuL,1e-9):5.1f} W/N "
-                      f"({(cpu_obj-cpu_obj0)/max(cpu_obj0,1e-9)*100:+.0f}% obj)  "
-                      f"drift={cdrift*1e3:.1f} mNm  [{tag}]", flush=True)
-                log[-1].update(cpu_tau=cpuT, cpu_tau_impl=cpuTi, cpu_tau_rk4=cpuTr,
-                               cpu_L=cpuL, cpu_gap=gap, cpu_drift=cdrift,
-                               cpu_power=cpuP, cpu_obj=cpu_obj, cpu_variants=cpu_vars)
-                # CPU-selected best: lowest robust score among MJX-feasible designs that keep
-                # lift AND transfer between integrators -- the gate against integrator hacks.
-                cpu_lift_ok = (cpuL >= cfg.lift_floor
-                               if (cfg.single_stage and cfg.lift_torque_tradeoff is None)
-                               else cpuL >= 0.9 * cpuL0)
-                if (is_feasible(a.Lbar, a.A_stroke) and cpu_lift_ok and transfers
-                        and cpu_obj < cpu_best["score"]):
-                    cpu_best = {"score": cpu_obj, "tau": robust, "swing": a.swing, "theta": theta_eval,
-                                "Lbar": a.Lbar, "cpu_euler": cpuT, "cpu_impl": cpuTi,
-                                "cpu_rk4": cpuTr, "cpu_gap": gap}
+                cpu_check(theta_eval, it, m)
         stage_dir = cfg.out / f"stage_{round(tau_max*1e3)}mNm"
         dump(stage_best, log, out_dir=stage_dir)
         dump(best, log)  # running global best (interrupt-safe)

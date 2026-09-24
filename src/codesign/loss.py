@@ -4,6 +4,10 @@ make_loss() turns a tuple of metrics functions (the same design under other inte
 timesteps, warmups) into jit(jacfwd(loss)). Every term is smooth so gradients flow.
 objective_norm/objective_value are the selection-side twins of the loss's objective
 term, so a candidate is trained and picked on the same quantity.
+
+To add an --objective that is one Metrics field: add the field (codesign.metrics) and an
+OBJ_METRIC entry. The loss term, objective_row and train.robust_row all read OBJ_METRIC;
+the CPU transfer gate has no shape metrics and keeps selecting it on peak torque.
 """
 
 from __future__ import annotations
@@ -26,29 +30,14 @@ LIFT_ABOVE_WEIGHT = 0.25  # weight of the above-cap lift penalty relative to the
 
 class LossAux(NamedTuple):
     """make_loss's aux: the primary rollout's Metrics plus the robust aggregates."""
-    Lbar: jnp.ndarray
-    tau_hat: jnp.ndarray
-    A_stroke: jnp.ndarray
-    S: jnp.ndarray
-    C_lc: jnp.ndarray
-    P_inactive: jnp.ndarray
-    C_overlap: jnp.ndarray
-    swing: jnp.ndarray
-    P_supplied: jnp.ndarray
+    metrics: Metrics  # the primary (variant 0) rollout
     loss: jnp.ndarray
     tau_impl: jnp.ndarray  # tau_hat of variant 1
     tau_rk4: jnp.ndarray  # tau_hat of variant 2
     tau_robust: jnp.ndarray  # max tau_hat over variants
     tau_spread: jnp.ndarray  # max - min tau_hat over variants
-    C_valid: jnp.ndarray
-    alpha_pk: jnp.ndarray
-    k_eff: jnp.ndarray
-    conv_err: jnp.ndarray
     tau_peak: jnp.ndarray  # max exact peak over variants
     tau_drift: jnp.ndarray  # max |drift| over variants
-    tau_rms: jnp.ndarray
-    power_crest: jnp.ndarray
-    lift_ripple: jnp.ndarray
 
 
 def variant_set(base, impl=None, rk4=None, extra=()):
@@ -165,10 +154,8 @@ def make_loss(variants, *, lift_floor, lift_cap, lift_smooth, A_target, weights,
             R = (wL * PhiL - wtau * Ptau - w_swing * Pswing - wK * Ckin - ws * m.S
                  - w_lc * m.C_lc - w_power * m.P_inactive - w_overlap * m.C_overlap
                  - Pgap - P_drift)
-        aux = LossAux(m.Lbar, m.tau_hat, m.A_stroke, m.S, m.C_lc, m.P_inactive, m.C_overlap,
-                      m.swing, m.P_supplied, -R, rows[1].tau_hat, rows[2].tau_hat, tau_hard,
-                      tau_spread, m.C_valid, m.alpha_pk, m.k_eff, m.conv_err, tau_peak_hard,
-                      drift_hard, m.tau_rms, m.power_crest, m.lift_ripple)
+        aux = LossAux(m, -R, rows[1].tau_hat, rows[2].tau_hat, tau_hard, tau_spread,
+                      tau_peak_hard, drift_hard)
         return -R, aux
 
     return jax.jit(jax.jacfwd(loss, argnums=0, has_aux=True))  # (grad, aux) in one fwd sweep
@@ -185,9 +172,14 @@ def objective_norm(objective: str, m0: Metrics, lift_floor: float) -> tuple:
     return (max(getattr(m0, OBJ_METRIC[objective]), 1e-12),)
 
 
+def objective_row(tau, m) -> dict:
+    """objective_value's row for one rollout's Metrics ``m``, scored at peak torque ``tau``."""
+    return {"tau": tau, "lift": m.Lbar, **{k: getattr(m, f) for k, f in OBJ_METRIC.items()}}
+
+
 def objective_value(objective: str, row: dict, lift_floor: float, obj_norm: tuple) -> float:
-    """The scalar --objective minimizes, from a dict of robust metric values (keys tau,
-    power, lift, swing, overlap, tau_rms, power_crest, lift_ripple)."""
+    """The scalar --objective minimizes, from a dict of robust metric values: "tau",
+    "lift" and one key per OBJ_METRIC objective (objective_row, train.robust_row)."""
     if objective == "torque":
         return row["tau"]
     if objective == "energy":

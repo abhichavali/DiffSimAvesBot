@@ -132,8 +132,14 @@ def cpu_gate(scene_path, design: CpuDesign, cells, **kw):
         drift = (pc[-1] - pc[0]) if len(pc) >= 2 else 0.0
         rows.append({"integrator": integ, "timestep_ms": ts, "L": r.lift, "T": r.peak, "P": r.power,
                      "drift": drift})
+    return (rows, *gate_summary(rows))
+
+
+def gate_summary(rows):
+    """(robust peak = max T, gap = (max - min T)/max, min lift L, max |drift|) over the
+    rows of a transfer gate: cpu_gate's cells or train.full_matrix's."""
     robust = max(x["T"] for x in rows)
     gap = (robust - min(x["T"] for x in rows)) / max(robust, 1e-9)
     lift = min(x["L"] for x in rows)
     driftmax = max(abs(x["drift"]) for x in rows)
-    return rows, robust, gap, lift, driftmax
+    return robust, gap, lift, driftmax
