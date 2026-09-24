@@ -27,8 +27,7 @@ from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
 def rest_state(model, morph, phase_lag: float | None = None) -> mujoco.MjData:
     """A fresh MjData at the rest pose: settled, pitch neutral, cranks synced.
 
-    ``phase_lag=None`` applies the design's crank lag; ``data.time`` is left at the
-    end of the settle (~2000 steps), not reset.
+    ``phase_lag=None`` applies the design's crank lag; ``data.time`` is 0.
     """
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)

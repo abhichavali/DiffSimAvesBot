@@ -42,10 +42,13 @@ def _reset_pitch_to_neutral(model, data, wing_name: str) -> None:
 def calibrate_wing_pitch_at_rest(model, data, *, settle_steps: int = 2000) -> None:
     """Settle the structure, then set both wing pitches to the neutral angle.
 
-    ``data.time`` is left at the end of the settle, not reset.
+    ``data.time`` is reset to 0 after the settle, so every drive's harmonic phase
+    (``omega * time``) starts at 0 whatever the timestep. It used to be left at
+    ``settle_steps * dt``, which rotated the harmonics by a dt-dependent angle.
     """
     for _ in range(settle_steps):
         mujoco.mj_step(model, data)
+    data.time = 0.0
 
     for wing_name in ("L_wing", "R_wing"):
         _reset_pitch_to_neutral(model, data, wing_name)

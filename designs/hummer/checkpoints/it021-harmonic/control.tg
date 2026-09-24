@@ -1,10 +1,13 @@
 bird = hummer
+# a_n/b_n were tuned at dt 0.06 ms while the rest settle left the clock at
+# 2000*dt = 0.12 s; they are rotated by n*omega*0.12 s so the drive is unchanged
+# now that the settle resets time to 0.
 harmonics = 3
 fundamental_frequency = 10.345 Hz
 a0 = 65.1897
-a_1 = -0.180192
-b_1 = 0.181979
-a_2 = -0.188705
-b_2 = -0.183985
-a_3 = -0.170589
-b_3 = 0.106861
+a_1 = 0.171981
+b_1 = 0.189758
+a_2 = 0.167759
+b_2 = 0.203265
+a_3 = -0.0779274
+b_3 = -0.1856
