@@ -12,7 +12,6 @@ flipping between half-strokes, plane held level, stable for the whole run.
 from __future__ import annotations
 
 import math
-import os
 import re
 from pathlib import Path
 
@@ -31,6 +30,7 @@ from runtime.eagle_drive import (
     check_stable,
     wing_plane_roll,
 )
+from runtime.eagle_poses import elbow_sweep, elbow_targets, glide_pose
 
 ROOT = Path(__file__).resolve().parent.parent
 EAGLE_TG = ROOT / "designs" / "eagle" / "shoulder.tg"
@@ -43,8 +43,13 @@ SETTLE = 5.0
 def stroke(tmp_path_factory):
     """Rollout of the eagle design; returns per-sample kinematics of the last cycles."""
     scene = tmp_path_factory.mktemp("eagle") / "scene.xml"
-    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
-    os.environ["MUJOCO_XML_PATH"] = str(scene)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("MORPHOLOGY_PATH", str(EAGLE_TG))
+        mp.setenv("MUJOCO_XML_PATH", str(scene))
+        return _stroke_rollout(scene)
+
+
+def _stroke_rollout(scene: Path):
     compile_tg(EAGLE_TG, scene)
     morph = load_morphology(EAGLE_TG)
     control = load_control_for_morphology(EAGLE_TG)
@@ -124,8 +129,6 @@ def test_elbow_sweep_covers_the_whole_range(tmp_path):
     it started — get the phase or the endpoints wrong and the wing either never
     reaches a stop or slams into one at t=0.
     """
-    from view_eagle import elbow_sweep, elbow_targets  # noqa: PLC0415
-
     scene = tmp_path / "sweep.xml"
     compile_tg(EAGLE_TG, scene)
     model = mujoco.MjModel.from_xml_path(str(scene))
@@ -142,7 +145,7 @@ def test_elbow_sweep_covers_the_whole_range(tmp_path):
     assert min(extended, flexed) < sweep(1.0)[aid] < max(extended, flexed)
 
 
-def test_glide_pose_spreads_both_wings_flat(tmp_path):
+def test_glide_pose_spreads_both_wings_flat(tmp_path, monkeypatch):
     """--glide holds the wing out level, and holds the same pose on both sides.
 
     Two things it can silently get wrong. The mount stands the wing on edge by
@@ -153,10 +156,8 @@ def test_glide_pose_spreads_both_wings_flat(tmp_path):
     a sign per disk: get one wrong and the wings park in different postures,
     which reads as a bird with a broken wing rather than a glide.
     """
-    from view_eagle import glide_pose  # noqa: PLC0415
-
     scene = tmp_path / "glide.xml"
-    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
+    monkeypatch.setenv("MORPHOLOGY_PATH", str(EAGLE_TG))
     compile_tg(EAGLE_TG, scene)
     control = load_control_for_morphology(EAGLE_TG)
     model = mujoco.MjModel.from_xml_path(str(scene))
@@ -457,7 +458,7 @@ def test_wing_tucks_at_each_reversal(stroke):
     assert corr < -0.5, f"tuck is not phase-locked to the stroke (corr {corr:+.2f})"
 
 
-def test_folding_shortens_the_wing(tmp_path):
+def test_folding_shortens_the_wing(tmp_path, monkeypatch):
     """Driving the elbow in must pull the hand in, not fling it forward.
 
     With a tensegrity wrist the hand is a free body, so this has to be settled
@@ -466,7 +467,7 @@ def test_folding_shortens_the_wing(tmp_path):
     where +z is span and -x is cranial.
     """
     scene = tmp_path / "fold.xml"
-    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
+    monkeypatch.setenv("MORPHOLOGY_PATH", str(EAGLE_TG))
     compile_tg(EAGLE_TG, scene)
     morph = load_morphology(EAGLE_TG)
     control = load_control_for_morphology(EAGLE_TG)
@@ -592,7 +593,7 @@ def test_malformed_bones_section_is_rejected(tmp_path, pattern, replacement):
         load_morphology(tg)
 
 
-def test_the_two_wings_stay_in_phase(tmp_path):
+def test_the_two_wings_stay_in_phase(tmp_path, monkeypatch):
     """Both shoulders must beat together for the whole run, not just at t=0.
 
     sync_crank_disks_at_rest matches the L/R cranks once at startup and nothing held them
@@ -602,7 +603,7 @@ def test_the_two_wings_stay_in_phase(tmp_path):
     crank mirrors the left, so q_L_t1 + q_R_t1 is the invariant that exposes it.
     """
     scene = tmp_path / "phase.xml"
-    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
+    monkeypatch.setenv("MORPHOLOGY_PATH", str(EAGLE_TG))
     compile_tg(EAGLE_TG, scene)
     morph = load_morphology(EAGLE_TG)
     control = load_control_for_morphology(EAGLE_TG)
@@ -622,7 +623,7 @@ def test_the_two_wings_stay_in_phase(tmp_path):
     assert abs(drift) < 0.15, f"wings drifted {drift:+.3f} deg apart over {cycles} cycles"
 
 
-def test_crank_lag_holds_over_a_long_run(tmp_path):
+def test_crank_lag_holds_over_a_long_run(tmp_path, monkeypatch):
     """The lag that selects the flap mode must not walk off.
 
     The two crank disks are velocity servos at different points of the tendon
@@ -631,7 +632,7 @@ def test_crank_lag_holds_over_a_long_run(tmp_path):
     counter-rotates, so q_t1 + q_t4 is the invariant that exposes it.
     """
     scene = tmp_path / "lag.xml"
-    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
+    monkeypatch.setenv("MORPHOLOGY_PATH", str(EAGLE_TG))
     compile_tg(EAGLE_TG, scene)
     morph = load_morphology(EAGLE_TG)
     control = load_control_for_morphology(EAGLE_TG)
@@ -651,7 +652,7 @@ def test_crank_lag_holds_over_a_long_run(tmp_path):
     assert abs(drift) < 2.0, f"crank lag drifted {drift:+.2f} deg over {cycles} cycles"
 
 
-def test_divergence_raises_instead_of_hanging(tmp_path):
+def test_divergence_raises_instead_of_hanging(tmp_path, monkeypatch):
     """MuJoCo resets MjData on a bad qacc, which rewinds data.time — so a
     clock-bounded loop restarts forever and the finite check never runs. The
     warning counter is the only thing that remembers."""
@@ -663,12 +664,11 @@ def test_divergence_raises_instead_of_hanging(tmp_path):
         .replace("control = control.tg", f"control = {ROOT / 'designs' / 'eagle' / 'control.tg'}")
     )
     scene = tmp_path / "toobig.xml"
-    os.environ["MORPHOLOGY_PATH"] = str(tg)
+    monkeypatch.setenv("MORPHOLOGY_PATH", str(tg))
     compile_tg(tg, scene)
     model = mujoco.MjModel.from_xml_path(str(scene))
     with pytest.raises(RuntimeError, match="diverged"):
         calibrated_drive(model, load_morphology(tg), load_control_for_morphology(tg))
-    os.environ["MORPHOLOGY_PATH"] = str(EAGLE_TG)
 
 
 def test_calibration_does_not_read_the_environment(tmp_path, monkeypatch):
