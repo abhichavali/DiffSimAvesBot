@@ -50,7 +50,7 @@ PATHS = {
     "soft_it009p": "designs/hummer/hover-soft-it009p/shoulder.tg",  # harmonics + stroke plane
     "tuned": "designs/hummer/hover/shoulder.tg",  # was a byte-identical copy of `shoulder`
     "hovering": "designs/hummer/hover-base/shoulder.tg",  # run_gui / EA default
-    "it009p": "designs/hummer/hover/shoulder.tg",  # hover_policy default; was a byte-identical copy of `shoulder`
+    "it009p": "designs/hummer/hover/shoulder.tg",  # the old hover_policy default; was a byte-identical copy of `shoulder`
     "tuned_hacked": "designs/hummer/checkpoints/tuned-dt-hacked/shoulder.tg",  # diag_mjx_cpu_parity default
 }
 OPTIMIZER_CLI = ROOT / "opt" / "optimize_control.py"
