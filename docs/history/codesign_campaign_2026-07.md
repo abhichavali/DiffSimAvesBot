@@ -1,9 +1,12 @@
 # Robust hover co-design: methodology & replication log
 
-> **Historical log.** Commands are as run during the campaign. Most run scripts,
-> warm-start JSONs and run dirs it names are not in the tree (the committed ones are in
-> git history before the refactor, e.g. `4889063`). Design paths point at `designs/`
-> (see `designs/README.md`).
+> **FROZEN HISTORY (July 2026). Do not update it, and do not cite its numbers as current.**
+> The live rules moved: certification = the `certify-design` skill, optimizer runs = the
+> `run-codesign` skill and `opt/README.md`, GPU boxes = the `gpu-box` skill. Every lift /
+> torque number here predates the 2026-09 aero fixes. Most run scripts, warm-start JSONs
+> and run dirs it names are not in the tree (committed ones are in git history before the
+> refactor, e.g. `4889063`); the `fixed-codesign` worktree of §14 was archived to
+> `~/Code/DiffSimAvesBot-archive/2026-09-24/` (tarball + git bundle) on 2026-09-24.
 
 **Date**: 2026-07-07/14. **Branches**: `june-26-demo` (old campaign, §1–10) →
 `fixed-codesign` worktree (fixed-protocol campaign, §11–14). **Goal**: starting from the

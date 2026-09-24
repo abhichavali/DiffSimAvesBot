@@ -7,8 +7,8 @@ used, so the printed lift / peak torque match the run's cpu_validation.json.
 
     uv run python opt/design_io.py <design_dir> [--integrator euler implicitfast] [--timestep 0.06]
 
-Certify a design (docs/ROBUST_CODESIGN_METHODOLOGY.md section 12: 8 warmup + 24 sample
-cycles; the worst peak over both commands is the certified number):
+Certify a design (the certify-design skill, .claude/skills/certify-design/SKILL.md: 8 warmup
++ 24 sample cycles; the worst peak over both commands is the certified number):
 
     uv run python opt/design_io.py designs/hummer/hover --integrator euler implicitfast rk4 --periods 24
     uv run python opt/design_io.py designs/hummer/hover --timestep 0.03 --periods 24

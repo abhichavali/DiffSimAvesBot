@@ -8,7 +8,29 @@ description: Use when you need a design's trustworthy CPU numbers - certifying a
 The certified number is the **worst exact peak motor torque** over the doctrine matrix on
 MuJoCo CPU (the reference; MJX results are candidates, not certificates):
 {euler, implicitfast, rk4} at dt 0.06 ms plus {euler, implicitfast} at dt 0.03 ms,
-8 warmup + 24 sampled cycles (methodology section 12). Run from the repo root.
+8 warmup + 24 sampled cycles. The deploy target is dt <= 0.06 ms (a 2x-coarser dt check
+was ruled over-strict). Run from the repo root.
+
+## Why these rules (each one was learned by being fooled)
+
+- **A second simulator, several integrators and dts**: gradient descent through MJX
+  exploits the discretization when that is cheaper than the physics ("gains" of 20-30%
+  under one integrator or dt that vanish under another).
+- **Exact per-cycle peaks, never a smoothed peak**: the optimizer's `tau_hat` (an Lp10
+  soft peak) read 144 where the exact peak was 174; narrowing torque spikes lowers it
+  without lowering the real peak.
+- **24 sampled cycles and a stationarity check**: small harmonics excite a ~40-cycle beat
+  in per-cycle peak torque; a 3-cycle window let the optimizer park the beat minimum in
+  the window (one "-15%" winner was a +11-17% steady-state regression).
+- **Compare to the seed certified the same way, on the same code**: absolute numbers move
+  with every physics fix (the 2026-09 aero fixes moved the seed from 174.7 to 193.1 mNm).
+- **Accepting an optimizer result**: its `cpu_best/` (or checkpoint) must beat the seed's
+  worst case at equal-or-better worst-case lift; holdout dts within ~5% of the trained
+  ones; if a `*_preharmonics` dir exists, certify it too - if the harmonics add nothing
+  certified, the pre-harmonics design is the result.
+
+The July campaign that produced these rules: `docs/history/codesign_campaign_2026-07.md`
+(frozen; its numbers predate the aero fixes).
 
 ## Commands
 
@@ -24,7 +46,7 @@ keep it (the rig builds lift for ~8 cycles; a shorter warmup certifies a transie
 
 Reference (2026-09-24, current aero): `hummer/hover` 193.1 mNm, lift 187.3-210.2 mN;
 `hummer/hover-soft-it009p` 170.5 mNm, 182.7-185.5 mN; `checkpoints/it021-harmonic`
-168.4 mNm, 184.3-185.9 mN. Anything older in `designs/README.md` or the methodology is
+168.4 mNm, 184.3-185.9 mN. Anything older in `designs/README.md` or `docs/history/` is
 pre-fix history: re-run before comparing.
 
 ## Per-cycle lift and stationarity

@@ -4,7 +4,7 @@ wrench over x = [theta (1+8K), extra tilt (rotation vector x, y)] until the crad
 Reads a flight control .tg (hover.policy) as the starting point and writes the trimmed one (crank speed,
 per-crank harmonics, hover attitude; its closed loop, if any, is dropped - re-derive it for the new trim).
 
-    python -m hover.trim [--control designs/hummer/free-hover/control.tg] --out trimmed.tg [--jacobian J.npz]
+    PYTHONPATH=src uv run python -m hover.trim [--control designs/hummer/free-hover/control.tg] --out trimmed.tg [--jacobian J.npz]
 """
 from __future__ import annotations
 

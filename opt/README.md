@@ -1,7 +1,8 @@
-# Co-design optimization (`opt/`)
+# `opt/`: co-design and free-flight CLIs
 
 Gradient and evolutionary co-design of the hummer rig on the differentiable MJX
-simulation. The CLIs live here; the library is `src/codesign/`.
+simulation (library: `src/codesign/`), plus the free-flight hover tools (library:
+`src/hover/`; workflow: the `free-flight-policy` skill).
 
 | File | What it is |
 |---|---|
@@ -10,7 +11,11 @@ simulation. The CLIs live here; the library is `src/codesign/`.
 | `run_gui.py` | Tk codesign launcher: GA -> Adam chain over the two CLIs above; each Adam run starts on its GA seed dir (`ga/seed_N/shoulder.tg` + `codesign_seed.json`) (not the design-inspector GUI, `plot_fixed_frequency_gui.py`) |
 | `design_io.py` | Replay or certify a design dir (optimizer output or committed `designs/`) on MuJoCo CPU (`codesign.artifacts.validate`) |
 | `tg_scalars.py` | `.tg` scalar flatten/substitute for the GUI and geometry genes |
-| `diag_mjx_cpu_parity.py` | MJX<->CPU step diff |
+| `diag_mjx_cpu_parity.py` | Per-step MJX<->CPU diff (aero, pitch, applied force, state): run after touching either aero |
+| `verify_hover.py` | Fly a flight control `.tg` on CPU with and without pushes (`--open-loop`, `--lqr`, `--dt-ms`) |
+| `push_sweep.py` | Largest push a flight control recovers from, per push direction |
+| `distill_hover.py` | LQR gain (`python -m hover.lqr`) -> the closed-loop MLP `.npz` |
+| `train_hover.py` | MJX BPTT of the hover MLP. Kept as a negative result: it diverges past one wingbeat |
 
 `src/codesign/`: `rig.py` (compile + settle a `.tg`, integrator/dt variants, tendon
 pairs), `genome.py` (the packed theta), `metrics.py` (theta -> `Metrics` rollout),
@@ -26,9 +31,10 @@ uv run python opt/optimize_control.py --tg designs/hummer/hover-soft-it009p/shou
 ```
 It only proves the pipeline runs: on 0.2-period windows the metrics are meaningless
 (a ~37000 mNm `tau_hat` baseline, `best tau=inf`, `swing=nan` are expected).
-The default `--tg` is the codesign seed, `designs/hummer/hover`. On a GPU box rsync the repo over and use `uv run --no-sync` (plain
-`uv run` re-syncs and drops CUDA jax). The full campaign commands are in
-`docs/ROBUST_CODESIGN_METHODOLOGY.md` section 6.
+The default `--tg` is the codesign seed, `designs/hummer/hover`. Real runs go on a GPU
+box (the `gpu-box` skill; run with `.venv/bin/python`, never plain `uv run`). The `run-codesign`
+skill is the step-by-step; the July campaign's exact commands are in
+`docs/history/codesign_campaign_2026-07.md` section 6 (frozen, pre-aero-fix numbers).
 
 Compile time is the number of distinct graphs: one `jacfwd` per loss (per rotating batch
 with `--rotate-batch`, the slowest, and slower still with rk4 in it), one forward per
@@ -150,14 +156,12 @@ uv run python opt/design_io.py opt/runs/cpu_best --integrator euler implicitfast
 ```
 
 `design_io.py` also replays a committed design dir on its own `control.tg`; with
-`--periods 24` it runs the certification doctrine of `docs/ROBUST_CODESIGN_METHODOLOGY.md`
-section 12 (see its docstring). The seed `designs/hummer/hover` certifies at 193.1 mNm
-worst case this way, at 187-210 mN lift: its passive pitch settles into a ~190 mN or a
-~210 mN mode depending on dt and integrator. (Section 12's 174.7 mNm / 358-364 mN came
-from the campaign's own scripts, on an aero that assumed the hinge edge always leads and
-put the hinge on the leading edge of a wing starting at the hinge, not on the drawn wing.)
+`--periods 24` it runs the certification doctrine (the `certify-design` skill). The seed
+`designs/hummer/hover` certifies at 193.1 mNm worst case this way, at 187-210 mN lift: its
+passive pitch settles into a ~190 mN or a ~210 mN mode depending on dt and integrator.
+(The campaign log's 174.7 mNm / 358-364 mN predate the 2026-09 aero fixes.)
 
-## Known issues (kept as-is for now; each fix changes outputs)
+## Known issues (kept as-is for now; each fix changes outputs; keep in sync with AGENTS.md "Known bugs")
 
 - `--lift-floor` (and `run_gui`'s `lift_floor`) default to 300 mN, picked when the aero
   assumed the hinge edge always leads and sat on the leading edge. The seed now makes

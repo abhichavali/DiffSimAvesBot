@@ -6,10 +6,16 @@
 
 * Status
 
-Free flight is uncontrolled until the closed-loop hover policy drives it. Nothing
-holds the bird up: gravity, the blade-element aero, the wing-pitch limiter, contacts
-and the four crank-motor servos are the only forces, so today every free-flight
-render shows the bird falling and tumbling.
+The free-standing bird hovers under its flight policy: ~designs/hummer/free-hover/~
+(~control.tg~ = phase-locked open-loop trim + per-wingbeat closed-loop MLP), code in
+~src/hover/~, watch it with ~mjpython src/view_free_hover.py~ or the GUI's Viewer tab.
+How it works and how to re-derive it: the ~free-flight-policy~ skill
+(~.claude/skills/free-flight-policy/SKILL.md~). Nothing holds the bird up: gravity, the
+blade-element aero, the wing-pitch limiter, contacts and the four crank motors are the
+only forces.
+
+The renders below do NOT use that policy yet: they drive the plain control, so every
+free-flight render still shows the bird falling and tumbling.
 
 Removed on 2026-09-24 because none of it was physical (all in git history):
 - the July hover stack: ~src/view_hover.py~ (viewer, five ~--mode~ demos),
@@ -41,6 +47,19 @@ Scene helpers (pure XML surgery): ~shrink_pillar_visual~ (cosmetic),
   ~contype 2 / conaffinity 4~, obstacle the reverse): a shared bit made the two wings
   hit each other and the struts at the top of the stroke.
 - Obstacles are mocap bodies: kinematic, placed at runtime, weightless to the bird.
+
+* What was learned about free hover (September 2026, current)
+
+- The free bird needs body inertia (~flying.BODY_INERTIA~, same mass): without it the
+  airframe recoils against every wingbeat and the lift is gone (-15 mN free vs 239 mN
+  held). It hovers pitched ~21 deg.
+- The cranks must be phase-locked: plain velocity servos let the t1/t4 lag drift
+  ~0.05-0.07 deg per wingbeat, which slides the bird out of trim.
+- Launch through a cradle that holds only the wingbeat-averaged pose; releasing from
+  rest tumbles it.
+- The trimmed open loop is unstable (per-wingbeat |eig| ~1.08; lost after ~40-50
+  wingbeats); an LQR on the one-wingbeat linear model, distilled to an MLP, hovers.
+- BPTT through MJX still diverges past one wingbeat; one-wingbeat ~jacfwd~ is accurate.
 
 * What was learned about free hover (July 2026, pre-2026-09 aero)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """How hard a push can a flight control take? One push at wingbeat 20, then 60 more wingbeats, on CPU.
 
-    PYTHONPATH=src python opt/push_sweep.py [--control designs/hummer/free-hover/control.tg]
+    uv run python opt/push_sweep.py [--control designs/hummer/free-hover/control.tg]
 """
 import argparse
 import sys

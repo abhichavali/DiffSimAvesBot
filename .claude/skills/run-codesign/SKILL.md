@@ -6,8 +6,9 @@ description: Use when running the gradient co-design optimizer (opt/optimize_con
 # Run the co-design optimizer
 
 CLI: `opt/optimize_control.py` (argparse -> `codesign.train.run`). Reference:
-`opt/README.md` (flags, outputs, Known issues) and `docs/ROBUST_CODESIGN_METHODOLOGY.md`
-sections 6 (full campaign commands), 8 (vast.ai), 10 (judging artifacts).
+`opt/README.md` (flags, outputs, Known issues). The July campaign's exact commands and
+run history are in `docs/history/codesign_campaign_2026-07.md` (sections 6-7; its numbers
+predate the 2026-09 aero fixes).
 
 ## Local smoke test (proves the pipeline runs, nothing more)
 
@@ -47,36 +48,9 @@ halves repeat runs. Always pass a distinct `--scene` when anything else may be r
 
 ## On a GPU box (vast.ai)
 
-The repo is private: sync with rsync, never `git clone`. Rent/destroy: methodology
-section 8. Set `H=root@HOST`, `PORT`, `R=/workspace/DiffSimAvesBot`.
-
-```bash
-ssh -p $PORT $H "apt-get install -y rsync; mkdir -p $R"      # fresh boxes lack both
-rsync -az --delete -e "ssh -p $PORT" --exclude .git --exclude .venv --exclude __pycache__ \
-  --exclude data --exclude 'opt/runs*' --exclude 'run_*.log' --exclude 'run_*.done' ./ $H:$R/
-# the run_*.log/.done excludes keep --delete from wiping a live run's log on a re-sync
-ssh -p $PORT $H "cd $R && (command -v uv || curl -LsSf https://astral.sh/uv/install.sh | sh) \
-  && export PATH=\$HOME/.local/bin:\$PATH && uv sync -q && uv pip install -q 'jax[cuda12]==0.10.2'"
-```
-
-Launch with `.venv/bin/python` (or `uv run --no-sync`), **never plain `uv run`**: it
-re-syncs and drops the CUDA jax. The NVIDIA wheels need their lib path:
-
-```bash
-ssh -p $PORT $H "cd $R && export LD_LIBRARY_PATH=\$(find \$PWD/.venv/lib/python3.*/site-packages/nvidia \
-  -path '*/lib' -type d | paste -sd:) && nohup sh -c '.venv/bin/python opt/optimize_control.py \
-  <flags> --out opt/runs_NAME > run_NAME.log 2>&1; echo \$? > run_NAME.done' >/dev/null 2>&1 &"
-```
-
-- Check jax sees the GPU first: `.venv/bin/python -c 'import jax; print(jax.devices())'`.
-- One optimizer per GPU (two crash cuSolver). Compiling the graphs takes 30-50 min on a
-  GPU before the first `it000` line; stdout is block-buffered, so a silent log is not a
-  hang - check `ps`/`nvidia-smi`.
-- Kill with `pkill -f '[o]ptimize_control'`; plain `pkill -f optimize_control` kills your
-  own ssh session. Keep kill and relaunch in separate ssh calls.
-- Monitor: `ssh ... "tail -5 $R/run_NAME.log; cat $R/run_NAME.done 2>/dev/null"`.
-- Fetch before destroying the box: `rsync -az -e "ssh -p $PORT" $H:$R/opt/runs_NAME opt/`
-  (`opt/runs*/` is gitignored). Boxes get evicted: fetch checkpoints as you go.
+Rent, sync, CUDA jax, launch, monitor, fetch and destroy: the `gpu-box` skill. The
+optimizer-specific part: launch `opt/optimize_control.py <flags> --out opt/runs_NAME` as
+its detached job, and expect 30-50 min of XLA compiles before the first `it000` line.
 
 ## Reading the output
 

@@ -5,7 +5,7 @@ State = the strobed deviation (hover.launch.strobe - orbit), input = corrections
 rotations/kicks of the whole bird for A, harmonic perturbations for B (position columns are exact: the
 dynamics are translation invariant).
 
-    python -m hover.lqr [--control designs/hummer/free-hover/control.tg] --out lqr.npz
+    PYTHONPATH=src uv run python -m hover.lqr [--control designs/hummer/free-hover/control.tg] --out lqr.npz
 """
 from __future__ import annotations
 
