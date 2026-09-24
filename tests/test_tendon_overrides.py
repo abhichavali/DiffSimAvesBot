@@ -8,6 +8,9 @@ import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import mujoco
+
+from design_paths import DEFAULT_HUMMER_TG, EAGLE_TG
 from morphology.compile import compile_morphology
 from morphology.emit_mjcf import emit_mjcf
 from morphology.mjcf_parts import color_to_rgba
@@ -69,6 +72,18 @@ def test_motor_tendons_are_crossed():
     tendons = {el.attrib["name"]: [site.attrib["site"] for site in el] for el in emitted(BASELINE).find("tendon")}
     assert tendons["L_motor_t1"] == ["L_part_1_motor_t4", "crank_disks_L_t1"]
     assert tendons["L_motor_t4"] == ["L_part_1_motor_t1", "crank_disks_L_t4"]
+
+
+def test_probe_limit_is_the_parked_motor_tendon_length():
+    """The probe's motor-tendon limit is the qpos0 length, with the disk's tilt and pitch."""
+    for tg in (BASELINE, DEFAULT_HUMMER_TG, EAGLE_TG):
+        model = mujoco.MjModel.from_xml_string(emit_mjcf(compile_morphology(load_morphology(tg))))
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        motor = [i for i in range(model.ntendon) if "_motor_t" in model.tendon(i).name]
+        assert len(motor) == 4
+        for i in motor:
+            assert abs(model.tendon_range[i][1] - data.ten_length[i]) < 1e-8, (tg, model.tendon(i).name)
 
 
 def test_individual_structural_tendon_override(tmp_path):

@@ -8,7 +8,6 @@ servos come from emit_eagle, called where they sit in the element order.
 
 from __future__ import annotations
 
-import math
 import xml.etree.ElementTree as ET
 from typing import Dict
 
@@ -16,7 +15,7 @@ import numpy as np
 
 from morphology import emit_eagle
 from morphology.compiled import CompiledDisk, CompiledMorphology, CompiledShoulder
-from morphology.geometry import world_node
+from morphology.geometry import quat_from_euler_xyz, world_node
 from morphology.mjcf_parts import (
     STRUCTURAL_TENDON_COLORS,
     color_to_rgba,
@@ -461,21 +460,8 @@ def _park_length(shoulder: CompiledShoulder, station: int, anchor: int, morph) -
     """Motor-tendon length with the crank parked, from the anchor to the disk's pin."""
     foot_world = world_node(shoulder.mobile_geom.nodes[f"motor_t{anchor}"], shoulder.mobile_pos, shoulder.mobile_quat)
     disk = shoulder.disks[f"{shoulder.side}_t{station}"]
-    pillar = np.array(disk.pillar_pos, dtype=float)
-    rim = np.array(disk.rim_pos, dtype=float)
-    tilt = morph.motors.disk.tilt_rad if shoulder.side == "L" else -morph.motors.disk.tilt_rad
-    # ponytail: rest-length ignores disk pitch_rad (orbit pitch about Y). Only sets the
-    # un-driven park length; pitch is mirror-symmetric so L/R stay balanced (sync +1.00,
-    # validated). Add Ry(pitch) to the rim rotation below if the park drifts off-center.
-    # Approximate rim world position from pillar + height + rotated rim
-    z_disk = morph.motors.disk.pillar_height
-    rim_world = pillar + np.array(
-        [
-            rim[0] * math.cos(tilt) - rim[2] * math.sin(tilt),
-            rim[1],
-            z_disk + rim[0] * math.sin(tilt) + rim[2] * math.cos(tilt),
-        ]
-    )
+    hub = np.asarray(disk.pillar_pos, dtype=float) + [0.0, 0.0, morph.motors.disk.pillar_height]
+    rim_world = world_node(np.asarray(disk.rim_pos, dtype=float), hub, quat_from_euler_xyz(disk.euler))
     return float(np.linalg.norm(foot_world - rim_world))
 
 
