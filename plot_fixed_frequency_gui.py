@@ -33,7 +33,6 @@ from matplotlib.ticker import MultipleLocator
 
 from gui.impulse import REF_MOTOR, ImpulseSim, cut_wraps, wrap_deg
 from gui.sims import (
-    ACTUATORS,
     PLOT_CHOICES,
     SETTLE_PERIODS,
     cached_sim,
@@ -49,6 +48,7 @@ from gui.sims import (
 from gui.sims import data_by_phase  # noqa: F401  TEMP re-export: remove after integration (tests/golden/harness.py gui_trace)
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control
+from runtime.crank import CRANK_ACTUATORS
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG, DESIGNS_DIR
 
 
@@ -268,7 +268,7 @@ class DesignPane:
         self.impulse_rate = tk.DoubleVar(value=0.2)
         self.impulse_torque = tk.DoubleVar(value=100.0)
         self.impulse_duration = tk.DoubleVar(value=20.0)
-        self.impulse_targets = {name: tk.BooleanVar(value=True) for name in ACTUATORS}
+        self.impulse_targets = {name: tk.BooleanVar(value=True) for name in CRANK_ACTUATORS}
         self.impulse_hold = tk.BooleanVar(value=False)
         self.impulse_readout = tk.StringVar(value="")
 

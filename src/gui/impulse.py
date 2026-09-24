@@ -16,14 +16,12 @@ from typing import Callable
 import mujoco
 import numpy as np
 
-from gui.sims import ACTUATORS, prepare_scene
+from gui.sims import prepare_scene
 from morphology.tg_parser import load_morphology
-from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import load_control, load_control_for_morphology, ramp_factor
-from runtime.crank import sync_crank_disks_at_rest
-from runtime.eagle_drive import CrankDrive, wing_plane_roll
-from runtime.realtime import get_actuator_id
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
+from runtime.crank import CrankDrive
+from runtime.eagle_drive import wing_plane_roll
+from runtime.sim import PlateWingSim
 
 REF_MOTOR = "L_motor_t1"
 
@@ -82,21 +80,17 @@ class ImpulseSim:
                  settle_periods: float, speed: float | None = None) -> None:
         prepare_scene(tg_path, scene_path)
         self.morph = load_morphology(tg_path)
-        self.model = model = mujoco.MjModel.from_xml_path(str(scene_path))
-        self.data = data = mujoco.MjData(model)
-        calibrate_wing_pitch_at_rest(model, data)
-        sync_crank_disks_at_rest(model, data)
+        self.sim = PlateWingSim(mujoco.MjModel.from_xml_path(str(scene_path)), self.morph)
+        self.model, self.data = model, data = self.sim.model, self.sim.data
         control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
         self.speed = control.a0 if speed is None else float(speed)  # rad/s commanded on every disk
         self.period = math.tau / abs(self.speed) if self.speed else control.period
         self.settle_periods = float(settle_periods)
-        self.aero = AeroBladeRuntime(model)
-        self.pitch = WingPitchLimiter(model, data)
 
-        self.motors = tuple(name for name in ACTUATORS if get_actuator_id(model, name) >= 0)
+        self.aid = {mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i): i for i in self.sim.crank_ids}
+        self.motors = tuple(self.aid)
         if not self.motors:
             raise ValueError("no crank motors in this design")
-        self.aid = {name: get_actuator_id(model, name) for name in self.motors}
         self.ctrl_sign = math.copysign(1.0, self.morph.motors.motor_direction * self.speed) if self.speed else 1.0
         self.qadr: dict[str, int] = {}
         self.dof: dict[str, int] = {}
@@ -160,15 +154,10 @@ class ImpulseSim:
     # -- physics ------------------------------------------------------------
     def step(self) -> None:
         model, data = self.model, self.data
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        self.aero.apply(model, data)
-        self.pitch.apply(model, data)
         ramp = ramp_factor(data.time, self.drive_start, self.settle_periods * self.period)
         ctrl = ramp * self.morph.motors.motor_direction * self.speed
         t = data.time
-        for name in self.motors:
-            data.ctrl[self.aid[name]] = ctrl
+        self.sim.apply(ctrl)
         if self.hold_phase:
             self.lock.trim(data)
         for name in self.motors:

@@ -24,17 +24,13 @@ from compile_tg import compile_tg
 from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
 from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
-from runtime.aero import AeroBladeRuntime
-from runtime.control_signal import eval_control, load_control, load_control_for_morphology, ramp_factor
-from runtime.crank import sync_crank_disks_at_rest
+from runtime.control_signal import drive_command, load_control, load_control_for_morphology
 from runtime.disk_orientation import DiskOrientation
 from runtime.morphology_runtime import load_design_morphology
-from runtime.realtime import get_actuator_id
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
+from runtime.sim import PlateWingSim
 
 ROOT = Path(__file__).resolve().parents[2]
 
-ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 PLOT_ACTUATORS = ("L_motor_t1", "L_motor_t4")
 # Phase-plot kind -> its y-axis label; the keys are the GUI's plot menu.
 PLOT_YLABELS = {
@@ -133,43 +129,30 @@ def settled_drive(tg_path: Path, scene_path: Path, control_path: Path | None, se
                   *, strokeplane: bool = False):
     """Compile, rest and settle a design on the ramped crank drive: the CPU loop behind every plot.
 
-    Returns (model, data, control, aero, step, sp); step() is one physics step of the
-    drive. With ``strokeplane`` a StrokePlaneSignal beside the .tg (sp, else None) is
-    applied every step -- only the phase plots ask for it; work loops and the wing
-    path run the plain drive.
+    Returns (sim, control, step, sp); step() is one physics step of the drive. With
+    ``strokeplane`` a StrokePlaneSignal beside the .tg (sp, else None) is applied every
+    step -- only the phase plots ask for it; work loops and the wing path run the plain
+    drive.
     """
     prepare_scene(tg_path, scene_path)
     morph = load_morphology(tg_path)
-    model = mujoco.MjModel.from_xml_path(str(scene_path))
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
+    sim = PlateWingSim(mujoco.MjModel.from_xml_path(str(scene_path)), morph)
+    model, data = sim.model, sim.data
     drive_start = data.time
 
     control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
-    actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]
     sp_file = tg_path.parent / "strokeplane_optimized.json"
     sp = StrokePlaneSignal(model, json.loads(sp_file.read_text())) if strokeplane and sp_file.exists() else None
 
     def step() -> None:
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
-        ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
-        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
-        for aid in actuator_ids:
-            if aid >= 0:
-                data.ctrl[aid] = base_ctrl
         if sp is not None:
             sp.orient.set(*sp.angles(data))
-        mujoco.mj_step(model, data)
+        sim.step(drive_command(control, morph.motors.motor_direction, data.time, drive_start,
+                               settle_periods * control.period))
 
     for _ in range(math.ceil(settle_periods * control.period / model.opt.timestep)):
         step()
-    return model, data, control, aero, step, sp
+    return sim, control, step, sp
 
 
 def phase_trace(
@@ -184,9 +167,9 @@ def phase_trace(
     One rollout serves all PLOT_CHOICES; ``phase_plot`` picks one out. Series are
     per step except the mean lift, kept as per-(half-)cycle running sums.
     """
-    model, data, control, aero, step, sp = settled_drive(
-        tg_path, scene_path, control_path, settle_periods, strokeplane=True)
-    plot_ids = {name: get_actuator_id(model, name) for name in PLOT_ACTUATORS}
+    sim, control, step, sp = settled_drive(tg_path, scene_path, control_path, settle_periods, strokeplane=True)
+    model, data = sim.model, sim.data
+    plot_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in PLOT_ACTUATORS}
     tendon_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name) for name in PLOT_ACTUATORS}
     qvel_ids = {}
     for name in PLOT_ACTUATORS:
@@ -239,7 +222,7 @@ def phase_trace(
         trace["y"].append(1000.0 * float(pos[1]))
         trace["z"].append(1000.0 * float(pos[2]))
         if phase < periods:
-            lift = sum(float(sum(force[2] for force in (wing.cached_forces or []))) for wing in aero.wings)
+            lift = sum(float(sum(force[2] for force in (wing.cached_forces or []))) for wing in sim.aero.wings)
             cycle = int(phase) + int(math.floor(settle_periods)) + 1
             for kind, key in (("Mean lift per cycle", cycle),
                               ("Mean lift per half-cycle", cycle + (0.0 if phase % 1.0 < 0.5 else 0.5))):
@@ -354,8 +337,9 @@ def work_loop_data(
     control_path: Path | None = None,
     settle_periods: float = SETTLE_PERIODS,
 ) -> dict[str, object]:
-    model, data, control, _aero, step, _sp = settled_drive(tg_path, scene_path, control_path, settle_periods)
-    actuator_ids = {name: get_actuator_id(model, name) for name in PLOT_ACTUATORS}
+    sim, control, step, _sp = settled_drive(tg_path, scene_path, control_path, settle_periods)
+    model, data = sim.model, sim.data
+    actuator_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in PLOT_ACTUATORS}
     motor_tendon_ids = {
         name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name)
         for name in PLOT_ACTUATORS
@@ -438,7 +422,8 @@ def wing_path_data(
     settle_periods: float = SETTLE_PERIODS,
 ) -> dict[str, list[float]]:
     """Record the wingtip site's 3D world trajectory (mm) over `periods` cycles."""
-    model, data, control, _aero, step, _sp = settled_drive(tg_path, scene_path, control_path, settle_periods)
+    sim, control, step, _sp = settled_drive(tg_path, scene_path, control_path, settle_periods)
+    model, data = sim.model, sim.data
     tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
     if tip_id < 0:
         raise ValueError(f"Missing wingtip site: {WINGTIP_SITE}")
