@@ -24,6 +24,12 @@ uv run python src/view_eagle.py --gif out/eagle.gif
 uv run pytest -q tests/test_eagle_wing.py
 ```
 
+Stroke shaping is on the command line (`--fold`, `--twist`, `--lead`, `--level`,
+`--attack`; see `--help`). Design knobs live in `designs/eagle/shoulder.tg` (bone
+lengths, joint ranges, servo stiffness, and the humerus mount, which orients the
+wing on the sweep) and `designs/eagle/control.tg` (`a0` is the crank velocity
+command, so stroke Hz = a0 / 2pi).
+
 The default design is `designs/hummer/hover/shoulder.tg`; it points at `designs/hummer/hover/control.tg` for
 the Fourier control signal. The default generated scene is `scene.xml`.
 
