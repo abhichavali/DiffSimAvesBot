@@ -93,6 +93,35 @@ def embed_figure(figure: Figure, master: ttk.Frame, **pack_options) -> FigureCan
     return canvas
 
 
+def add_line_toggles(ax, lines: dict, colors: dict[str, str], plot_area: ttk.Frame, canvas: FigureCanvasTkAgg) -> None:
+    """A color-swatch checkbox per (initially hidden) line; the legend lists the visible ones."""
+
+    def update_legend() -> None:
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+        visible_lines = [line for line in lines.values() if line.get_visible()]
+        if visible_lines:
+            ax.legend(visible_lines, [line.get_label() for line in visible_lines])
+
+    toggles = ttk.Frame(plot_area, padding=(8, 0, 0, 0))
+    toggles.pack(side=tk.RIGHT, fill=tk.Y)
+    for name, line in lines.items():
+        visible = tk.BooleanVar(value=False)
+
+        def toggle(line=line, visible=visible) -> None:
+            line.set_visible(visible.get())
+            update_legend()
+            canvas.draw_idle()
+
+        row = ttk.Frame(toggles)
+        row.pack(side=tk.TOP, fill=tk.X, anchor=tk.W)
+        tk.Label(row, text="  ", bg=colors[name], width=2).pack(side=tk.LEFT, padx=(0, 4), pady=1)
+        ttk.Checkbutton(row, text=name.removeprefix("L_"), variable=visible, command=toggle).pack(
+            side=tk.LEFT, anchor=tk.W
+        )
+
+
 class DesignPane:
     def __init__(
         self,
@@ -763,42 +792,12 @@ class DesignPane:
             if title == "Angular velocity vs time":
                 ax.set_xlim(50.0, 75.0)
         ax.grid(True, alpha=0.3)
-
-        def update_legend() -> None:
-            legend = ax.get_legend()
-            if legend is not None:
-                legend.remove()
-            visible_lines = [line for line in lines.values() if line.get_visible()]
-            if visible_lines:
-                ax.legend(visible_lines, [line.get_label() for line in visible_lines])
-
-        if colors:
-            update_legend()
-        elif lines:
+        if lines and not colors:
             ax.legend()
 
         canvas = embed_figure(figure, plot_area, side=tk.LEFT, fill=tk.BOTH, expand=True)
-
         if colors:
-            toggles = ttk.Frame(plot_area, padding=(8, 0, 0, 0))
-            toggles.pack(side=tk.RIGHT, fill=tk.Y)
-            for name, line in lines.items():
-                visible = tk.BooleanVar(value=False)
-
-                def toggle(line=line, visible=visible) -> None:
-                    line.set_visible(visible.get())
-                    update_legend()
-                    canvas.draw_idle()
-
-                row = ttk.Frame(toggles)
-                row.pack(side=tk.TOP, fill=tk.X, anchor=tk.W)
-                tk.Label(row, text="  ", bg=colors[name], width=2).pack(side=tk.LEFT, padx=(0, 4), pady=1)
-                ttk.Checkbutton(
-                    row,
-                    text=name.removeprefix("L_"),
-                    variable=visible,
-                    command=toggle,
-                ).pack(side=tk.LEFT, anchor=tk.W)
+            add_line_toggles(ax, lines, colors, plot_area, canvas)
 
         self.plotted_slots.add(frame)
         button.configure(text="Update")
@@ -877,36 +876,9 @@ class DesignPane:
         ax.set_ylabel("Tendon tension (N)")
         ax.grid(True, alpha=0.3)
 
-        def update_legend() -> None:
-            legend = ax.get_legend()
-            if legend is not None:
-                legend.remove()
-            visible_lines = [line for line in lines.values() if line.get_visible()]
-            if visible_lines:
-                ax.legend(visible_lines, [line.get_label() for line in visible_lines])
-
         canvas = embed_figure(figure, plot_area, side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        toggles = ttk.Frame(plot_area, padding=(8, 0, 0, 0))
-        toggles.pack(side=tk.RIGHT, fill=tk.Y)
-        for name, line in lines.items():
-            visible = tk.BooleanVar(value=False)
-            color = str(loops[name]["color"])
-
-            def toggle(line=line, visible=visible) -> None:
-                line.set_visible(visible.get())
-                update_legend()
-                canvas.draw_idle()
-
-            row = ttk.Frame(toggles)
-            row.pack(side=tk.TOP, fill=tk.X, anchor=tk.W)
-            tk.Label(row, text="  ", bg=color, width=2).pack(side=tk.LEFT, padx=(0, 4), pady=1)
-            ttk.Checkbutton(
-                row,
-                text=name.removeprefix("L_"),
-                variable=visible,
-                command=toggle,
-            ).pack(side=tk.LEFT, anchor=tk.W)
+        colors = {name: str(loop["color"]) for name, loop in loops.items()}
+        add_line_toggles(ax, lines, colors, plot_area, canvas)
 
     def plot_work_loops(self) -> None:
         periods = float(self.work_periods.get())
@@ -938,76 +910,28 @@ class DesignPane:
         for frame in (self.shaft_frame, self.motor_tendon_frame, self.structural_frame, self.wing_frame):
             self.clear_frame(frame)
 
-        for frame in (self.shaft_frame, self.motor_tendon_frame, self.wing_frame):
+        for frame, loops, titles, xlabel, ylabel in (
+            (self.shaft_frame, data["shaft_loops"], ("Downstroke motor shaft loop", "Upstroke motor shaft loop"),
+             "Motor shaft angle (deg)", "Actuator torque (mN m)"),
+            (self.motor_tendon_frame, data["motor_tendon_loops"],
+             ("Downstroke motor tendon loop", "Upstroke motor tendon loop"),
+             "Motor tendon extension (mm)", "Tendon tension (N)"),
+            (self.wing_frame, data["wing_loops"],
+             ("Downstroke motor torque vs wing angle", "Upstroke motor torque vs wing angle"),
+             "Wing angle (deg)", "Motor torque (mN m)"),
+        ):  # each loops dict is (downstroke, upstroke) in that order
             frame.columnconfigure(0, weight=1)
             frame.columnconfigure(1, weight=1)
             frame.rowconfigure(0, weight=1)
-
-        shaft_loops = data["shaft_loops"]
-        self.plot_single_loop(
-            self.shaft_frame,
-            shaft_loops["Downstroke motor (orange)"],
-            "Downstroke motor shaft loop",
-            "Motor shaft angle (deg)",
-            "Actuator torque (mN m)",
-            0,
-            0,
-        )
-        self.plot_single_loop(
-            self.shaft_frame,
-            shaft_loops["Upstroke motor (blue)"],
-            "Upstroke motor shaft loop",
-            "Motor shaft angle (deg)",
-            "Actuator torque (mN m)",
-            0,
-            1,
-        )
-
-        motor_tendon_loops = data["motor_tendon_loops"]
-        self.plot_single_loop(
-            self.motor_tendon_frame,
-            motor_tendon_loops["Downstroke tendon (orange)"],
-            "Downstroke motor tendon loop",
-            "Motor tendon extension (mm)",
-            "Tendon tension (N)",
-            0,
-            0,
-        )
-        self.plot_single_loop(
-            self.motor_tendon_frame,
-            motor_tendon_loops["Upstroke tendon (blue)"],
-            "Upstroke motor tendon loop",
-            "Motor tendon extension (mm)",
-            "Tendon tension (N)",
-            0,
-            1,
-        )
-
+            for column, (loop, title) in enumerate(zip(loops.values(), titles)):
+                self.plot_single_loop(frame, loop, title, xlabel, ylabel, 0, column)
         self.plot_structural_work_loops(data["structural_loops"])
-        wing_loops = data["wing_loops"]
-        self.plot_single_loop(
-            self.wing_frame,
-            wing_loops["Downstroke motor (orange)"],
-            "Downstroke motor torque vs wing angle",
-            "Wing angle (deg)",
-            "Motor torque (mN m)",
-            0,
-            0,
-        )
-        self.plot_single_loop(
-            self.wing_frame,
-            wing_loops["Upstroke motor (blue)"],
-            "Upstroke motor torque vs wing angle",
-            "Wing angle (deg)",
-            "Motor torque (mN m)",
-            0,
-            1,
-        )
 
         self.status.set(
             f"Plotted work loops for {periods:g} periods at control f0 "
             f"{data['control_frequency_hz']:g} Hz, after {settle_periods:g} settle periods."
         )
+
 
 class PlotGui:
     def __init__(self) -> None:
