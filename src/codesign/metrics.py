@@ -145,7 +145,7 @@ def build_rollout(rig, genome: Genome, omega, *, warmup_steps, sample_steps, ste
                 downstroke_stiffness=pitch.downstroke_stiffness * jnp.exp(g.pitch[3]),
             )
 
-        def step(carry, rec):
+        def step(carry, _rec):
             dx, state, cq, cnfw, ca, cu, i = carry
             mx_step = mx_eff
             if genome.strokeplane:
@@ -197,9 +197,8 @@ def build_rollout(rig, genome: Genome, omega, *, warmup_steps, sample_steps, ste
             absf = jnp.abs(dx.actuator_force[flap_ids])
             tauA = jnp.sum(absf * flap_t1_mask)  # t1 ("blue", upstroke)
             tauB = jnp.sum(absf * (1.0 - flap_t1_mask))  # t4 ("orange", downstroke)
-            keep = rec.astype(net_force_world.dtype)
             return carry, jnp.concatenate(
-                [jnp.array([net_force_world[2] * keep, tau, power, tauA, tauB, p_sup,
+                [jnp.array([net_force_world[2], tau, power, tauA, tauB, p_sup,
                             alpha, speed]), tips, dx.qpos])
 
         state0 = aero_runtime.init_aero_state(aero)
@@ -214,7 +213,7 @@ def build_rollout(rig, genome: Genome, omega, *, warmup_steps, sample_steps, ste
         mask = record.astype(rec.dtype)
         n_win = jnp.maximum(jnp.sum(mask), 1.0)
 
-        Lbar = jnp.sum(lift_z) / n_win
+        Lbar = jnp.sum(lift_z * mask) / n_win
         # Per-cycle exact torque peaks over the window. tau_peak (max over cycles) is what
         # CPU certification measures; tau_drift (last minus first cycle peak) exposes slow
         # beats a short window would sample as fake gains. tau_hat (the gradient surrogate)
@@ -245,9 +244,15 @@ def build_rollout(rig, genome: Genome, omega, *, warmup_steps, sample_steps, ste
             S = jnp.sum(harmonics**2 * (a**2 + b**2))
 
         # Limit-cycle stability: relative cross-cycle variance of the lift trace (needs
-        # >= 2 whole cycles, else 0).
+        # >= 2 whole cycles, else 0), over the last n_avg CRANK cycles: a0 (ctrl[0]) sets
+        # the crank speed, so once it moves, design-period cuts read the phase slip as
+        # variance (~1000x at a 3% a0 move). The lift is resampled onto a static grid of
+        # steps_per_cycle points per crank cycle: shapes stay fixed, a0 differentiable.
         if n_full >= 2:
-            lift_cyc = lift_z[window_start:window_end].reshape(n_avg, steps_per_cycle)
+            spc = steps_per_cycle * jnp.exp(-ctrl[0])
+            grid = window_end - n_avg * spc + jnp.arange(n_avg * steps_per_cycle) * (spc / steps_per_cycle)
+            lift_cyc = jnp.interp(grid, jnp.arange(total_steps, dtype=lift_z.dtype),
+                                  lift_z).reshape(n_avg, steps_per_cycle)
             C_lc = jnp.mean(jnp.var(lift_cyc, axis=0)) / (jnp.mean(lift_cyc**2) + 1e-12)
         else:
             C_lc = jnp.array(0.0)

@@ -160,7 +160,8 @@ put the hinge on the leading edge of a wing starting at the hinge, not on the dr
   187-210 mN, so the floor binds from the first step; pick a new one before the next run.
 - MJX sizes its warmup/sample windows by the design period, not the crank-locked one
   (step counts are static, a0_log is not), so once a0 moves its window is not whole flap
-  cycles while the CPU gate's is: at a0_log = 0.05, mean power reads 1.5% apart.
+  cycles while the CPU gate's is: at a0_log = 0.05, mean power reads 1.5% apart. (`C_lc`
+  alone is resampled onto the crank's own cycles.)
 - `--lock-wings` runs export only the `L_` tendons, and `design_io` leaves the R side at
   the unsymmetrized `.tg` values.
 - `--init-codesign` slices by position, so a `theta_full.json` from a `--tune-pitch` or
