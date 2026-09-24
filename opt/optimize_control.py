@@ -18,10 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codesign import cpu_check, metrics, train  # noqa: E402
-from codesign.genome import Genome  # noqa: E402
+from codesign import train  # noqa: E402
 from codesign.loss import OBJ_CHOICES  # noqa: E402
-from codesign.rig import INTEGRATORS, Rig  # noqa: E402
+from codesign.rig import INTEGRATORS  # noqa: E402
 from runtime.morphology_runtime import LEGACY_BASELINE_TG  # noqa: E402
 
 
@@ -274,35 +273,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     if args.rotate_batch and args.rotate_batch < 2:
         p.error("--rotate-batch needs >=2 variants per batch")
     return args
-
-
-# TEMP re-exports: remove after integration. tests/golden/harness.py (ADAPTER) imports
-# these from opt.optimize_control; the two functions keep their pre-split signatures.
-from codesign.genome import load_control_seed, ricker_atoms, wavelet_dictionary  # noqa: E402,F401
-from codesign.rig import (motor_tendon_ids, set_unsteady_aero, setup,  # noqa: E402,F401
-                          structural_tendon_pairs, symmetrize_wings)
-_INTEGRATORS = INTEGRATORS
-
-
-def cpu_validate_design(scene_path, ctrl_params, tendon_arrays, integrator, *, pitch_params=None,
-                        strokeplane_params=None, cycle_stats=False, with_swing=False, **kw):
-    r = cpu_check.cpu_rollout(scene_path, cpu_check.CpuDesign(ctrl_params, tendon_arrays, pitch_params,
-                                                              strokeplane_params), integrator, **kw)
-    return (r.lift, r.peak, r.power) + ((r.cycle_peaks,) if cycle_stats else ()) + (
-        (r.swing,) if with_swing else ())
-
-
-def build_rollout(mx, dx0, drive, pitch, aero, tip_ids, omega, K, warmup_steps, sample_steps, *,
-                  steps_per_cycle, aero_substep, base_a0, tune_control, control_fixed,
-                  tune_frequency, tune_tendons, tendons, motor_ids, flap_t1_mask, avg_periods=3):
-    assert base_a0 == float(drive.a0)
-    rig = Rig(None, mx, dx0, None, drive, pitch, aero, tip_ids, tendons, motor_ids)
-    genome = Genome(K, int(tendons[0].shape[0]), control=tune_control, frequency=tune_frequency,
-                    tendons=tune_tendons)
-    return metrics.build_rollout(rig, genome, omega, warmup_steps=warmup_steps,
-                                 sample_steps=sample_steps, steps_per_cycle=steps_per_cycle,
-                                 aero_substep=aero_substep, control_fixed=control_fixed,
-                                 flap_t1_mask=flap_t1_mask, avg_periods=avg_periods)
 
 
 if __name__ == "__main__":

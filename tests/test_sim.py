@@ -1,6 +1,6 @@
-"""PlateWingSim is the step the copy-pasted CPU loops share: it must reproduce them bit for bit.
+"""PlateWingSim driven by hand must reproduce the library CPU loops bit for bit.
 
-Checked against optimize_control.cpu_validate_design (harmonics + learned stroke
+Checked against codesign.cpu_check.cpu_rollout (harmonics + learned stroke
 plane, explicit phase lag) and run_fixed_frequency.run (ramped Fourier drive,
 design lag), on a short window of the hover-soft-it009p design.
 """
@@ -16,9 +16,9 @@ import numpy as np
 import pytest
 
 import run_fixed_frequency
+from codesign.cpu_check import CpuDesign, cpu_rollout
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
-from opt.optimize_control import cpu_validate_design
 from runtime.control_signal import drive_command, load_control_for_morphology
 from runtime.disk_orientation import DiskOrientation
 from runtime.morphology_runtime import load_design_morphology
@@ -62,7 +62,7 @@ def assert_same(a, b):
         assert x.tobytes() == y.tobytes()
 
 
-def test_matches_cpu_validate_design(design):
+def test_matches_cpu_rollout(design):
     scene, morph, control = design
     lag = morph.motors.crank_phase_lag_rad
     a0 = morph.motors.motor_direction * control.a0
@@ -73,9 +73,8 @@ def test_matches_cpu_validate_design(design):
     sp_params = (sp["tilt_coeffs"] + sp["pitch_coeffs"], sp["tilt0_rad"], sp["pitch0_rad"], sp["max_delta_rad"])
 
     with final_data() as last:
-        expected = cpu_validate_design(scene, (a0, a, b, omega), None, "euler", strokeplane_params=sp_params,
-                                       periods=periods, warmup=warmup, phase_lag=lag, aero_substep=4,
-                                       cycle_stats=True, with_swing=True)
+        expected = tuple(cpu_rollout(scene, CpuDesign((a0, a, b, omega), strokeplane=sp_params), "euler",
+                                     periods=periods, warmup=warmup, phase_lag=lag, aero_substep=4))
     expected_state = state(last["data"])
 
     model = mujoco.MjModel.from_xml_path(str(scene))

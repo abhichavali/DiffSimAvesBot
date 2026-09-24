@@ -68,10 +68,14 @@ import plot_fixed_frequency_gui as _gui  # noqa: E402
 import run_fixed_frequency as _run_ff  # noqa: E402
 import view_eagle as _view_eagle  # noqa: E402
 import view_fixed_frequency as _view_ff  # noqa: E402
+from codesign.cpu_check import CpuDesign, cpu_rollout  # noqa: E402
+from codesign.genome import Genome, load_control_seed, ricker_atoms, wavelet_dictionary  # noqa: E402
+from codesign.metrics import build_rollout  # noqa: E402
+from codesign.rig import (motor_tendon_ids, set_unsteady_aero, setup,  # noqa: E402
+                          structural_tendon_pairs, symmetrize_wings)
 from compile_tg import compile_tg  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from morphology.wing_geometry import load_default_wing_geometry as wing_geometry  # noqa: E402
-from opt import optimize_control as _oc  # noqa: E402
 from runtime.aero import RHO_AIR, AeroBladeRuntime as CpuAero, aerodynamics as cpu_aero_strip  # noqa: E402
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor  # noqa: E402
 from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
@@ -81,11 +85,6 @@ from runtime.morphology_runtime import load_design_morphology  # noqa: E402
 from runtime.runtime_config import get_control_parameters, load_runtime_config  # noqa: E402
 from runtime.wing_pitch import WingPitchLimiter as CpuPitch, calibrate_wing_pitch_at_rest  # noqa: E402
 
-cpu_validate = _oc.cpu_validate_design
-set_unsteady_aero = _oc.set_unsteady_aero
-wavelet_dictionary, ricker_atoms = _oc.wavelet_dictionary, _oc.ricker_atoms
-symmetrize_wings, structural_tendon_pairs = _oc.symmetrize_wings, _oc.structural_tendon_pairs
-motor_tendon_ids, load_control_seed = _oc.motor_tendon_ids, _oc.load_control_seed
 mjx_aero_wing, mjx_drive_config = _mjx_aero.aero_wing, _mjx_rollout.build_drive_config
 mjx_simulate = _mjx_rollout.simulate
 
@@ -122,8 +121,16 @@ def runtime_config() -> dict:
     return {"runtime": load_runtime_config(), "control": get_control_parameters()}
 
 
+def cpu_validate(scene, ctrl, tendons, integrator, *, pitch_params=None, strokeplane_params=None,
+                 cycle_stats=False, with_swing=False, **kw):
+    """codesign.cpu_check.cpu_rollout as (lift, peak, power[, cycle_peaks][, swing])."""
+    r = cpu_rollout(scene, CpuDesign(ctrl, tendons, pitch_params, strokeplane_params), integrator, **kw)
+    return (r.lift, r.peak, r.power) + ((r.cycle_peaks,) if cycle_stats else ()) + (
+        (r.swing,) if with_swing else ())
+
+
 def ctrl_params(name: str):
-    """(a0, a, b, omega) as optimize_control hands them to cpu_validate_design, + crank lag."""
+    """(a0, a, b, omega) as the optimizer hands them to cpu_rollout, + crank lag."""
     morph, c = parse(name)
     a0 = morph.motors.motor_direction * c.a0
     return (a0, [x / c.a0 for x in c.a], [x / c.a0 for x in c.b], c.omega), morph.motors.crank_phase_lag_rad
@@ -203,19 +210,19 @@ def mjx_pitch_qfrc(model, qpos, qvel, centers):
 
 
 def mjx_metrics(name: str, scene: Path, K: int, warmup_steps: int, sample_steps: int, avg_periods: int):
-    """build_rollout wired the way optimize_control.main wires it (control + frequency)."""
+    """build_rollout wired the way the optimizer wires it (control + frequency)."""
     use_design(name, scene)
-    model, mx, dx0, control, drive, pitch, aero, tip_ids, tendons, motor_ids = _oc.setup(tg(name), scene)
+    rig = setup(tg(name), scene)
+    model, control, drive = rig.model, rig.control, rig.drive
     base_a0 = float(drive.a0)
     seed = jnp.asarray(load_control_seed(None, K, drive, base_a0), dtype=jnp.float32)
     names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, int(i)) for i in np.asarray(drive.flap_actuator_ids)]
     t1_mask = jnp.asarray([1.0 if "t1" in n else 0.0 for n in names], dtype=jnp.float32)
-    metrics = _oc.build_rollout(
-        mx, dx0, drive, pitch, aero, tip_ids, float(control.omega), K, warmup_steps, sample_steps,
+    metrics = build_rollout(
+        rig, Genome(K, int(rig.tendons[0].shape[0]), control=True, frequency=True), float(control.omega),
+        warmup_steps=warmup_steps, sample_steps=sample_steps,
         steps_per_cycle=max(1, round(control.period / model.opt.timestep)), aero_substep=4,
-        base_a0=base_a0, tune_control=True, control_fixed=seed, tune_frequency=True,
-        tune_tendons=False, tendons=tendons, motor_ids=motor_ids, flap_t1_mask=t1_mask,
-        avg_periods=avg_periods)
+        control_fixed=seed, flap_t1_mask=t1_mask, avg_periods=avg_periods)
     return metrics, jnp.concatenate([seed, jnp.zeros(1, jnp.float32)])
 
 
