@@ -216,7 +216,7 @@ DEFAULT_AERO_SUBSTEP = 4
 # The unsteady (added-mass) aero force is proportional to finite-differenced
 # acceleration. In this explicit runtime it is noisy enough to inflate lift by
 # 2x+ and does not transfer cleanly between CPU and MJX. Keep the default model
-# quasi-steady; opt/optimize_control.set_unsteady_aero(True) opts into the old
+# quasi-steady; codesign.rig.set_unsteady_aero(True) opts into the old
 # capped hack for diagnostics.
 # ponytail: explicit added mass stays opt-in; use an implicit added-mass state if
 # this needs to become production physics.
