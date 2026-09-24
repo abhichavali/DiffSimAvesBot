@@ -136,7 +136,7 @@ class Released:
 def release(bird: Bird, theta, attitude, K, *, n_cradle=12, n_avg=6,
             body_inertia=4e-5 + flying.BODY_INERTIA) -> Released:
     """Settle the bird on ``theta`` at ``attitude`` (wxyz) in the mean-only cradle, then release it."""
-    m, q, v, af = bird.model, bird.qadr, bird.vadr, bird.af
+    m, af = bird.model, bird.af
     m.opt.gravity[:] = 0
     sim = PlateWingSim(m, bird.morph); d = sim.data; d.qvel[:] = 0
     rotate_bird(m, d, np.asarray(attitude, float))
