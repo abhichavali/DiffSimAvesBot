@@ -64,7 +64,6 @@ import mujoco  # noqa: E402
 import mujoco.mjx as mjx  # noqa: E402
 import mujoco.viewer  # noqa: E402,F401  (patched headless below)
 
-import plot_fixed_frequency_gui as _gui  # noqa: E402
 import run_fixed_frequency as _run_ff  # noqa: E402
 import view_eagle as _view_eagle  # noqa: E402
 import view_fixed_frequency as _view_ff  # noqa: E402
@@ -74,6 +73,7 @@ from codesign.metrics import build_rollout  # noqa: E402
 from codesign.rig import (motor_tendon_ids, set_unsteady_aero, setup,  # noqa: E402
                           structural_tendon_pairs, symmetrize_wings)
 from compile_tg import compile_tg  # noqa: E402
+from gui.sims import data_by_phase  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from morphology.wing_geometry import load_default_wing_geometry as wing_geometry  # noqa: E402
 from runtime.aero import RHO_AIR, AeroBladeRuntime as CpuAero, aerodynamics as cpu_aero_strip  # noqa: E402
@@ -176,7 +176,7 @@ def view_fixed(name: str, scene: Path, frames: int) -> None:
 
 
 def gui_trace(name: str, scene: Path, plot_kind: str, periods: float, settle: float):
-    return _gui.data_by_phase(tg(name), scene, periods, plot_kind, settle_periods=settle)
+    return data_by_phase(tg(name), scene, periods, plot_kind, settle_periods=settle)
 
 
 def eagle_run(name: str, scene: Path, steps: int):

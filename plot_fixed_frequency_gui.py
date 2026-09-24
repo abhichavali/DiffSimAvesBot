@@ -45,7 +45,6 @@ from gui.sims import (
     wing_path_data,
     work_loop_data,
 )
-from gui.sims import data_by_phase  # noqa: F401  TEMP re-export: remove after integration (tests/golden/harness.py gui_trace)
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control
 from runtime.crank import CRANK_ACTUATORS
