@@ -18,8 +18,9 @@ import mujoco
 import mujoco.mjx as mjx
 import numpy as np
 
-from codesign.rig import INTEGRATORS, set_unsteady_aero, setup
+from codesign.rig import INTEGRATORS, setup
 from design_paths import DESIGNS_DIR
+from runtime.aero import set_unsteady_aero
 from runtime.control_signal import eval_control
 from runtime.mjx import aero_runtime as maero
 from runtime.mjx import rollout as mroll
@@ -63,7 +64,7 @@ def make_mjx_pre(mx, drive, pitch, aero, substep: int):
         pitch_q = mwing.wing_pitch_qfrc(base.qpos, base.qvel, pitch)
 
         def recompute(_):
-            return maero.aero_wrench(mx, base, aero, state)
+            return maero.aero_wrench(mx, base, aero, state)[:3]
 
         def hold(_):
             return cq, cnfw, state

@@ -178,7 +178,7 @@ def build_rollout(rig, genome: Genome, omega, *, warmup_steps, sample_steps, ste
                 # Recompute every `aero_substep` steps and hold in between; the aero
                 # state (FD previous velocity) only advances on a recompute.
                 def recompute(_):
-                    return aero_runtime.aero_wrench_with_diagnostics(mx_step, dx, aero, state)
+                    return aero_runtime.aero_wrench(mx_step, dx, aero, state)
 
                 def hold(_):
                     return cq, cnfw, state, ca, cu

@@ -22,7 +22,7 @@ Verified conventions (machine precision vs CPU MuJoCo):
 
 from __future__ import annotations
 
-from typing import NamedTuple, Sequence
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -30,14 +30,9 @@ import mujoco
 import mujoco.mjx as mjx
 
 from morphology.wing_geometry import load_wing_geometry
-from runtime.mjx.aero import RHO_AIR, AeroParams, aero_wing, aero_wing_diagnostics
-
-# Match the CPU runtime: quasi-steady by default. set_unsteady_aero(True) opts
-# into the explicit finite-difference added-mass hack for diagnostics.
-OMEGA_DOT_CAP = 0.0
-LIN_ACC_CAP = 0.0
-
-_DEFAULT_SIDES = ("L", "R")
+from runtime import aero as cpu_aero
+from runtime.aero import RHO_AIR, AeroParams
+from runtime.mjx.aero import aero_wing
 
 
 class AeroConfig(NamedTuple):
@@ -64,16 +59,7 @@ class AeroState(NamedTuple):
     initialized: jax.Array  # scalar in {0.0, 1.0}
 
 
-def build_aero_config(
-    model: mujoco.MjModel,
-    morph,
-    *,
-    params: AeroParams = AeroParams(),
-    rho: float = RHO_AIR,
-    dt: float | None = None,
-    substep: int = 1,
-    sides: Sequence[str] = _DEFAULT_SIDES,
-) -> AeroConfig:
+def build_aero_config(model: mujoco.MjModel, morph, *, substep: int = 1) -> AeroConfig:
     """Resolve aero sites, body ids, and ``morph``'s wing geometry into a JAX-ready config."""
     geom = load_wing_geometry(morph)
     num_blade = int(len(geom.chords))
@@ -87,6 +73,7 @@ def build_aero_config(
     root_ids: list[int] = []
     blade_ids: list[list[int]] = []
     body_ids: list[int] = []
+    sides = ("L", "R")
     for side in sides:
         root = site_id(f"{side}_wing_Root_Site")
         blades = [site_id(f"{side}_wing_aero_blade_{b + 1:02d}") for b in range(num_blade)]
@@ -94,7 +81,6 @@ def build_aero_config(
         blade_ids.append(blades)
         body_ids.append(int(model.site_bodyid[root]))
 
-    timestep = float(model.opt.timestep) if dt is None else float(dt)
     return AeroConfig(
         root_site_id=jnp.asarray(root_ids, dtype=jnp.int32),
         blade_site_ids=jnp.asarray(blade_ids, dtype=jnp.int32),
@@ -103,10 +89,10 @@ def build_aero_config(
         span_cutoffs=jnp.asarray(geom.span_cutoffs),
         length=float(geom.length),
         num_blade=num_blade,
-        rho=float(rho),
-        dt=timestep * float(substep),
-        params=params,
-        sides=tuple(sides),
+        rho=RHO_AIR,
+        dt=float(model.opt.timestep) * float(substep),
+        params=AeroParams(),
+        sides=sides,
     )
 
 
@@ -139,11 +125,13 @@ def _wing_qfrc(m, d, cfg: AeroConfig, wing_idx: int, side: str, state: AeroState
     prev_vel = jnp.where(
         state.initialized > 0.0, state.prev_velocity_local[wing_idx], vel_local
     )
-    omega_dot = jnp.clip((omega_local - prev_omega) / cfg.dt, -OMEGA_DOT_CAP, OMEGA_DOT_CAP)
-    dv_cap = LIN_ACC_CAP * cfg.dt
+    # The added-mass caps are the CPU aero's, read at trace time (set_unsteady_aero).
+    omega_cap = cpu_aero.OMEGA_DOT_CAP
+    omega_dot = jnp.clip((omega_local - prev_omega) / cfg.dt, -omega_cap, omega_cap)
+    dv_cap = cpu_aero.LIN_ACC_CAP * cfg.dt
     prev_vel = vel_local - jnp.clip(vel_local - prev_vel, -dv_cap, dv_cap)
 
-    forces_local, torques_local = aero_wing(
+    forces_local, torques_local, alpha, speed = aero_wing(
         omega_local,
         jnp.zeros(3),
         vel_local,
@@ -157,10 +145,6 @@ def _wing_qfrc(m, d, cfg: AeroConfig, wing_idx: int, side: str, state: AeroState
         num_blade=cfg.num_blade,
         rho=cfg.rho,
         dt=cfg.dt,
-    )
-    alpha, speed = aero_wing_diagnostics(
-        omega_local, jnp.zeros(3), vel_local,
-        chords=cfg.chords, length=cfg.length, num_blade=cfg.num_blade,
     )
 
     # Rotate strip wrenches root-frame -> world: row i is rot @ f_i  ==  f @ rot.T.
@@ -179,18 +163,13 @@ def _wing_qfrc(m, d, cfg: AeroConfig, wing_idx: int, side: str, state: AeroState
 
 
 def aero_wrench(m, d, cfg: AeroConfig, state: AeroState):
-    """Aero generalized force, net world force, and updated carry.
+    """Aero ``(qfrc, net_force_world, new_state, alpha_max, speed_mean)``.
 
     ``qfrc`` is shaped like ``qvel`` (what gets added to ``qfrc_applied``);
     ``net_force_world`` is the (3,) world-frame aerodynamic force summed over both
-    wings — its z-component is the instantaneous aerodynamic **lift**.
+    wings — its z-component is the instantaneous aerodynamic **lift**. ``alpha_max``
+    is the max folded AoA and ``speed_mean`` the mean relative strip speed.
     """
-    qfrc, net_force_world, new_state, _alpha, _speed = aero_wrench_with_diagnostics(m, d, cfg, state)
-    return qfrc, net_force_world, new_state
-
-
-def aero_wrench_with_diagnostics(m, d, cfg: AeroConfig, state: AeroState):
-    """Aero wrench plus max folded AoA and mean relative strip speed."""
     qfrc = jnp.zeros_like(d.qvel)
     net_force_world = jnp.zeros(3)
     omegas: list[jax.Array] = []
@@ -212,10 +191,3 @@ def aero_wrench_with_diagnostics(m, d, cfg: AeroConfig, state: AeroState):
         initialized=jnp.ones(()),
     )
     return qfrc, net_force_world, new_state, jnp.max(jnp.stack(alphas)), jnp.mean(jnp.stack(speeds))
-
-
-def aero_qfrc(m, d, cfg: AeroConfig, state: AeroState):
-    """Total aero generalized force (shaped like ``qvel``) and the updated carry."""
-    qfrc, _net_force_world, new_state = aero_wrench(m, d, cfg, state)
-    return qfrc, new_state
-

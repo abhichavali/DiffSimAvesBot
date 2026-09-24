@@ -2,8 +2,7 @@
 
 setup() compiles the design, settles it (wing pitch, crank sync) and puts it on device as a Rig.
 variant() re-puts the same model under another integrator or timestep for the robustness rollouts.
-The tendon helpers pick out the tendons the genome tunes. set_unsteady_aero switches the added-mass
-term in both aero implementations; they read it at trace time, so call it before any jit.
+The tendon helpers pick out the tendons the genome tunes.
 """
 
 from __future__ import annotations
@@ -43,20 +42,6 @@ class Rig(NamedTuple):
     tendons: tuple  # structural_tendon_pairs(...)
     motor_ids: jnp.ndarray
     morph: object  # the design's Morphology
-
-
-def set_unsteady_aero(enabled: bool):
-    """Switch the added-mass (unsteady) aero term in BOTH the MJX and the CPU aero.
-
-    Off (the default) clips the finite-difference accelerations to 0, which makes the
-    rollout quasi-steady. The caps are module globals read at trace time, so this must
-    run before the rollout is jitted.
-    """
-    import runtime.aero as ca
-    import runtime.mjx.aero_runtime as ma
-    o, l = (5.0e4, 1.0e3) if enabled else (0.0, 0.0)
-    ca.OMEGA_DOT_CAP, ca.LIN_ACC_CAP = o, l
-    ma.OMEGA_DOT_CAP, ma.LIN_ACC_CAP = o, l
 
 
 def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator: str = "euler",

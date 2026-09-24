@@ -28,8 +28,8 @@ from codesign.cpu_check import cpu_gate, cpu_rollout, to_cpu
 from codesign.genome import Genome, initial_theta, load_control_seed, wavelet_dictionary
 from codesign.loss import LossAux, make_loss, objective_norm, objective_value, variant_set
 from codesign.metrics import Metrics, build_rollout
-from codesign.rig import (flap_t1_mask, set_unsteady_aero, setup, step_counts, strokeplane_info,
-                          variant)
+from codesign.rig import flap_t1_mask, setup, step_counts, strokeplane_info, variant
+from runtime.aero import set_unsteady_aero
 
 TAU_CURRICULUM_NM = (0.300, 0.250, 0.200, 0.150, 0.100)  # 300 -> 250 -> 200 -> 150 -> 100 mNm
 ADAM_B1, ADAM_B2, ADAM_EPS = 0.9, 0.999, 1e-8

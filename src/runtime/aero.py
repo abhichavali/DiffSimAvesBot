@@ -5,6 +5,7 @@ evaluates it for both wings each step and applies the forces at the blade sites.
 """
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import mujoco
 import numpy as np
@@ -44,8 +45,38 @@ def _cl(alpha, e, f, g, h):
     return CL
 
 
-# Left and right wings differ ONLY by a fixed set of mirror sign flips. These
-# match the validated MJX port (runtime/mjx/aero._side_signs):
+class AeroParams(NamedTuple):
+    """Empirical aero coefficients, shared by this model and the MJX port.
+
+    ``a..d`` are the drag polar, ``e..h`` the lift polar (Sane & Dickinson 2002,
+    revolving wing): CD = a - b*cos(c*alpha_deg - d), CL = e + f*sin(g*alpha_deg - h).
+    Canonical fruit-fly fit; well-behaved at the endpoints but NOT fitted to this
+    robot's wing/Reynolds number -- re-fit before trusting magnitudes. The rest are
+    the rotational-drag (Crd), added-mass (Cadd2), rotational-circulation (c4) and
+    CoP (ct1, ct2) constants; x_rot is the rotation axis (0 = leading edge).
+    """
+
+    a: float = 1.92
+    b: float = 1.55
+    c: float = 2.04
+    d: float = 9.82
+    e: float = 0.225
+    f: float = 1.58
+    g: float = 2.13
+    h: float = 7.2
+    Crd: float = 5.0
+    Cadd2: float = 0.0
+    c4: float = 1.0
+    ct1: float = 0.82
+    ct2: float = 0.05
+    x_rot: float = 0.0
+
+
+AERO_PARAMS = AeroParams()
+RHO_AIR = 1.1839
+
+# Left and right wings differ ONLY by a fixed set of mirror sign flips (the MJX
+# port reads this same table):
 #   Fik  rotational-drag chordwise force   lift  FLi sign in the force/torque sums
 #   rot  F_rot sign in the sums            addo  rotational added-mass (lamda_xo) sign
 #   add2 F_add2 sign                       cof   chordwise CoP lever-arm sign
@@ -68,26 +99,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     except KeyError:
         raise ValueError(f"side must be 'L' or 'R', got {side!r}")
 
-    Crd = 5
-    Cadd2 = 0
-    c4 = 1
-    ct1 = 0.82
-    ct2 = 0.05
-
-    # Quasi-steady polar coefficients (Sane & Dickinson 2002, revolving wing):
-    #   CD = a - b*cos(c*alpha_deg - d);  CL = e + f*sin(g*alpha_deg - h)
-    # Canonical fruit-fly fit; well-behaved at the endpoints but NOT fitted to
-    # this robot's wing/Reynolds number -- re-fit before trusting magnitudes.
-    a = 1.92
-    b = 1.55
-    c = 2.04
-    d = 9.82
-    e = 0.225
-    f = 1.58
-    g = 2.13
-    h = 7.2
-
-    x_rot = 0               # rotational axis, 0 corresponds to leading edge
+    a, b, c, d, e, f, g, h, Crd, Cadd2, c4, ct1, ct2, x_rot = AERO_PARAMS
     r_cof_rot = 0 * chord
     r_cof_add = 0 * chord
 
@@ -204,8 +216,6 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     return Fi, Taui
 
 
-RHO_AIR = 1.1839
-
 # Recompute the aero every DEFAULT_AERO_SUBSTEP physics steps and re-apply the
 # cached force in between (the finite-difference window scales with it, so it
 # stays consistent). At the 0.13 ms step, 4 puts the aero cadence at ~0.52 ms --
@@ -215,12 +225,23 @@ DEFAULT_AERO_SUBSTEP = 4
 # The unsteady (added-mass) aero force is proportional to finite-differenced
 # acceleration. In this explicit runtime it is noisy enough to inflate lift by
 # 2x+ and does not transfer cleanly between CPU and MJX. Keep the default model
-# quasi-steady; codesign.rig.set_unsteady_aero(True) opts into the old
-# capped hack for diagnostics.
+# quasi-steady; set_unsteady_aero(True) opts into the old capped hack for
+# diagnostics. The MJX port reads these same caps.
 # ponytail: explicit added mass stays opt-in; use an implicit added-mass state if
 # this needs to become production physics.
 OMEGA_DOT_CAP = 0.0     # rad/s^2
 LIN_ACC_CAP = 0.0       # m/s^2
+
+
+def set_unsteady_aero(enabled: bool) -> None:
+    """Switch the added-mass (unsteady) aero term in both this and the MJX aero.
+
+    Off (the default) clips the finite-difference accelerations to 0, which makes the
+    rollout quasi-steady. MJX reads the caps at trace time, so this must run before
+    a rollout is jitted.
+    """
+    global OMEGA_DOT_CAP, LIN_ACC_CAP
+    OMEGA_DOT_CAP, LIN_ACC_CAP = (5.0e4, 1.0e3) if enabled else (0.0, 0.0)
 
 
 @dataclass

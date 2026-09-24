@@ -12,9 +12,9 @@ Two design choices serve the autodiff goal:
   ``lift_sign`` flip, and the CoP clip are all expressed with ``where``/``clip``
   so the function is smooth enough to ``jit``/``vmap``/``grad``.
 * The Sane & Dickinson polar coefficients (and the other empirical constants)
-  live in :class:`AeroParams`, a JAX pytree, so gradients can flow into them.
+  are ``runtime.aero.AeroParams``, the one table both models read.
 
-Left vs right wings differ only by a fixed set of sign flips (mirror symmetry);
+Left vs right wings differ only by the CPU model's ``_SIDE_SIGNS`` mirror flips;
 ``side`` ("L"/"R") selects them at trace time. The geometry inputs
 (``length``/``chords``/``span_cutoffs``) come from the host-side
 ``wing_geometry`` STL parse and are passed in as constants.
@@ -23,54 +23,12 @@ Left vs right wings differ only by a fixed set of sign flips (mirror symmetry);
 from __future__ import annotations
 
 import math
-from typing import NamedTuple
-
 import jax
 import jax.numpy as jnp
 
-RHO_AIR = 1.1839
+from runtime.aero import _SIDE_SIGNS, RHO_AIR, AeroParams
+
 _PI = math.pi
-
-
-class AeroParams(NamedTuple):
-    """Empirical aero coefficients (defaults: canonical fruit-fly fit).
-
-    A JAX pytree, so any field can be optimized via ``grad``. ``a..d`` are the
-    drag polar, ``e..h`` the lift polar (Sane & Dickinson 2002, revolving wing);
-    the rest are the rotational-drag / added-mass / CoP constants.
-    """
-
-    a: jax.Array | float = 1.92
-    b: jax.Array | float = 1.55
-    c: jax.Array | float = 2.04
-    d: jax.Array | float = 9.82
-    e: jax.Array | float = 0.225
-    f: jax.Array | float = 1.58
-    g: jax.Array | float = 2.13
-    h: jax.Array | float = 7.2
-    Crd: jax.Array | float = 5.0
-    Cadd2: jax.Array | float = 0.0
-    c4: jax.Array | float = 1.0
-    ct1: jax.Array | float = 0.82
-    ct2: jax.Array | float = 0.05
-    x_rot: jax.Array | float = 0.0
-
-
-class _SideSigns(NamedTuple):
-    Fik: float  # rotational-drag chordwise force sign
-    lift: float  # FLi sign in the force/torque sums
-    rot: float  # F_rot sign in the force/torque sums
-    addo: float  # lamda_xo (rotational added-mass) sign
-    add2: float  # F_add2 sign
-    cof: float  # chordwise CoP lever-arm sign
-
-
-def _side_signs(side: str) -> _SideSigns:
-    if side == "L":
-        return _SideSigns(Fik=1.0, lift=-1.0, rot=-1.0, addo=1.0, add2=-1.0, cof=-1.0)
-    if side == "R":
-        return _SideSigns(Fik=-1.0, lift=1.0, rot=1.0, addo=-1.0, add2=1.0, cof=1.0)
-    raise ValueError(f"side must be 'L' or 'R', got {side!r}")
 
 
 def _cd(alpha: jax.Array, p: AeroParams) -> jax.Array:
@@ -112,16 +70,17 @@ def aero_strip(
     num_blade: int,
     rho: float = RHO_AIR,
     dt: float,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     """Force and pitching moment for one blade strip, in the root-site frame.
 
     All vector inputs are length-3 in the root-site frame. ``span_fraction`` is
     the strip's fractional span position (``i`` in the numpy model), ``chord`` its
     chord. ``dt`` is the finite-difference window (timestep * substep) used for
-    the added-mass acceleration term. Returns ``(force[3], torque[3])``.
+    the added-mass acceleration term. Returns ``(force[3], torque[3], alpha,
+    norm_v)``: the last two are the folded angle of attack and the strip speed.
     """
     p = params
-    s = _side_signs(side)
+    sFik, sLift, sRot, sAddo, sAdd2, sCof = _SIDE_SIGNS[side]
     x_rot = p.x_rot
     Rw = length
     # Active numpy code zeroes both CoP offsets regardless of x_rot.
@@ -136,7 +95,7 @@ def aero_strip(
     span = Rw / num_blade
     local = chord * (x_rot - m)
     base = rdi * 0.5 * rho * wsum * abswsum * span * p.Crd
-    Fik_lt = s.Fik * jnp.sum(base * local * jnp.abs(local) * chord / num_blade)
+    Fik_lt = sFik * jnp.sum(base * local * jnp.abs(local) * chord / num_blade)
     Tik_lt = -jnp.sum(base * (local**2) * jnp.abs(local) * chord / num_blade)
 
     # --- Blade-element velocity at the strip leading edge ---
@@ -182,12 +141,12 @@ def aero_strip(
     cr = (-x_rot + 0.5) * chord
     lamda_x = _PI * rho * (0.5 * chord) ** 2
     lamda_xo = -_PI * rho * (0.5 * chord) ** 2 * cr
-    F_addx_i = -lamda_x * acc_xw + s.addo * lamda_xo * omega_yw_dot
+    F_addx_i = -lamda_x * acc_xw + sAddo * lamda_xo * omega_yw_dot
     F_add_i = (Rw / num_blade) * jnp.stack(
         [F_addx_i, jnp.zeros_like(F_addx_i), jnp.zeros_like(F_addx_i)]
     )
     f_add2 = (
-        s.add2
+        sAdd2
         * p.Cadd2
         * _PI
         * rho
@@ -202,39 +161,19 @@ def aero_strip(
     # --- Sums (force in root frame, pure chordwise pitching moment) ---
     force = (
         FDi
-        + s.lift * FLi
+        + sLift * FLi
         + F_add_i
-        + s.rot * F_rot_i
+        + sRot * F_rot_i
         + jnp.stack([Fik_lt, jnp.zeros_like(Fik_lt), jnp.zeros_like(Fik_lt)])
         + F_add2_vec
     )
     torque = (
-        jnp.cross(jnp.array([0.0, 0.0, s.cof * r_cof_trans]), FDi + s.lift * FLi)
-        + jnp.cross(jnp.array([0.0, 0.0, s.cof * r_cof_add]), F_add_i + F_add2_vec)
-        + jnp.cross(jnp.array([0.0, 0.0, s.cof * r_cof_rot]), s.rot * F_rot_i)
+        jnp.cross(jnp.array([0.0, 0.0, sCof * r_cof_trans]), FDi + sLift * FLi)
+        + jnp.cross(jnp.array([0.0, 0.0, sCof * r_cof_add]), F_add_i + F_add2_vec)
+        + jnp.cross(jnp.array([0.0, 0.0, sCof * r_cof_rot]), sRot * F_rot_i)
         + jnp.stack([jnp.zeros_like(Tik_lt), Tik_lt, jnp.zeros_like(Tik_lt)])
     )
-    return force, torque
-
-
-def aero_strip_diagnostics(
-    omega_w: jax.Array,
-    omega_b: jax.Array,
-    vel_h: jax.Array,
-    span_fraction: jax.Array,
-    *,
-    length: float,
-) -> tuple[jax.Array, jax.Array]:
-    """Folded angle of attack and local speed for one blade strip."""
-    rle = -span_fraction * length
-    lever = jnp.stack([jnp.zeros_like(rle), rle, jnp.zeros_like(rle)])
-    vle = jnp.cross(omega_w + omega_b, lever) + vel_h
-    vle = vle.at[1].set(0.0)
-    norm_v = jnp.linalg.norm(vle)
-    denom = jnp.where(norm_v > 0.0, norm_v, 1.0)
-    dir_vle = jnp.where(norm_v > 0.0, vle / denom, jnp.zeros(3))
-    alpha = jnp.arctan2(jnp.abs(dir_vle[0]), jnp.abs(dir_vle[2]))
-    return alpha, norm_v
+    return force, torque, alpha, norm_v
 
 
 def aero_wing(
@@ -252,12 +191,12 @@ def aero_wing(
     num_blade: int,
     rho: float = RHO_AIR,
     dt: float,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     """Per-strip forces/torques for a whole wing, in the root-site frame.
 
-    Returns ``(forces[num_blade, 3], torques[num_blade, 3])`` — one row per blade
-    strip, matching the numpy model's per-strip calls. Strip span fractions are
-    ``(j + 0.5) / num_blade``.
+    Returns ``(forces[num_blade, 3], torques[num_blade, 3], alpha[num_blade],
+    norm_v[num_blade])`` — one row per blade strip, matching the numpy model's
+    per-strip calls. Strip span fractions are ``(j + 0.5) / num_blade``.
     """
     span_fracs = (jnp.arange(num_blade, dtype=chords.dtype) + 0.5) / num_blade
 
@@ -280,18 +219,3 @@ def aero_wing(
         )
 
     return jax.vmap(strip)(span_fracs, chords)
-
-
-def aero_wing_diagnostics(
-    omega_w: jax.Array,
-    omega_b: jax.Array,
-    vel_h: jax.Array,
-    *,
-    chords: jax.Array,
-    length: float,
-    num_blade: int,
-) -> tuple[jax.Array, jax.Array]:
-    """Per-strip folded AoA and relative speed."""
-    span_fracs = (jnp.arange(num_blade, dtype=chords.dtype) + 0.5) / num_blade
-    return jax.vmap(lambda s: aero_strip_diagnostics(omega_w, omega_b, vel_h, s, length=length))(
-        span_fracs)

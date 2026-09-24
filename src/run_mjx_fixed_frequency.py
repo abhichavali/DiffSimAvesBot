@@ -54,7 +54,7 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
         d, state = carry
 
         def aero_qfrc(dd):
-            qfrc, net_force_world, new_state = aero_runtime.aero_wrench(mx, dd, aero, state)
+            qfrc, net_force_world, new_state, _, _ = aero_runtime.aero_wrench(mx, dd, aero, state)
             return qfrc, (net_force_world[2], new_state)
 
         d, (lift, state) = rollout.physics_step(mx, d, rollout.drive_ctrl(d.ctrl, d.time, drive), pitch, aero_qfrc)

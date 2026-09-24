@@ -122,7 +122,7 @@ def make_loss(mx, dx0, drive, pitch_cfg, aero_cfg, cfg: HoverCfg, *,
             ctrl = jnp.zeros_like(dx.ctrl).at[flap_ids].set(a0)   # constant flap -> lift
             dx = dx.replace(ctrl=ctrl, qfrc_applied=jnp.zeros_like(dx.qfrc_applied))
             dx = mwp.apply(dx, pitch_cfg)
-            q, ns = aero_runtime.aero_qfrc(mx, dx, aero_cfg, aero_state)
+            q, _, ns, _, _ = aero_runtime.aero_wrench(mx, dx, aero_cfg, aero_state)
             wrench = jnp.zeros_like(dx.qvel).at[dof : dof + 3].add(force).at[dof + 3 : dof + 6].add(tau)
             dx = dx.replace(qfrc_applied=dx.qfrc_applied + q + wrench)
             dx = mjx.step(mx, dx)

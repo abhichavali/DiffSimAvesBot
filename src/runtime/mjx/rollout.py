@@ -126,9 +126,12 @@ def simulate(model: mujoco.MjModel, data: mujoco.MjData, morph, control, n_steps
         def step(carry, _):
             dx, aero_state = carry
             ctrl = drive_ctrl(dx.ctrl, dx.time, drive_cfg)
-            dx, aero_state = physics_step(
-                mx, dx, ctrl, pitch_cfg,
-                lambda d: aero_runtime.aero_qfrc(mx, d, aero_cfg, aero_state))
+
+            def aero_qfrc(d):
+                qfrc, _, new_state, _, _ = aero_runtime.aero_wrench(mx, d, aero_cfg, aero_state)
+                return qfrc, new_state
+
+            dx, aero_state = physics_step(mx, dx, ctrl, pitch_cfg, aero_qfrc)
             carry = match_dtypes((dx, aero_state), carry0)
             return carry, carry[0].qpos
 

@@ -69,13 +69,12 @@ import view_fixed_frequency as _view_ff  # noqa: E402
 from codesign.cpu_check import CpuDesign, cpu_rollout  # noqa: E402
 from codesign.genome import Genome, load_control_seed, ricker_atoms, wavelet_dictionary  # noqa: E402
 from codesign.metrics import build_rollout  # noqa: E402
-from codesign.rig import (motor_tendon_ids, set_unsteady_aero, setup,  # noqa: E402
-                          structural_tendon_pairs, symmetrize_wings)
+from codesign.rig import motor_tendon_ids, setup, structural_tendon_pairs, symmetrize_wings  # noqa: E402
 from compile_tg import compile_tg  # noqa: E402
 from gui.sims import data_by_phase  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from morphology.wing_geometry import load_wing_geometry  # noqa: E402
-from runtime.aero import DEFAULT_AERO_SUBSTEP, RHO_AIR, AeroBladeRuntime  # noqa: E402
+from runtime.aero import DEFAULT_AERO_SUBSTEP, RHO_AIR, AeroBladeRuntime, set_unsteady_aero  # noqa: E402
 from runtime.aero import aerodynamics as cpu_aero_strip  # noqa: E402
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor  # noqa: E402
 from runtime.crank import CRANK_ACTUATORS, sync_crank_disks_at_rest  # noqa: E402
@@ -83,7 +82,11 @@ from runtime.mjx import aero as _mjx_aero, aero_runtime as _mjx_aero_rt  # noqa:
 from runtime.mjx import rollout as _mjx_rollout, wing_pitch as _mjx_pitch  # noqa: E402
 from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest  # noqa: E402
 
-mjx_aero_wing = _mjx_aero.aero_wing
+
+def mjx_aero_wing(*args, **kwargs):
+    return _mjx_aero.aero_wing(*args, **kwargs)[:2]
+
+
 _design = None  # the design use_design() last named; the runtime wrappers below are handed it
 
 
@@ -238,7 +241,7 @@ def mjx_aero_wrench(model, datas):
     f = jax.jit(lambda m, d, s: _mjx_aero_rt.aero_wrench(m, d, cfg, s))
     mx, s, out = mjx.put_model(model), _mjx_aero_rt.init_aero_state(cfg), []
     for data in datas:
-        qfrc, net, s = f(mx, mjx.put_data(model, data), s)
+        qfrc, net, s, _, _ = f(mx, mjx.put_data(model, data), s)
         out.append((qfrc, net))
     return out
 
