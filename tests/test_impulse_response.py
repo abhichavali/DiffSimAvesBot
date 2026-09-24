@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from plot_fixed_frequency_gui import ImpulseSim, cut_wraps, wrap_deg
+from gui.impulse import ImpulseSim, cut_wraps, wrap_deg
 
 ROOT = Path(__file__).resolve().parent.parent
 TG = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
