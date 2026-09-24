@@ -1,26 +1,33 @@
-"""Parse shoulder.tg DSL → Morphology object model.
+"""Parse a .tg morphology file into the typed Morphology tree (model.py).
 
-The `.tg` format is the authoring surface for the morphology compiler. It
-describes free parameters and topology; the compiler derives coordinates,
-tendon rest lengths, wing CoP, and bilateral mirror geometry.
+A .tg is line-oriented. Top-level statements (`name =`, `bird =`, `strut ...`)
+sit beside sections (`world:`, `archetype strut C:`, `arrange ...`,
+`placement:`, `tendons:`, `motors:`, `wing on ...`) whose body is the indented
+lines below them. `#` starts a comment.
 
-Unit suffixes on literals (mm, deg, ms, g, N/m, rad) are converted to SI
-(base units) when building the typed ``Morphology`` dataclass tree.
+Literals carry units: mm, cm, g and ms are scaled to SI here; m, s, kg, N/m and
+rad are taken as written. `deg` is NOT converted by the lexer -- each key
+decides: disk tilt/pitch treat any number above 3 as degrees, crank_phase_lag
+and the wing pitch angles convert when their literal says deg, the eagle's
+bones/cables/feathers (and wrist, except its stations) always do, and station
+angles and arrange.angle stay in degrees by design. Missing keys take the
+model's defaults; unknown keys are ignored except in the eagle's wing sections
+(bones, wrist, cables, feathers), which reject them.
 """
 
 from __future__ import annotations
 
 import math
-import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from morphology.model import (
     ArcPlane,
     Arrange,
     DiskSpec,
     Face,
+    FeatherVanes,
     Morphology,
     MotorFoot,
     Motors,
@@ -36,15 +43,20 @@ from morphology.model import (
     Wing,
     WingAero,
     WingBones,
-    FeatherVanes,
     WingCables,
-    WristTensegrity,
     WingPitch,
     World,
+    WristTensegrity,
 )
-from morphology.symmetry import SemanticAnchor, canonical_edge_id
+from morphology.tendon_net import SemanticAnchor, canonical_edge_id
 
-_ANCHOR_RE = re.compile(r"^([MF])\[(\d+)([AB])\]$")
+_UNITS = r"(mm|cm|m|ms|s|deg|rad|g|kg|N/m|N\s*/\s*m)"
+_QUANTITY_RE = re.compile(r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*" + _UNITS + "?$", re.I)
+_ARRAY_UNIT_RE = re.compile(r"^(\[[^\]]+\])\s+" + _UNITS + "$", re.I)
+#: Units scaled to SI by division (dividing, not multiplying by 1e-3, keeps parses bit-stable).
+_DIVISORS = {"mm": 1000.0, "cm": 100.0, "ms": 1000.0, "g": 1000.0}
+_BOOL = {"on": True, "off": False, "true": True, "false": False}
+
 _EDGE_RE = re.compile(
     r"^([MF])\[(\d+)([AB])\]\s*--\s*([MF])\[(\d+)([AB])\]"
     r"(?:\s*\{([^}]*)\})?\s*$"
@@ -52,13 +64,20 @@ _EDGE_RE = re.compile(
 _TENDON_OVERRIDE_RE = re.compile(r"^([LR]_[A-Za-z0-9_]+_to_[A-Za-z0-9_]+)\s*\{([^}]*)\}\s*$")
 _DRIVE_RE = re.compile(r"^drive\s+M\[(\d+)\]\s+and\s+M\[(\d+)\]\s*$", re.I)
 _ASSIGN_RE = re.compile(r"^(\w+)\s*=\s*(.+)$")
-_BOOL = {"on": True, "off": False, "true": True, "false": False}
+_DEG_RE = re.compile(r"\bdeg\b", re.I)
+
+#: `motors:` keys, matched as line prefixes in this order (so `_t` per-foot keys
+#: win over their shared forms). drive_phase_offset is the old crank_phase_lag.
+_MOTOR_KEYS = (
+    "attach_along_edge", "attach_radius", "crank_throw_t", "foot_outset_t", "tendon_rest_length_t",
+    "crank_phase_lag", "drive_phase_offset", "tendon_rest_length", "tendon_stiffness",
+    "tendon_damping", "motor_direction", "control",
+)
+_WING_SECTIONS = ("pitch", "aero", "bones", "wrist", "cables", "feathers")
 
 
 def _strip_comment(line: str) -> str:
-    if "#" in line:
-        line = line.split("#", 1)[0]
-    return line.rstrip()
+    return line.split("#", 1)[0].rstrip()
 
 
 def _parse_scalar(raw: str) -> Any:
@@ -70,12 +89,8 @@ def _parse_scalar(raw: str) -> Any:
         return _BOOL[lower]
     if lower == "derived":
         return None
-    array_unit = re.match(
-        r"^(\[[^\]]+\])\s+(mm|cm|m|ms|s|deg|rad|g|kg|N/m|N\s*/\s*m)$",
-        text,
-        re.I,
-    )
-    if array_unit:
+    array_unit = _ARRAY_UNIT_RE.match(text)
+    if array_unit:  # a unit after an array is dropped, not applied
         text = array_unit.group(1)
     if text.startswith("[") and text.endswith("]"):
         inner = text[1:-1].strip()
@@ -88,43 +103,16 @@ def _parse_scalar(raw: str) -> Any:
 
 
 def _parse_quantity(text: str) -> float | str:
+    """A number with an optional unit, scaled to SI; anything else comes back as a string."""
     text = text.strip()
-    if text.startswith('"') and text.endswith('"'):
+    if text[:1] in ('"', "'") and text.endswith(text[:1]):
         return text[1:-1]
-    if text.startswith("'") and text.endswith("'"):
-        return text[1:-1]
-
-    m = re.match(
-        r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*"
-        r"(mm|cm|m|ms|s|deg|rad|g|kg|N/m|N\s*/\s*m)?$",
-        text,
-        re.I,
-    )
+    m = _QUANTITY_RE.match(text)
     if not m:
         return text
     value = float(m.group(1))
     unit = (m.group(2) or "").lower().replace(" ", "")
-    if unit == "mm":
-        return value / 1000.0
-    if unit == "cm":
-        return value / 100.0
-    if unit in ("m", ""):
-        return value
-    if unit == "ms":
-        return value / 1000.0
-    if unit == "s":
-        return value
-    if unit == "deg":
-        return value
-    if unit == "rad":
-        return value
-    if unit == "g":
-        return value / 1000.0
-    if unit == "kg":
-        return value
-    if unit in ("n/m",):
-        return value
-    return value
+    return value / _DIVISORS[unit] if unit in _DIVISORS else value
 
 
 def _parse_brace_dict(text: str) -> Dict[str, Any]:
@@ -169,38 +157,39 @@ def _scalar_or_str(text: str) -> Any:
 
 
 def _parse_material_dict(raw: Dict[str, Any]) -> TendonMaterial:
+    def opt(key):
+        return None if raw.get(key) is None else float(raw[key])
+
     color = raw.get("color")
     return TendonMaterial(
-        stiffness=_optional_float(raw.get("stiffness")),
-        damping=_optional_float(raw.get("damping")),
-        pretension=_optional_float(raw.get("pretension")),
+        stiffness=opt("stiffness"),
+        damping=opt("damping"),
+        pretension=opt("pretension"),
         color=str(color) if color is not None else None,
     )
 
 
-def _optional_float(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    return float(value)
+def _radians(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return tuple(math.radians(float(v)) for v in value)
+    return math.radians(float(value))
 
 
-def _parse_anchor(token: str) -> SemanticAnchor:
-    m = _ANCHOR_RE.match(token.strip())
-    if not m:
-        raise ValueError(f"Invalid anchor {token!r}")
-    return SemanticAnchor(m.group(1), int(m.group(2)), Face(m.group(3)))
+def _deg_if_large(value: Any) -> Any:
+    """Disk tilt/pitch: a number above 3 is taken as degrees, whatever its unit says."""
+    return math.radians(value) if isinstance(value, (int, float)) and value > 3.0 else value
 
 
-def _canonical_override_id(m_token: str, f_token: str) -> str:
-    a = _parse_anchor(m_token)
-    b = _parse_anchor(f_token)
-    return canonical_edge_id(a, b)
+def _floats(raw: Dict[str, Any], default: Any, names: str) -> Dict[str, float]:
+    """{name: float(raw[name])} for each space-separated name, else `default`'s value."""
+    return {n: float(raw.get(n, getattr(default, n))) for n in names.split()}
 
 
 class _TgParser:
     def __init__(self, text: str) -> None:
         self.lines = [_strip_comment(line) for line in text.splitlines()]
-        self.name = "bi-shoulder"
+        self.i = 0  # cursor into self.lines
+        self.name = Morphology.name
         self.bird = ""
         self.world: Dict[str, Any] = {}
         self.archetype: Dict[str, Any] = {}
@@ -212,142 +201,88 @@ class _TgParser:
         self.edge_overrides: Dict[str, TendonMaterial] = {}
         self.individual_overrides: Dict[str, TendonMaterial] = {}
         self.disk: Dict[str, Any] = {}
-        self.motor_feet: Tuple[int, int] = (1, 4)
-        self.attach_along_edge = 1.2
-        self.attach_radius = 1.0
-        self.foot_crank_throw: Dict[int, float] = {}
-        self.foot_outset: Dict[int, float] = {}
-        self.foot_tendon_rest_length: Dict[int, float] = {}
-        self.tendon_rest_length: Optional[float] = None
-        self.tendon_stiffness = 500.0
-        self.tendon_damping = 1.0
-        self.motor_direction = 1.0
-        self.control_file = "control.tg"
-        self.crank_phase_lag_rad = 0.0
+        self.motor_feet = (1, 4)
+        self.motors: Dict[str, Any] = {}
+        self.per_foot: Dict[str, Dict[int, float]] = {"crank_throw_t": {}, "foot_outset_t": {},
+                                                      "tendon_rest_length_t": {}}
         self.wing: Dict[str, Any] = {}
-        self.wing_pitch: Dict[str, Any] = {}
-        self.wing_aero: Dict[str, Any] = {}
-        self.wing_bones: Dict[str, Any] = {}
-        self.wing_bones_declared = False
-        self.wing_wrist: Dict[str, Any] = {}
-        self.wing_wrist_declared = False
-        self.wing_cables: Dict[str, Any] = {}
-        self.wing_cables_declared = False
-        self.wing_feathers: Dict[str, Any] = {}
-        self.wing_feathers_declared = False
+        self.wing_sections: Dict[str, Dict[str, Any]] = {s: {} for s in _WING_SECTIONS}
+        self.declared: set[str] = set()
 
     def parse(self) -> Morphology:
-        i = 0
-        while i < len(self.lines):
-            line = self.lines[i].strip()
-            i += 1
+        while self.i < len(self.lines):
+            line = self.lines[self.i].strip()
+            self.i += 1
             if not line:
                 continue
-
             if line.startswith("name ="):
                 self.name = line.split("=", 1)[1].strip()
-                continue
-
-            if line.startswith("bird ="):
-                self.bird = line.split("=", 1)[1].split("#", 1)[0].strip()
-                continue
-
-            if line == "world:":
-                i = self._parse_block(i, self.world)
-                continue
-
-            if line.startswith("archetype strut "):
-                i = self._parse_block(i, self.archetype)
-                continue
-
-            if line.startswith("strut "):
-                self._parse_strut_line(line)
-                continue
-
-            if line.startswith("arrange "):
-                i = self._parse_block(i, self.arrange)
-                continue
-
-            if line == "placement:":
-                i = self._parse_block(i, self.placement)
-                continue
-
-            if line == "tendons:":
-                i = self._parse_tendons(i)
-                continue
-
-            if line == "motors:":
-                i = self._parse_motors(i)
-                continue
-
-            if line.startswith("wing on "):
-                i = self._parse_wing(i)
-                continue
-
-            raise ValueError(f"Unrecognized line: {line}")
-
+            elif line.startswith("bird ="):
+                self.bird = line.split("=", 1)[1].strip()
+            elif line == "world:":
+                self._assignments(self.world)
+            elif line.startswith("archetype strut "):
+                self._assignments(self.archetype)
+            elif line.startswith("strut "):
+                self._strut_line(line)
+            elif line.startswith("arrange "):
+                self._assignments(self.arrange)
+            elif line == "placement:":
+                self._assignments(self.placement)
+            elif line == "tendons:":
+                self._tendons()
+            elif line == "motors:":
+                self._motors()
+            elif line.startswith("wing on "):
+                self._wing()
+            else:
+                raise ValueError(f"Unrecognized line: {line}")
         return self._build()
 
-    def _parse_block(self, start: int, target: Dict[str, Any]) -> int:
-        i = start
-        while i < len(self.lines):
-            raw = self.lines[i]
-            if not raw.strip():
-                i += 1
-                continue
-            if not raw.startswith("    "):
-                break
-            line = raw.strip()
-            i += 1
+    def _block(self):
+        """Yield the stripped lines of the indented block at the cursor, advancing past it."""
+        while self.i < len(self.lines):
+            raw = self.lines[self.i]
+            if raw.strip() and not raw.startswith(("    ", "\t")):
+                return
+            self.i += 1
+            if raw.strip():
+                yield raw.strip()
+
+    def _assignments(self, target: Dict[str, Any]) -> None:
+        """`key = value` lines (and a `defaults { ... }` dict) into `target`; anything else is skipped."""
+        for line in self._block():
             if line.endswith(":") and "{" not in line and "=" not in line:
                 continue
             if line.startswith("defaults "):
-                brace = line[len("defaults ") :].strip()
-                target.update(_parse_brace_dict(brace))
-                continue
-            if " = " in line:
+                target.update(_parse_brace_dict(line[len("defaults "):].strip()))
+            elif " = " in line:
                 key, val = line.split("=", 1)
                 target[key.strip()] = _parse_scalar(val.strip())
-                continue
-            m = _ASSIGN_RE.match(line)
-            if m:
-                target[m.group(1)] = _parse_scalar(m.group(2))
-        return i
+            else:
+                m = _ASSIGN_RE.match(line)
+                if m:
+                    target[m.group(1)] = _parse_scalar(m.group(2))
 
-    def _parse_strut_line(self, line: str) -> None:
+    def _strut_line(self, line: str) -> None:
         # strut F = C { role: fixed, plane: YZ }
         m = re.match(r"strut\s+(\w+)\s*=\s*(\w+)\s*\{([^}]*)\}", line, re.I)
         if not m:
             raise ValueError(f"Invalid strut line: {line}")
-        side = m.group(1).upper()
-        props = _parse_brace_dict("{" + m.group(3) + "}")
-        self.struts[side] = props
+        self.struts[m.group(1).upper()] = _parse_brace_dict("{" + m.group(3) + "}")
 
-    def _parse_tendons(self, start: int) -> int:
-        i = start
-        in_generators = False
+    def _tendons(self) -> None:
         in_overrides = False
-        while i < len(self.lines):
-            raw = self.lines[i]
-            if not raw.strip():
-                i += 1
-                continue
-            if not raw.startswith("    ") and not raw.startswith("\t"):
-                break
-            line = raw.strip()
-            i += 1
-
+        for line in self._block():
             if line.startswith("defaults "):
-                self.tendon_defaults.update(_parse_brace_dict(line[len("defaults ") :].strip()))
+                self.tendon_defaults.update(_parse_brace_dict(line[len("defaults "):].strip()))
                 continue
             if line.startswith("length"):
                 continue
             if line.startswith("generators under sigma:"):
-                in_generators = True
                 in_overrides = False
                 continue
             if line == "overrides:":
-                in_generators = False
                 in_overrides = True
                 continue
 
@@ -359,248 +294,117 @@ class _TgParser:
                 material = TendonMaterial()
                 if mat_text:
                     material = _parse_material_dict(_parse_brace_dict("{" + mat_text + "}"))
-                gen = TendonGenerator(
-                    mobile_station=int(m_st),
-                    mobile_face=Face(m_face),
-                    fixed_station=int(f_st),
-                    fixed_face=Face(f_face),
-                    material=material,
-                )
                 if in_overrides:
-                    edge_id = _canonical_override_id(
-                        f"M[{m_st}{m_face}]", f"F[{f_st}{f_face}]"
-                    )
+                    edge_id = canonical_edge_id(SemanticAnchor("M", int(m_st), Face(m_face)),
+                                                SemanticAnchor("F", int(f_st), Face(f_face)))
                     self.edge_overrides[edge_id] = material
                 else:
-                    self.generators.append(gen)
+                    self.generators.append(TendonGenerator(int(m_st), Face(m_face), int(f_st), Face(f_face), material))
                 continue
 
             tendon_override = _TENDON_OVERRIDE_RE.match(line)
             if tendon_override and in_overrides:
                 name, mat_text = tendon_override.groups()
-                self.individual_overrides[name] = _parse_material_dict(
-                    _parse_brace_dict("{" + mat_text + "}")
-                )
+                self.individual_overrides[name] = _parse_material_dict(_parse_brace_dict("{" + mat_text + "}"))
                 continue
 
             raise ValueError(f"Unrecognized tendon line: {line}")
-        return i
 
-    def _parse_motors(self, start: int) -> int:
-        i = start
-        while i < len(self.lines):
-            raw = self.lines[i]
-            if not raw.strip():
-                i += 1
-                continue
-            if not raw.startswith("    "):
-                break
-            line = raw.strip()
-            i += 1
-
+    def _motors(self) -> None:
+        for line in self._block():
             if line.startswith("disk "):
-                brace_text = line[len("disk ") :].strip()
-                while not brace_text.endswith("}"):
-                    if i >= len(self.lines):
-                        break
-                    brace_text += " " + self.lines[i].strip()
-                    i += 1
-                self.disk.update(_parse_brace_dict(brace_text))
+                text = line[len("disk "):].strip()
+                while not text.endswith("}") and self.i < len(self.lines):  # a dict may span lines
+                    text += " " + self.lines[self.i].strip()
+                    self.i += 1
+                self.disk.update(_parse_brace_dict(text))
                 continue
             drive = _DRIVE_RE.match(line)
             if drive:
                 self.motor_feet = (int(drive.group(1)), int(drive.group(2)))
                 continue
-            if line.startswith("attach_along_edge"):
-                self.attach_along_edge = float(_parse_scalar(line.split("=", 1)[1].strip()))
-                continue
-            if line.startswith("attach_radius"):
-                self.attach_radius = float(_parse_scalar(line.split("=", 1)[1].strip()))
-                continue
-            if line.startswith("crank_throw_t"):
-                key, value = line.split("=", 1)
-                station = int(key.strip()[len("crank_throw_t"):])
-                self.foot_crank_throw[station] = float(_parse_quantity(value.strip()))
-                continue
-            if line.startswith("foot_outset_t"):
-                key, value = line.split("=", 1)
-                station = int(key.strip()[len("foot_outset_t"):])
-                self.foot_outset[station] = float(_parse_quantity(value.strip()))
-                continue
-            if line.startswith("tendon_rest_length_t"):
-                key, value = line.split("=", 1)
-                station = int(key.strip()[len("tendon_rest_length_t"):])
-                self.foot_tendon_rest_length[station] = float(_parse_quantity(value.strip()))
-                continue
-            if line.startswith(("crank_phase_lag", "drive_phase_offset")):
-                raw = line.split("=", 1)[1].strip()
-                val = float(_parse_scalar(raw))
-                if re.search(r"\bdeg\b", line, re.I):
-                    val = math.radians(val)
-                self.crank_phase_lag_rad = val
-                continue
-            if line.startswith("tendon_rest_length"):
-                self.tendon_rest_length = float(_parse_scalar(line.split("=", 1)[1].strip()))
-                continue
-            if line.startswith("tendon_stiffness"):
-                self.tendon_stiffness = float(_parse_scalar(line.split("=", 1)[1].strip()))
-                continue
-            if line.startswith("tendon_damping"):
-                self.tendon_damping = float(_parse_scalar(line.split("=", 1)[1].strip()))
-                continue
-            if line.startswith("motor_direction"):
-                self.motor_direction = float(_parse_scalar(line.split("=", 1)[1].strip()))
-                continue
-            if line.startswith("control"):
-                self.control_file = str(_parse_scalar(line.split("=", 1)[1].strip()))
-                continue
             if line.startswith("phase ="):
                 continue
-            raise ValueError(f"Unrecognized motor line: {line}")
-        return i
+            key = next((k for k in _MOTOR_KEYS if line.startswith(k)), None)
+            if key is None:
+                raise ValueError(f"Unrecognized motor line: {line}")
+            if key in self.per_foot:  # e.g. crank_throw_t4 = 23 mm
+                name, value = line.split("=", 1)
+                self.per_foot[key][int(name.strip()[len(key):])] = float(_parse_quantity(value.strip()))
+                continue
+            value = line.split("=", 1)[1].strip()
+            if key in ("crank_phase_lag", "drive_phase_offset"):
+                lag = float(_parse_scalar(value))
+                self.motors["crank_phase_lag"] = math.radians(lag) if _DEG_RE.search(line) else lag
+            elif key == "control":
+                self.motors[key] = str(_parse_scalar(value))
+            else:
+                self.motors[key] = float(_parse_scalar(value))
 
-    def _parse_wing(self, start: int) -> int:
-        i = start
+    def _wing(self) -> None:
         section: Optional[str] = None
-        while i < len(self.lines):
-            raw = self.lines[i]
-            if not raw.strip():
-                i += 1
+        for line in self._block():
+            if line.endswith(":") and line[:-1] in self.wing_sections:
+                section = line[:-1]
+                self.declared.add(section)
                 continue
-            if not raw.startswith("    "):
-                break
-            line = raw.strip()
-            indent = len(raw) - len(raw.lstrip())
-            i += 1
-
-            if line == "pitch:":
-                section = "pitch"
+            if " = " not in line:
                 continue
-            if line == "aero:":
-                section = "aero"
-                continue
-            if line == "bones:":
-                section = "bones"
-                self.wing_bones_declared = True
-                continue
-            if line == "wrist:":
-                section = "wrist"
-                self.wing_wrist_declared = True
-                continue
-            if line == "cables:":
-                section = "cables"
-                self.wing_cables_declared = True
-                continue
-            if line == "feathers:":
-                section = "feathers"
-                self.wing_feathers_declared = True
-                continue
-            if " = " in line:
-                key, val = line.split("=", 1)
-                key = key.strip()
-                bucket = self.wing
-                if section == "pitch":
-                    bucket = self.wing_pitch
-                elif section == "aero":
-                    bucket = self.wing_aero
-                elif section == "bones":
-                    bucket = self.wing_bones
-                elif section == "wrist":
-                    bucket = self.wing_wrist
-                elif section == "cables":
-                    bucket = self.wing_cables
-                elif section == "feathers":
-                    bucket = self.wing_feathers
-                parsed = _parse_scalar(val.strip())
-                # _parse_scalar keeps angle literals numeric; convert deg->rad here.
-                if (
-                    section == "pitch"
-                    and key in ("free_angle", "upstroke_pitch", "downstroke_pitch")
-                    and re.search(r"\bdeg\b", val, re.I)
-                ):
-                    parsed = math.radians(float(parsed))
-                elif (
-                    section == "wrist"
-                    and key != "stations"  # stations stay in degrees, like archetype's
-                    and re.search(r"\bdeg\b", val, re.I)
-                ) or (section in ("bones", "cables", "feathers")
-                      and re.search(r"\bdeg\b", val, re.I)):
-                    parsed = (
-                        tuple(math.radians(float(v)) for v in parsed)
-                        if isinstance(parsed, tuple)
-                        else math.radians(float(parsed))
-                    )
-                bucket[key] = parsed
-                continue
-            if indent >= 8 and ":" in line:
-                continue
-        return i
+            key, val = line.split("=", 1)
+            key = key.strip()
+            parsed = _parse_scalar(val.strip())
+            if _DEG_RE.search(val) and (
+                section in ("bones", "cables", "feathers")
+                or (section == "wrist" and key != "stations")  # stations stay in degrees
+                or (section == "pitch" and key in ("free_angle", "upstroke_pitch", "downstroke_pitch"))
+            ):
+                parsed = _radians(parsed)
+            (self.wing if section is None else self.wing_sections[section])[key] = parsed
 
     def _build(self) -> Morphology:
-        stations = self.archetype.get("stations")
+        arch = self.archetype
+        stations = arch.get("stations")
         if not isinstance(stations, tuple) or len(stations) != 4:
             raise ValueError("archetype.stations must be four angles in degrees")
-
-        arc_rod = self.archetype.get("arc_rod", {})
-        rung_rod = self.archetype.get("rung_rod", {})
+        arc_rod = arch.get("arc_rod", {})
+        rung_rod = arch.get("rung_rod", {})
         if not isinstance(arc_rod, dict) or not isinstance(rung_rod, dict):
             raise ValueError("archetype arc_rod and rung_rod must be brace dicts")
-
-        f_props = self.struts.get("F", {})
-        m_props = self.struts.get("M", {})
-
         angle_deg = float(self.arrange.get("angle", 0.0))
-
-        tilt = self.disk.get("tilt", 0.26)
-        if isinstance(tilt, (int, float)) and tilt > 3.0:
-            tilt = math.radians(tilt)
-
-        pitch = self.disk.get("pitch", 0.0)
-        if isinstance(pitch, (int, float)) and pitch > 3.0:
-            pitch = math.radians(pitch)
-
+        tilt = _deg_if_large(self.disk.get("tilt", DiskSpec.tilt_rad))
+        pitch = _deg_if_large(self.disk.get("pitch", DiskSpec.pitch_rad))
         if len(self.generators) != 6:
             raise ValueError(f"Expected 6 tendon generators, got {len(self.generators)}")
 
-        fallback_free_angle = float(self.wing_pitch.get("free_angle", math.radians(30))) / 2.0
-        fallback_stiffness = float(self.wing_pitch.get("stiffness", 0.5))
+        w, disk, m = self.world, self.disk, self.motors
+        wing_pitch, aero = self.wing_sections["pitch"], self.wing_sections["aero"]
+        # Older files give one `free_angle` (the whole dead band) and one `stiffness`.
+        free_angle = float(wing_pitch.get("free_angle", math.radians(30))) / 2.0
+        pitch_stiffness = float(wing_pitch.get("stiffness", 0.5))
 
         return Morphology(
             name=self.name,
             bird=self.bird,
             world=World(
-                gravity=tuple(float(x) for x in self.world.get("gravity", (0.0, 0.0, -9.81))),
-                timestep=float(self.world.get("timestep", 0.000375)),
-                integrator=str(self.world.get("integrator", "Euler")),
-                scale=float(self.world.get("scale", 1.0)),
-                meshdir=str(self.world.get("meshdir", "assets")),
+                gravity=tuple(float(x) for x in w.get("gravity", World.gravity)),
+                timestep=float(w.get("timestep", World.timestep)),
+                integrator=str(w.get("integrator", World.integrator)),
+                scale=float(w.get("scale", World.scale)),
+                meshdir=str(w.get("meshdir", World.meshdir)),
             ),
             arc=StrutArc(
-                radius=float(self.archetype["radius"]),
+                radius=float(arch["radius"]),
                 stations_deg=tuple(float(x) for x in stations),
-                width=float(self.archetype["width"]),
-                arc_rod=RodSpec(
-                    radius=float(arc_rod["radius"]),
-                    mass=float(arc_rod["mass"]),
-                ),
-                rung_rod=RodSpec(
-                    radius=float(rung_rod["radius"]),
-                    mass=float(rung_rod["mass"]),
-                ),
+                width=float(arch["width"]),
+                arc_rod=RodSpec(radius=float(arc_rod["radius"]), mass=float(arc_rod["mass"])),
+                rung_rod=RodSpec(radius=float(rung_rod["radius"]), mass=float(rung_rod["mass"])),
             ),
-            mobile=StrutInstance(
-                role=StrutRole.MOBILE,
-                plane=ArcPlane(str(m_props.get("plane", "XZ")).upper()),
-            ),
-            fixed=StrutInstance(
-                role=StrutRole.FIXED,
-                plane=ArcPlane(str(f_props.get("plane", "YZ")).upper()),
-            ),
+            mobile=StrutInstance(StrutRole.MOBILE, ArcPlane(str(self.struts.get("M", {}).get("plane", "XZ")).upper())),
+            fixed=StrutInstance(StrutRole.FIXED, ArcPlane(str(self.struts.get("F", {}).get("plane", "YZ")).upper())),
             arrange=Arrange(
                 gap=float(self.arrange["gap"]),
                 angle_deg=angle_deg,
-                mobile_dx=float(self.arrange.get("mobile_dx", 0.005)),
-                inplane_offset=float(self.arrange.get("inplane_offset", 0.004649)),
+                **_floats(self.arrange, Arrange, "mobile_dx inplane_offset"),
             ),
             placement=Placement(
                 mount_height=float(self.placement["mount_height"]),
@@ -608,11 +412,8 @@ class _TgParser:
             ),
             tendons=TendonNet(
                 defaults=TendonDefaults(
-                    stiffness=float(self.tendon_defaults.get("stiffness", 300.0)),
-                    damping=float(self.tendon_defaults.get("damping", 0.5)),
-                    pretension=float(self.tendon_defaults.get("pretension", 0.85)),
-                    width=float(self.tendon_defaults.get("width", 0.00075)),
-                    color=str(self.tendon_defaults.get("color", "0.8 0.2 0.2 1")),
+                    color=str(self.tendon_defaults.get("color", TendonDefaults.color)),
+                    **_floats(self.tendon_defaults, TendonDefaults, "stiffness damping pretension width"),
                 ),
                 generators=tuple(self.generators),
                 edge_overrides=dict(self.edge_overrides),
@@ -620,96 +421,79 @@ class _TgParser:
             ),
             motors=Motors(
                 disk=DiskSpec(
-                    radius=float(self.disk.get("radius", 0.015)),
                     tilt_rad=float(tilt),
                     pitch_rad=float(pitch),
-                    kv=float(self.disk.get("kv", 0.25)),
-                    ctrlrange=tuple(float(x) for x in self.disk.get("ctrl", (-10.0, 10.0))),
-                    solreflimit=tuple(float(x) for x in self.disk.get("solref", (0.02857142857142857, 1.0))),
-                    outboard=float(self.disk.get("outboard", 0.01875)),
-                    crank_throw=(float(self.disk["crank_throw"]) if "crank_throw" in self.disk else None),
-                    **({"crank_phase_rad": float(self.disk["crank_phase"])} if "crank_phase" in self.disk else {}),
-                    foot_outset=float(self.disk.get("foot_outset", 0.0)),
-                    disk_dx=float(self.disk.get("disk_dx", 0.0)),
-                    disk_dy=float(self.disk.get("disk_dy", 0.0)),
+                    ctrlrange=tuple(float(x) for x in disk.get("ctrl", DiskSpec.ctrlrange)),
+                    solreflimit=tuple(float(x) for x in disk.get("solref", DiskSpec.solreflimit)),
+                    crank_throw=float(disk["crank_throw"]) if "crank_throw" in disk else None,
+                    crank_phase_rad=float(disk.get("crank_phase", DiskSpec.crank_phase_rad)),
+                    **_floats(disk, DiskSpec, "radius kv outboard foot_outset disk_dx disk_dy"),
                 ),
-                feet=(
+                feet=tuple(
                     MotorFoot(
-                        station=self.motor_feet[0],
-                        attach_along_edge_rad=self.attach_along_edge,
-                        attach_radius=self.attach_radius,
-                        crank_throw=self.foot_crank_throw.get(self.motor_feet[0]),
-                        foot_outset=self.foot_outset.get(self.motor_feet[0]),
-                        tendon_rest_length=self.foot_tendon_rest_length.get(self.motor_feet[0]),
-                    ),
-                    MotorFoot(
-                        station=self.motor_feet[1],
-                        attach_along_edge_rad=self.attach_along_edge,
-                        attach_radius=self.attach_radius,
-                        crank_throw=self.foot_crank_throw.get(self.motor_feet[1]),
-                        foot_outset=self.foot_outset.get(self.motor_feet[1]),
-                        tendon_rest_length=self.foot_tendon_rest_length.get(self.motor_feet[1]),
-                    ),
+                        station=station,
+                        attach_along_edge_rad=m.get("attach_along_edge", 1.2),  # not MotorFoot's 0.0
+                        attach_radius=m.get("attach_radius", 1.0),
+                        crank_throw=self.per_foot["crank_throw_t"].get(station),
+                        foot_outset=self.per_foot["foot_outset_t"].get(station),
+                        tendon_rest_length=self.per_foot["tendon_rest_length_t"].get(station),
+                    )
+                    for station in self.motor_feet
                 ),
-                tendon_rest_length=self.tendon_rest_length,
-                tendon_stiffness=float(self.tendon_stiffness),
-                tendon_damping=float(self.tendon_damping),
-                crank_phase_lag_rad=float(self.crank_phase_lag_rad),
-                motor_direction=float(self.motor_direction),
-                control_file=self.control_file,
+                tendon_rest_length=m.get("tendon_rest_length"),
+                tendon_stiffness=m.get("tendon_stiffness", Motors.tendon_stiffness),
+                tendon_damping=m.get("tendon_damping", Motors.tendon_damping),
+                crank_phase_lag_rad=m.get("crank_phase_lag", Motors.crank_phase_lag_rad),
+                motor_direction=m.get("motor_direction", Motors.motor_direction),
+                control_file=m.get("control", Motors.control_file),
             ),
             wing=Wing(
-                rod_length=float(self.wing.get("rod_length", 0.018)),
-                mount_arm=float(self.wing.get("mount_arm", 0.055)),
-                mesh_file=str(self.wing.get("mesh", "wing.stl")),
+                rod_length=float(self.wing.get("rod_length", Wing.rod_length)),
+                mount_arm=float(self.wing.get("mount_arm", Wing.mount_arm)),
+                mesh_file=str(self.wing.get("mesh", Wing.mesh_file)),
                 pitch=WingPitch(
-                    upstroke_stiffness=float(
-                        self.wing_pitch.get("upstroke_stiffness", fallback_stiffness)
-                    ),
-                    downstroke_stiffness=float(
-                        self.wing_pitch.get("downstroke_stiffness", fallback_stiffness)
-                    ),
-                    damping=float(self.wing_pitch.get("damping", 0.0005)),
-                    initial_rad=float(self.wing_pitch.get("initial", 0.35)),
-                    range_rad=tuple(float(x) for x in self.wing_pitch.get("range", (-1.0, 1.0))),
-                    armature=float(self.wing_pitch.get("armature", 1e-5)),
-                    upstroke_pitch_rad=float(
-                        self.wing_pitch.get("upstroke_pitch", fallback_free_angle)
-                    ),
-                    downstroke_pitch_rad=float(
-                        self.wing_pitch.get("downstroke_pitch", fallback_free_angle)
-                    ),
+                    upstroke_stiffness=float(wing_pitch.get("upstroke_stiffness", pitch_stiffness)),
+                    downstroke_stiffness=float(wing_pitch.get("downstroke_stiffness", pitch_stiffness)),
+                    damping=float(wing_pitch.get("damping", WingPitch.damping)),
+                    initial_rad=float(wing_pitch.get("initial", WingPitch.initial_rad)),
+                    range_rad=tuple(float(x) for x in wing_pitch.get("range", WingPitch.range_rad)),
+                    armature=float(wing_pitch.get("armature", WingPitch.armature)),
+                    upstroke_pitch_rad=float(wing_pitch.get("upstroke_pitch", free_angle)),
+                    downstroke_pitch_rad=float(wing_pitch.get("downstroke_pitch", free_angle)),
                 ),
                 aero=WingAero(
-                    blades=int(self.wing_aero.get("blades", 4)),
-                    force_scale=float(self.wing_aero.get("force_scale", 1_000_000.0)),
-                    include_body_torque=bool(self.wing_aero.get("body_torque", False)),
+                    blades=int(aero.get("blades", WingAero.blades)),
+                    force_scale=float(aero.get("force_scale", WingAero.force_scale)),
+                    include_body_torque=bool(aero.get("body_torque", WingAero.include_body_torque)),
                 ),
-                bones=self._build_bones(),
+                bones=self._bones(),
             ),
         )
 
-    def _build_bones(self) -> Optional[WingBones]:
-        # Strict, unlike a plain dict.get chain: a typo'd key here silently
-        # substitutes a dataclass default, and the mount especially is a searched
-        # value where a dropped component is a different wing, not a rounder
-        # number. Fail on the .tg line instead.
-        b = self.wing_bones
-        if not b:
-            if self.wing_bones_declared:
-                raise ValueError("wing bones: section is empty — remove it, or give it keys")
+    def _strict(self, section: str, known: str) -> Optional[Dict[str, Any]]:
+        """A strict wing section's keys, or None if it is absent. A typo'd key here
+        would silently become a different wing (the bone mount especially is a
+        searched value), so unknown keys and empty sections are errors."""
+        raw = self.wing_sections[section]
+        if not raw:
+            if section in self.declared:
+                raise ValueError(f"wing {section}: section is empty — remove it, or give it keys")
             return None
-        d = WingBones()
-        known = {
-            "mount", "humerus", "ulna", "manus", "chord", "primary", "mass",
-            "elbow_range", "wrist_range", "twist_range", "servo", "damping", "armature",
-        }
-        unknown = sorted(set(b) - known)
+        known_keys = set(known.split())
+        unknown = sorted(set(raw) - known_keys)
         if unknown:
             raise ValueError(
-                f"unknown wing bones key(s) {', '.join(unknown)}; expected one of "
-                + ", ".join(sorted(known))
+                f"unknown wing {section} key(s) {', '.join(unknown)}; expected one of "
+                + ", ".join(sorted(known_keys))
             )
+        return raw
+
+    def _bones(self) -> Optional[WingBones]:
+        b = self._strict("bones", "mount humerus ulna manus chord primary mass elbow_range wrist_range "
+                                  "twist_range servo damping armature")
+        if b is None:
+            return None
+        d = WingBones()
 
         def vec(key, default, want):
             value = b.get(key, default)
@@ -717,40 +501,22 @@ class _TgParser:
                 raise ValueError(f"wing bones {key} must be {want} numbers, got {value!r}")
             return tuple(float(x) for x in value)
 
-        pair = lambda k, dflt: vec(k, dflt, 2)  # noqa: E731
         return WingBones(
             mount_euler_rad=vec("mount", d.mount_euler_rad, 3),
-            humerus=float(b.get("humerus", d.humerus)),
-            ulna=float(b.get("ulna", d.ulna)),
-            manus=float(b.get("manus", d.manus)),
-            chord=float(b.get("chord", d.chord)),
-            primary=float(b.get("primary", d.primary)),
-            mass=float(b.get("mass", d.mass)),
-            elbow_range_rad=pair("elbow_range", d.elbow_range_rad),
-            wrist_range_rad=pair("wrist_range", d.wrist_range_rad),
-            twist_range_rad=pair("twist_range", d.twist_range_rad),
-            servo=float(b.get("servo", d.servo)),
-            damping=float(b.get("damping", d.damping)),
-            armature=float(b.get("armature", d.armature)),
-            wrist=self._build_wrist(),
-            cables=self._build_cables(),
-            feathers=self._build_feathers(),
+            elbow_range_rad=vec("elbow_range", d.elbow_range_rad, 2),
+            wrist_range_rad=vec("wrist_range", d.wrist_range_rad, 2),
+            twist_range_rad=vec("twist_range", d.twist_range_rad, 2),
+            **_floats(b, d, "humerus ulna manus chord primary mass servo damping armature"),
+            wrist=self._wrist(),
+            cables=self._cables(),
+            feathers=self._feathers(),
         )
 
-    def _build_feathers(self) -> Optional[FeatherVanes]:
-        f = self.wing_feathers
-        if not f:
-            if self.wing_feathers_declared:
-                raise ValueError("wing feathers: section is empty — remove it, or give it keys")
+    def _feathers(self) -> Optional[FeatherVanes]:
+        f = self._strict("feathers", "segments stiffness zeta armature range")
+        if f is None:
             return None
         d = FeatherVanes()
-        known = {"segments", "stiffness", "zeta", "armature", "range"}
-        unknown = sorted(set(f) - known)
-        if unknown:
-            raise ValueError(
-                f"unknown wing feathers key(s) {', '.join(unknown)}; expected one of "
-                + ", ".join(sorted(known))
-            )
         rng = f.get("range", d.range_rad)
         if not isinstance(rng, (tuple, list)) or len(rng) != 2:
             raise ValueError(f"wing feathers range must be two angles, got {rng!r}")
@@ -759,29 +525,16 @@ class _TgParser:
             raise ValueError(f"wing feathers segments must be at least 1, got {segments}")
         return FeatherVanes(
             segments=segments,
-            stiffness=float(f.get("stiffness", d.stiffness)),
-            zeta=float(f.get("zeta", d.zeta)),
-            armature=float(f.get("armature", d.armature)),
             range_rad=(float(rng[0]), float(rng[1])),
+            **_floats(f, d, "stiffness zeta armature"),
         )
 
-    def _build_cables(self) -> Optional[WingCables]:
-        c = self.wing_cables
-        if not c:
-            if self.wing_cables_declared:
-                raise ValueError("wing cables: section is empty — remove it, or give it keys")
+    def _cables(self) -> Optional[WingCables]:
+        c = self._strict("cables", "humerus_frac ulna_frac manus_frac offset disks humerus_guide ulna_guide "
+                                   "pin_radius pin_phase stiffness damping width extend contract")
+        if c is None:
             return None
         d = WingCables()
-        known = {"humerus_frac", "ulna_frac", "manus_frac", "offset", "disks",
-                 "humerus_guide", "ulna_guide",
-                 "pin_radius", "pin_phase", "stiffness", "damping", "width",
-                 "extend", "contract"}
-        unknown = sorted(set(c) - known)
-        if unknown:
-            raise ValueError(
-                f"unknown wing cables key(s) {', '.join(unknown)}; expected one of "
-                + ", ".join(sorted(known))
-            )
 
         def triple(key, default):
             v = c.get(key, default)
@@ -794,37 +547,19 @@ class _TgParser:
             if name not in ("t1", "t4"):
                 raise ValueError(f"wing cables disks must each be t1 or t4, got {name!r}")
         return WingCables(
-            humerus_frac=float(c.get("humerus_frac", d.humerus_frac)),
-            ulna_frac=float(c.get("ulna_frac", d.ulna_frac)),
-            manus_frac=float(c.get("manus_frac", d.manus_frac)),
-            offset=float(c.get("offset", d.offset)),
-            humerus_guide=float(c.get("humerus_guide", d.humerus_guide)),
-            ulna_guide=float(c.get("ulna_guide", d.ulna_guide)),
             disks=disks,
-            pin_radius=float(c.get("pin_radius", d.pin_radius)),
-            pin_phase=float(c.get("pin_phase", d.pin_phase)),
-            stiffness=float(c.get("stiffness", d.stiffness)),
-            damping=float(c.get("damping", d.damping)),
-            width=float(c.get("width", d.width)),
             extend=tuple(float(x) for x in triple("extend", d.extend)),
             contract=tuple(float(x) for x in triple("contract", d.contract)),
+            **_floats(c, d, "humerus_frac ulna_frac manus_frac offset humerus_guide ulna_guide "
+                            "pin_radius pin_phase stiffness damping width"),
         )
 
-    def _build_wrist(self) -> Optional[WristTensegrity]:
-        w = self.wing_wrist
-        if not w:
-            if self.wing_wrist_declared:
-                raise ValueError("wing wrist: section is empty — remove it, or give it keys")
+    def _wrist(self) -> Optional[WristTensegrity]:
+        w = self._strict("wrist", "scale stations gap width stiffness damping pretension tendon_width "
+                                  "arc_rod rung_rod")
+        if w is None:
             return None
         d = WristTensegrity()
-        known = {"scale", "stations", "gap", "width", "stiffness", "damping",
-                 "pretension", "tendon_width", "arc_rod", "rung_rod"}
-        unknown = sorted(set(w) - known)
-        if unknown:
-            raise ValueError(
-                f"unknown wing wrist key(s) {', '.join(unknown)}; expected one of "
-                + ", ".join(sorted(known))
-            )
         stations = w.get("stations", d.stations_deg)
         if not isinstance(stations, (tuple, list)) or len(stations) != 4:
             raise ValueError(f"wing wrist stations must be four angles, got {stations!r}")
@@ -839,22 +574,15 @@ class _TgParser:
                            float(raw.get("mass", default.mass)))
 
         return WristTensegrity(
-            scale=float(w.get("scale", d.scale)),
             stations_deg=tuple(float(x) for x in stations),
-            gap=float(w.get("gap", d.gap)),
-            width=float(w.get("width", d.width)),
-            stiffness=float(w.get("stiffness", d.stiffness)),
-            damping=float(w.get("damping", d.damping)),
-            pretension=float(w.get("pretension", d.pretension)),
-            tendon_width=float(w.get("tendon_width", d.tendon_width)),
             arc_rod=rod("arc_rod", d.arc_rod),
             rung_rod=rod("rung_rod", d.rung_rod),
+            **_floats(w, d, "scale gap width stiffness damping pretension tendon_width"),
         )
 
 
 def load_morphology(path: str | Path) -> Morphology:
     """Load a .tg morphology file into a validated Morphology."""
-    text = Path(path).read_text()
-    morph = _TgParser(text).parse()
+    morph = _TgParser(Path(path).read_text()).parse()
     morph.validate()
     return morph

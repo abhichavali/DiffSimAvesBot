@@ -1,12 +1,7 @@
-"""Morphology compiler: typed object model → MuJoCo MJCF."""
+"""The morphology compiler: a .tg design -> a MuJoCo MJCF scene.
 
-from morphology.model import Morphology
-
-__all__ = ["Morphology", "compile_morphology"]
-
-
-def __getattr__(name: str):
-    if name == "compile_morphology":
-        from morphology.compile import compile_morphology
-        return compile_morphology
-    raise AttributeError(name)
+tg_parser (.tg -> Morphology, model.py) -> compile (geometry, tendon_net ->
+CompiledMorphology) -> emit_mjcf (+ emit_eagle) -> XML, with motor_tendons
+measuring the crank tendons on a probe model in between. Start at
+compile.compile_file.
+"""

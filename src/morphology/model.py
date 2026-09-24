@@ -1,11 +1,19 @@
-"""Typed morphology object model (Option B — dataclasses)."""
+"""The typed design tree a .tg parses into: Morphology and its dataclasses.
+
+Plain data with SI units (angles in radians unless a field says _deg), plus the
+bird tags that keep plate-wing and bone-wing tools apart. tg_parser builds it;
+the compiler and the runtime read it. A key missing from a .tg takes the
+default here (tg_parser marks the few exceptions). Parsed but read by no code:
+StrutInstance (the `strut F/M` planes), DiskSpec.outboard, WingAero.force_scale
+and WingAero.include_body_torque.
+"""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 #: Every .tg carries `bird = <tag>`; it says which rig the file describes.
 BIRDS = ("hummer", "swift", "eagle")
@@ -31,11 +39,6 @@ class StrutRole(str, Enum):
 class ArcPlane(str, Enum):
     XZ = "XZ"  # mobile strut: arc in x–z, width along y
     YZ = "YZ"  # fixed strut: arc in y–z, width along x
-
-
-class StrutSide(str, Enum):
-    MOBILE = "M"
-    FIXED = "F"
 
 
 class Face(str, Enum):
@@ -381,23 +384,6 @@ class WingBones:
     def span(self) -> float:
         """Shoulder to wingtip, feathers included."""
         return self.humerus + self.ulna + self.manus + self.primary
-
-    def mount_quat(self) -> Tuple[float, float, float, float]:
-        """Intrinsic x-y-z Euler (MJCF ``eulerseq`` default) as a w-first quaternion."""
-        half = [0.5 * a for a in self.mount_euler_rad]
-        q = (1.0, 0.0, 0.0, 0.0)
-        for axis, a in enumerate(half):
-            r = [math.cos(a), 0.0, 0.0, 0.0]
-            r[axis + 1] = math.sin(a)
-            w1, x1, y1, z1 = q
-            w2, x2, y2, z2 = r
-            q = (
-                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-            )
-        return q
 
 
 @dataclass

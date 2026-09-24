@@ -1,4 +1,12 @@
-"""Strut arc geometry, placement, and anchor resolution."""
+"""Strut geometry and rest-pose placement for the compiler.
+
+An arc strut is four stations on a circular arc, each with an A and a B face
+node a strut-width apart. The mobile strut's arc lies in its body x-z plane, the
+fixed strut's in y-z. This module builds those nodes (and their site frames),
+places the pair, finds the motor anchors and crank-disk positions, and holds the
+w-first quaternion helpers and the y-mirror that turns the left shoulder into
+the right one.
+"""
 
 from __future__ import annotations
 
@@ -8,35 +16,24 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from morphology.model import ArcPlane, Arrange, Face, Morphology, StrutRole
-
-
-@dataclass(frozen=True)
-class Anchor:
-    side: str
-    station: int
-    face: Face
-
-    def edge_id(self) -> str:
-        return f"{self.side}{self.station}{self.face.value}"
+from morphology.model import ArcPlane, DiskSpec, Face, Morphology, RodSpec
 
 
 @dataclass
 class StrutGeometry:
-    plane: ArcPlane
-    center: np.ndarray
-    radius: float
-    width: float
     nodes: Dict[str, np.ndarray]
     site_quats: Dict[str, np.ndarray]
     arc_rod_pairs: List[Tuple[str, str]]
     rung_rod_pairs: List[Tuple[str, str]]
-    midpoint: np.ndarray
-    width_axis_offset: float = 0.0
-    arc_rod: Tuple[float, float] = (0.004, 0.010001)
-    rung_rod: Tuple[float, float] = (0.002, 0.004999)
+    arc_rod: Tuple[float, float]  # (radius, mass), scaled
+    rung_rod: Tuple[float, float]
     # Rigid rods bridging a motor foot edge to an inset motor anchor (radius<1).
     motor_rod_pairs: List[Tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def midpoint(self) -> np.ndarray:
+        """Where the wing (or the eagle's humerus) mounts."""
+        return 0.5 * (self.nodes["c2"] + self.nodes["c3"])
 
 
 def _unit_direction(angle_rad: float, plane: ArcPlane) -> np.ndarray:
@@ -50,6 +47,13 @@ def _face_offset(face: Face, width: float, plane: ArcPlane) -> np.ndarray:
     if plane == ArcPlane.XZ:
         return np.array([0.0, -half if face == Face.A else half, 0.0], dtype=float)
     return np.array([-half if face == Face.A else half, 0.0, 0.0], dtype=float)
+
+
+def _tangent_along_arc(angle_rad: float, plane: ArcPlane) -> np.ndarray:
+    c, s = math.cos(angle_rad), math.sin(angle_rad)
+    if plane == ArcPlane.XZ:
+        return np.array([-s, 0.0, c], dtype=float)
+    return np.array([0.0, -s, c], dtype=float)
 
 
 def _site_quat_from_axes(tangent: np.ndarray, normal: np.ndarray) -> np.ndarray:
@@ -98,147 +102,100 @@ def derive_arc_center(
     """Derive arc center in strut body frame from radius + station angles only.
 
     Mobile (XZ): apex–foot bias from the station-1→2 opening and supplementary
-    foot symmetry.  Fixed (YZ): orthogonal complement; ``cz`` scales with the
-    derived mobile ``cx`` (arrange coupling).
+    foot symmetry.  Fixed (YZ, needs ``mobile_center_x``): orthogonal complement;
+    ``cz`` scales with the derived mobile ``cx`` (arrange coupling).
     """
     t1 = math.radians(stations_deg[0])
     t2 = math.radians(stations_deg[1])
     t3 = math.radians(stations_deg[2])
-    cos_t1 = max(abs(math.cos(t1)), 1e-9)
-    sin_t2 = max(abs(math.sin(t2)), 1e-9)
-
-    if plane == ArcPlane.XZ:
-        cx_r = math.cos(t1) * math.cos((t2 - t1) / 2.0) + math.sin(t1) / 3.0
-        cz_r = (
-            -math.sin(t1)
-            * math.sin(t2)
-            / (2.0 * cos_t1)
-            * (1.0 - math.sin(t1) / (2.0 * sin_t2))
-        )
-        return np.array([radius * cx_r, 0.0, radius * cz_r], dtype=float)
-
-    cy_r = -math.sin(t1) / 4.0
     cx_r = math.cos(t1) * math.cos((t2 - t1) / 2.0) + math.sin(t1) / 3.0
-    if mobile_center_x is not None:
-        cz_r = mobile_center_x * (math.sin(t2) + math.sin(t3)) / (8.0 * radius * cx_r)
-    else:
-        cz_r = (math.sin(t2) + math.sin(t3)) / 8.0
+    if plane == ArcPlane.XZ:
+        cos_t1 = max(abs(math.cos(t1)), 1e-9)
+        sin_t2 = max(abs(math.sin(t2)), 1e-9)
+        cz_r = -math.sin(t1) * math.sin(t2) / (2.0 * cos_t1) * (1.0 - math.sin(t1) / (2.0 * sin_t2))
+        return np.array([radius * cx_r, 0.0, radius * cz_r], dtype=float)
+    cy_r = -math.sin(t1) / 4.0
+    cz_r = mobile_center_x * (math.sin(t2) + math.sin(t3)) / (8.0 * radius * cx_r)
     return np.array([0.0, radius * cy_r, radius * cz_r], dtype=float)
 
 
-def derive_fixed_width_axis_offset(
-    mobile_center_x: float,
-    arrange: Arrange,
-) -> float:
-    """Derive fixed-strut centerline x from mobile arc center + orthogonal arrange offset."""
-    return mobile_center_x + arrange.inplane_offset
+def scaled_rod(rod: RodSpec, scale: float) -> Tuple[float, float]:
+    return rod.radius * scale, rod.mass * (scale**3)
 
 
-def build_strut_geometry(
+def build_strut(
+    plane: ArcPlane,
     radius: float,
     width: float,
     stations_deg: Tuple[float, ...],
-    plane: ArcPlane,
-    center: np.ndarray | None = None,
+    center: np.ndarray,
+    scale: float,
+    arc_rod: RodSpec,
+    rung_rod: RodSpec,
     width_axis_offset: float = 0.0,
 ) -> StrutGeometry:
-    if center is None:
-        center = derive_arc_center(radius, stations_deg, plane)
+    """One arc strut: nodes and site frames, scaled by `scale` about the node centroid.
 
-    stations_rad = [math.radians(a) for a in stations_deg]
+    Nodes: cN on the arc centreline, tN on face A. Face B is tN_2 on the mobile
+    (XZ) strut but t{5-N}_2 on the fixed (YZ) one, so the σ map lines up.
+    """
     nodes: Dict[str, np.ndarray] = {}
     site_quats: Dict[str, np.ndarray] = {}
-
-    for idx, angle in enumerate(stations_rad, start=1):
-        direction = _unit_direction(angle, plane)
-        cl = center + radius * direction
+    for idx, angle_deg in enumerate(stations_deg, start=1):
+        angle = math.radians(angle_deg)
+        cl = center + radius * _unit_direction(angle, plane)
         if plane == ArcPlane.YZ:
             cl = cl + np.array([width_axis_offset, 0.0, 0.0])
-
         nodes[f"c{idx}"] = cl.copy()
+        b_name = f"t{idx}_2" if plane == ArcPlane.XZ else f"t{5 - idx}_2"
+        for name, face in ((f"t{idx}", Face.A), (b_name, Face.B)):
+            nodes[name] = cl + _face_offset(face, width, plane)
+            site_quats[name] = _site_quat_from_axes(
+                _tangent_along_arc(angle, plane), _face_offset(face, 1.0, plane)
+            )
 
-        a_name = f"t{idx}"
-        nodes[a_name] = cl + _face_offset(Face.A, width, plane)
-        site_quats[a_name] = _site_quat_from_axes(
-            _tangent_along_arc(angle, plane),
-            _face_offset(Face.A, 1.0, plane),
-        )
+    if scale != 1.0:
+        centroid = np.stack(list(nodes.values())).mean(axis=0)
+        nodes = {k: centroid + scale * (v - centroid) for k, v in nodes.items()}
 
-        if plane == ArcPlane.XZ:
-            b_name = f"t{idx}_2"
-        else:
-            b_name = f"t{5 - idx}_2"
-        nodes[b_name] = cl + _face_offset(Face.B, width, plane)
-        site_quats[b_name] = _site_quat_from_axes(
-            _tangent_along_arc(angle, plane),
-            _face_offset(Face.B, 1.0, plane),
-        )
-
-    rung_pairs: List[Tuple[str, str]] = []
-    for idx in range(1, 5):
-        if plane == ArcPlane.XZ:
-            rung_pairs.append((f"t{idx}", f"t{idx}_2"))
-        else:
-            rung_pairs.append((f"t{idx}", f"t{5 - idx}_2"))
-
-    arc_pairs = [(f"c{i}", f"c{i + 1}") for i in range(1, 4)]
-    midpoint = 0.5 * (nodes["c2"] + nodes["c3"])
-
+    if plane == ArcPlane.XZ:
+        rung_pairs = [(f"t{i}", f"t{i}_2") for i in range(1, 5)]
+    else:
+        rung_pairs = [(f"t{i}", f"t{5 - i}_2") for i in range(1, 5)]
     return StrutGeometry(
-        plane=plane,
-        center=center,
-        radius=radius,
-        width=width,
         nodes=nodes,
         site_quats=site_quats,
-        arc_rod_pairs=arc_pairs,
+        arc_rod_pairs=[(f"c{i}", f"c{i + 1}") for i in range(1, 4)],
         rung_rod_pairs=rung_pairs,
-        midpoint=midpoint,
-        width_axis_offset=width_axis_offset,
+        arc_rod=scaled_rod(arc_rod, scale),
+        rung_rod=scaled_rod(rung_rod, scale),
     )
 
 
-def _tangent_along_arc(angle_rad: float, plane: ArcPlane) -> np.ndarray:
-    c, s = math.cos(angle_rad), math.sin(angle_rad)
-    if plane == ArcPlane.XZ:
-        return np.array([-s, 0.0, c], dtype=float)
-    return np.array([0.0, -s, c], dtype=float)
+def strut_pair(
+    radius: float,
+    width: float,
+    stations_deg: Tuple[float, ...],
+    inplane_offset: float,
+    scale: float,
+    arc_rod: RodSpec,
+    rung_rod: RodSpec,
+) -> Tuple[StrutGeometry, StrutGeometry]:
+    """(mobile, fixed) struts of one tensegrity joint, each in its own body frame.
+
+    The fixed strut's centreline sits `inplane_offset` off the mobile arc centre's x.
+    """
+    mobile_center = derive_arc_center(radius, stations_deg, ArcPlane.XZ)
+    fixed_center = derive_arc_center(radius, stations_deg, ArcPlane.YZ, mobile_center_x=mobile_center[0])
+    mobile = build_strut(ArcPlane.XZ, radius, width, stations_deg, mobile_center, scale, arc_rod, rung_rod)
+    fixed = build_strut(ArcPlane.YZ, radius, width, stations_deg, fixed_center, scale, arc_rod, rung_rod,
+                        width_axis_offset=mobile_center[0] + inplane_offset)
+    return mobile, fixed
 
 
-def apply_scale_to_strut(geom: StrutGeometry, scale: float) -> StrutGeometry:
-    if scale == 1.0:
-        return geom
-
-    keys = list(geom.nodes.keys())
-    pts = np.stack([geom.nodes[k] for k in keys])
-    centroid = pts.mean(axis=0)
-    scaled_nodes = {k: centroid + scale * (geom.nodes[k] - centroid) for k in keys}
-    midpoint = 0.5 * (scaled_nodes["c2"] + scaled_nodes["c3"])
-
-    return StrutGeometry(
-        plane=geom.plane,
-        center=centroid + scale * (geom.center - centroid),
-        radius=geom.radius * scale,
-        width=geom.width * scale,
-        nodes=scaled_nodes,
-        site_quats=dict(geom.site_quats),
-        arc_rod_pairs=list(geom.arc_rod_pairs),
-        rung_rod_pairs=list(geom.rung_rod_pairs),
-        midpoint=midpoint,
-        width_axis_offset=geom.width_axis_offset * scale,
-    )
-
-
-def scaled_rod(radius: float, mass: float, scale: float) -> Tuple[float, float]:
-    return radius * scale, mass * (scale**3)
-
-
-def mobile_body_orientation() -> np.ndarray:
+def strut_quat() -> np.ndarray:
+    """Body orientation shared by both struts of a pair."""
     return np.array([0.707107, -0.707107, 0.0, 0.0], dtype=float)
-
-
-def fixed_body_orientation() -> np.ndarray:
-    return mobile_body_orientation()
 
 
 def quat_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -251,6 +208,16 @@ def quat_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
         w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
     ], dtype=float)
+
+
+def quat_from_euler_xyz(euler) -> np.ndarray:
+    """Intrinsic x-y-z Euler angles (MJCF's default ``eulerseq``) as a w-first quaternion."""
+    q = np.array([1.0, 0.0, 0.0, 0.0])
+    for axis, angle in enumerate(euler):
+        r = np.array([math.cos(0.5 * angle), 0.0, 0.0, 0.0])
+        r[axis + 1] = math.sin(0.5 * angle)
+        q = quat_mul(q, r)
+    return q
 
 
 def quat_from_axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
@@ -279,8 +246,22 @@ def quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     return rot @ np.asarray(v, dtype=float)
 
 
+def world_node(local: np.ndarray, body_pos: np.ndarray, body_quat: np.ndarray) -> np.ndarray:
+    return quat_rotate(body_quat, local) + body_pos
+
+
+def mirror_y(v) -> np.ndarray:
+    """Reflect a point across the y = 0 plane (left shoulder -> right)."""
+    return np.array([v[0], -v[1], v[2]], dtype=float)
+
+
+def mirror_quat(q) -> np.ndarray:
+    """The y-reflection of a w-first orientation."""
+    return np.array([q[0], -q[1], q[2], -q[3]], dtype=float)
+
+
 def compute_body_poses(morph: Morphology) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Derive left-shoulder body poses from placement + arrange (no stored coordinates)."""
+    """Left-shoulder (mobile_pos, mobile_quat, fixed_pos, fixed_quat) from placement + arrange."""
     z = morph.placement.mount_height
     y_mobile = morph.placement.lateral_offset
     y_fixed = y_mobile + morph.arrange.gap
@@ -295,15 +276,7 @@ def compute_body_poses(morph: Morphology) -> Tuple[np.ndarray, np.ndarray, np.nd
         rotated = np.array([c * rel[0] - s * rel[1], s * rel[0] + c * rel[1], rel[2]])
         mobile_pos = fixed_pos + rotated
 
-    return mobile_pos, mobile_body_orientation(), fixed_pos, fixed_body_orientation()
-
-
-def anchor_to_node_name(side: str, station: int, face: Face) -> str:
-    if side == "M":
-        return f"t{station}" if face == Face.A else f"t{station}_2"
-    if face == Face.A:
-        return f"t{station}"
-    return f"t{5 - station}_2"
+    return mobile_pos, strut_quat(), fixed_pos, strut_quat()
 
 
 def motor_anchor_node(
@@ -343,59 +316,31 @@ def motor_anchor_node(
     return name, anchor, edge_point
 
 
-def world_node(local: np.ndarray, body_pos: np.ndarray, body_quat: np.ndarray) -> np.ndarray:
-    return quat_rotate(body_quat, local) + body_pos
-
-
-def derive_center_of_pressure(wing: "WingSpec") -> np.ndarray:
-    """Derive wing CoP in wing-local frame from mount geometry."""
-    return np.array(
-        [
-            -0.0019299 * (wing.mount_arm / 0.055),
-            wing.mount_arm,
-            wing.rod_length + 0.000096,
-        ],
-        dtype=float,
-    )
-
-
-@dataclass
-class WingSpec:
-    rod_length: float
-    mount_arm: float
-
-
 def derive_disk_pillar_pos(
     foot_world: np.ndarray,
     sibling_foot_world: np.ndarray,
-    disk_spec,
-    mount_height: float,
+    disk: DiskSpec,
 ) -> np.ndarray:
     """Place crank pillar base from foot world xy, optionally outset from sibling foot."""
-    del mount_height
     xy = np.array([foot_world[0], foot_world[1]], dtype=float)
-    outset = float(getattr(disk_spec, "foot_outset", 0.0))
-    if outset != 0.0:
+    if disk.foot_outset != 0.0:
         # Signed offset along the line joining the two feet: positive spreads the
         # disk away from its sibling (pair moves apart), negative pulls it toward
         # the sibling (pair moves together). Symmetric — both disks shift equally.
         away = xy - np.array([sibling_foot_world[0], sibling_foot_world[1]], dtype=float)
         norm = float(np.linalg.norm(away))
         if norm > 1e-9:
-            xy = xy + (outset / norm) * away
-    dx = float(getattr(disk_spec, "disk_dx", 0.0))
-    dy = float(getattr(disk_spec, "disk_dy", 0.0))
-    return np.array([xy[0] + dx, xy[1] + dy, 0.0], dtype=float)
+            xy = xy + (disk.foot_outset / norm) * away
+    return np.array([xy[0] + disk.disk_dx, xy[1] + disk.disk_dy, 0.0], dtype=float)
 
 
-def derive_disk_rim_local(disk_spec) -> np.ndarray:
+def derive_disk_rim_local(disk: DiskSpec) -> np.ndarray:
     # Tendon pin radius = crank_throw (a rigid arm past the rim) if set, else the
     # disk radius (pin on the rim). Decoupling throw from the visible disk size is
     # the gear-ratio lever for flap swing without growing the disk.
-    throw = getattr(disk_spec, "crank_throw", None)
-    throw = disk_spec.radius if throw is None else float(throw)
+    throw = disk.radius if disk.crank_throw is None else disk.crank_throw
     # Parked pin phase sets where the no-drive rest sits within the driven arc
     # (the lever to re-center a one-sided stroke). Default ~atan2(0.2,1) keeps the
     # legacy [throw, 0.2*throw, 0] placement.
-    phase = float(getattr(disk_spec, "crank_phase_rad", math.atan2(0.2, 1.0)))
+    phase = disk.crank_phase_rad
     return throw * np.array([math.cos(phase), math.sin(phase), 0.0], dtype=float)

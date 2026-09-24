@@ -1,14 +1,30 @@
-"""Compiled morphology intermediate representation."""
+"""The compiler's output: every derived pose and length, ready for the MJCF emitter.
+
+compile.compile_morphology fills these from a Morphology; emit_mjcf turns them
+into XML. Positions are metres, quaternions w-first, all in the parent frame the
+emitter places them in.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
 
 import numpy as np
 
+from morphology.geometry import StrutGeometry
 from morphology.model import Morphology
-from morphology.symmetry import StructuralEdge
+from morphology.tendon_net import StructuralEdge
+
+
+@dataclass
+class CompiledDisk:
+    """One crank disk: pillar base (world), orientation, and the tendon pin (disk-local)."""
+
+    pillar_pos: np.ndarray
+    euler: List[float]  # disk body euler (tilt, pitch, 0)
+    rim_pos: np.ndarray
+    rim_rgba: str
 
 
 @dataclass
@@ -25,10 +41,10 @@ class CompiledWrist:
     proximal_quat: np.ndarray
     distal_pos: np.ndarray
     distal_quat: np.ndarray
-    proximal_geom: Any
-    distal_geom: Any
+    proximal_geom: StrutGeometry
+    distal_geom: StrutGeometry
     structural_edges: List[StructuralEdge]
-    tendon_lengths: Dict[str, float]
+    tendon_lengths: List[float]  # posed length of each structural edge
     #: Manus pose in the distal strut's frame, chosen so the hand keeps the
     #: position and heading the hinge wrist gave it.
     manus_pos: np.ndarray
@@ -37,25 +53,28 @@ class CompiledWrist:
 
 @dataclass
 class CompiledShoulder:
-    side: str
-    mobile_body: str
-    fixed_body: str
+    side: str  # "L" or "R"
     mobile_pos: np.ndarray
     mobile_quat: np.ndarray
     fixed_pos: np.ndarray
     fixed_quat: np.ndarray
-    mobile_geom: Any
-    fixed_geom: Any
-    motor_nodes: Dict[str, np.ndarray]
+    mobile_geom: StrutGeometry
+    fixed_geom: StrutGeometry
     structural_edges: List[StructuralEdge]
-    tendon_lengths: Dict[str, float]
-    disks: Dict[str, Dict[str, Any]]
-    wrist: "CompiledWrist | None" = None
+    tendon_lengths: List[float]  # posed length of each structural edge
+    disks: Dict[str, CompiledDisk]  # keyed "L_t1", "L_t4", ...
+    wrist: CompiledWrist | None = None
+
+    @property
+    def mobile_body(self) -> str:
+        return f"{self.side}_part_1"
+
+    @property
+    def fixed_body(self) -> str:
+        return f"{self.side}_part_2"
 
 
 @dataclass
 class CompiledMorphology:
     morph: Morphology
     shoulders: Tuple[CompiledShoulder, CompiledShoulder]
-    wing_cop_local: np.ndarray
-    aero_blade_sites: List[Dict[str, Any]] = field(default_factory=list)
