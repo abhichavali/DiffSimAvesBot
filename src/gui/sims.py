@@ -96,14 +96,12 @@ def prepare_scene(tg_path: Path, scene_path: Path, *, color_structural_tendons: 
     return scene_path
 
 
-def settled_drive(tg_path: Path, scene_path: Path, control_path: Path | None, settle_periods: float,
-                  *, strokeplane: bool = False):
+def settled_drive(tg_path: Path, scene_path: Path, control_path: Path | None, settle_periods: float):
     """Compile, rest and settle a design on the ramped crank drive: the CPU loop behind every plot.
 
-    Returns (sim, control, step, sp); step() is one physics step of the drive. With
-    ``strokeplane`` a StrokePlaneSignal beside the .tg (sp, else None) is applied every
-    step -- only the phase plots ask for it; work loops and the wing path run the plain
-    drive.
+    Returns (sim, control, step, sp); step() is one physics step of the drive. A
+    StrokePlaneSignal beside the .tg (sp, else None) is applied every step, as the
+    viewer does.
     """
     prepare_scene(tg_path, scene_path)
     morph = load_morphology(tg_path)
@@ -113,7 +111,7 @@ def settled_drive(tg_path: Path, scene_path: Path, control_path: Path | None, se
 
     control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
     sp_file = tg_path.parent / "strokeplane_optimized.json"
-    sp = StrokePlaneSignal.from_json(model, json.loads(sp_file.read_text())) if strokeplane and sp_file.exists() else None
+    sp = StrokePlaneSignal.from_json(model, json.loads(sp_file.read_text())) if sp_file.exists() else None
 
     def step() -> None:
         if sp is not None:
@@ -138,7 +136,7 @@ def phase_trace(
     One rollout serves all PLOT_CHOICES; ``phase_plot`` picks one out. Series are
     per step except the mean lift, kept as per-(half-)cycle running sums.
     """
-    sim, control, step, sp = settled_drive(tg_path, scene_path, control_path, settle_periods, strokeplane=True)
+    sim, control, step, sp = settled_drive(tg_path, scene_path, control_path, settle_periods)
     model, data = sim.model, sim.data
     plot_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in PLOT_ACTUATORS}
     tendon_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name) for name in PLOT_ACTUATORS}

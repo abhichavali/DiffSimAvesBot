@@ -8,6 +8,7 @@ the eagle's ``CrankDrive`` trim. See the class docstring for the pulse model.
 from __future__ import annotations
 
 import itertools
+import json
 import math
 from collections import deque
 from pathlib import Path
@@ -20,6 +21,7 @@ from gui.sims import prepare_scene
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control, load_control_for_morphology, ramp_factor
 from runtime.crank import CrankDrive
+from runtime.disk_orientation import StrokePlaneSignal
 from runtime.eagle_drive import wing_plane_roll
 from runtime.sim import PlateWingSim
 
@@ -86,6 +88,8 @@ class ImpulseSim:
         self.speed = control.a0 if speed is None else float(speed)  # rad/s commanded on every disk
         self.period = math.tau / abs(self.speed) if self.speed else control.period
         self.settle_periods = float(settle_periods)
+        sp_file = tg_path.parent / "strokeplane_optimized.json"  # learned stroke plane, as the viewer applies it
+        self.sp = StrokePlaneSignal.from_json(model, json.loads(sp_file.read_text())) if sp_file.exists() else None
 
         self.aid = {mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i): i for i in self.sim.crank_ids}
         self.motors = tuple(self.aid)
@@ -157,6 +161,8 @@ class ImpulseSim:
         ramp = ramp_factor(data.time, self.drive_start, self.settle_periods * self.period)
         ctrl = ramp * self.morph.motors.motor_direction * self.speed
         t = data.time
+        if self.sp is not None:
+            self.sp.apply(data)
         self.sim.apply(ctrl)
         if self.hold_phase:
             self.lock.trim(data)
