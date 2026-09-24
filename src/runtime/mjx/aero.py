@@ -110,11 +110,14 @@ def aero_strip(
     omega_yw_dot = omega_w_d[1]
 
     # --- Velocity direction & folded angle of attack (branch-free) ---
-    norm_v = jnp.linalg.norm(vle)
-    safe = norm_v > 0.0
+    # Double where: sqrt and arctan2 never see the 0 (their tangents there are NaN,
+    # and NaN * 0 survives a single where). Forward values are linalg.norm's.
+    sq = jnp.sum(vle * vle)
+    safe = sq > 0.0
+    norm_v = jnp.where(safe, jnp.sqrt(jnp.where(safe, sq, 1.0)), 0.0)
     denom = jnp.where(safe, norm_v, 1.0)
     dir_vle = jnp.where(safe, vle / denom, jnp.zeros(3))
-    alpha = jnp.arctan2(jnp.abs(dir_vle[0]), jnp.abs(dir_vle[2]))
+    alpha = jnp.arctan2(jnp.abs(dir_vle[0]), jnp.where(safe, jnp.abs(dir_vle[2]), 1.0))
 
     dir_drag = -dir_vle
     dir_drag = dir_drag.at[1].set(0.0)

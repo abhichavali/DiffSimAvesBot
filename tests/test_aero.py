@@ -162,3 +162,17 @@ def test_aero_hold_keeps_the_generalized_force():
     for held in qfrc[1:4]:
         np.testing.assert_array_equal(held, qfrc[0])
     assert np.abs(qfrc[4] - qfrc[0]).max() > 1e-3 * np.abs(qfrc[0]).max()  # step 4 recomputes
+
+
+@pytest.mark.parametrize("omega", [(0.0, 0.0, 0.0), (0.0, 5.0, 0.0)])
+def test_mjx_aero_tangents_are_finite_at_zero_strip_velocity(omega):
+    """Still air, or a pure pitch rate (omega_y moves no strip): zero strip velocity. Every
+    force term is at least quadratic in it, so jacfwd and grad are finite there (were NaN)."""
+    def out(x):
+        f, t, alpha, speed = aero_wing(x[:3], jnp.zeros(3), x[3:], jnp.zeros(3), x[3:], side="L",
+                                       chords=jnp.array([CHORD]), x_rot=jnp.array([X_ROT]),
+                                       length=LENGTH, root=ROOT_OFFSET, num_blade=1, dt=DT)
+        return jnp.concatenate([f.ravel(), t.ravel(), alpha, speed])
+    x = jnp.array([*omega, 0.0, 0.0, 0.0])
+    assert np.isfinite(jax.jacfwd(out)(x)).all()
+    assert np.isfinite(jax.grad(lambda y: out(y).sum())(x)).all()
