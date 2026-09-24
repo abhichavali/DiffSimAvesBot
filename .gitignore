@@ -28,3 +28,4 @@ out/
 *.log
 .claude/settings.local.json
 hover_scene*.xml
+opt/tendon_seeds/
