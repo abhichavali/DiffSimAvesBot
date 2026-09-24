@@ -89,7 +89,8 @@ CPU validation is a manual checkpoint replay, not an in-loop gate.
 
 ## 4. The optimizer and reward
 
-Everything lives in `opt/optimize_control.py` (single file). Parameterization
+The optimizer was one file, `opt/optimize_control.py`, during this campaign; it is now
+that CLI over the `src/codesign/` library (`opt/README.md`). Parameterization
 (57 params total, all log-factors except harmonic depths):
 
 - Control (7): `[a0_log, a_1..a_3, b_1..b_3]`; a0 as log-factor of the seed a0; harmonics
@@ -502,8 +503,9 @@ fetch). Run numbering restarts at 1; §7's runs are "the old campaign".
 **Certification doctrine** (deploy target dt ≤ 0.06 ms): worst case over
 {euler, implicitfast, rk4} @0.06 plus euler/implicitfast @0.03 ("doctrine"); the "wide"
 sweep adds euler @0.04/0.09. Certify offline via `opt/design_io.py`
-`reconstruct_design` (warmup=8 is load-bearing) + `cpu_validate_design` with
-`cycle_stats=True`; require stationary per-cycle peaks.
+(`codesign.artifacts.reconstruct_design`, warmup=8 is load-bearing, then
+`codesign.cpu_check.cpu_rollout`, whose `cycle_peaks` are the per-cycle peaks);
+require stationary per-cycle peaks.
 
 **Pre-run physics sweeps** (the campaign's compass):
 
@@ -545,9 +547,9 @@ sweep adds euler @0.04/0.09. Certify offline via `opt/design_io.py`
 | run-5 it021 | 158.0 | 162.0 | — | harmonics replication #3, checkpoint only |
 | run-6 it050 | ~156 | 159.2 | ~351 | parity + lift; checkpoints only |
 
-Campaign gotchas (beyond §8): partial init flags (`--init-tendons`) do **not** carry
-motor pretension (~5 mNm of the result!) — warm-start with the full 57-value
-`--init-codesign` genome (§4 layout; transform validated in `opt/build_genome.py`).
+Campaign gotchas (beyond §8): partial init flags (`--init-tendons`, since removed) did
+**not** carry motor pretension (~5 mNm of the result!) — warm-start with the full
+57-value `--init-codesign` genome (§4 layout, now `codesign.genome.Genome`).
 Two optimizer processes on one GPU → cuSolver crash; verify kills by PID and
 `nvidia-smi --query-compute-apps` before relaunch. `uv run` re-syncs and removes
 jax[cuda12] — always `uv run --no-sync`.

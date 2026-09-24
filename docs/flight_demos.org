@@ -32,8 +32,9 @@ build pipeline, then each mode.
 | collision  | A red pole enters a wing's arc, is hit, then removed; contacts shown |
 
 Key files:
-- ~opt/hover_policy.py~ -- free-flight model build, ~level_stroke_plane~,
-  ~pd_init_theta~, feature definitions, and the (differentiable) trainer.
+- ~opt/hover_policy.py~ -- free-flight model build and the (differentiable) trainer.
+- ~src/runtime/hover_control.py~ -- the controller: ~level_stroke_plane~,
+  ~pd_init_theta~, the features and the stabilizing wrench.
 - ~src/view_hover.py~ -- the mode-based viewer (controller + per-mode schedules
   + live aero arrows).
 - ~src/flying.py~ -- post-compile XML surgery (~to_airframe~,

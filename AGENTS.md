@@ -37,16 +37,23 @@ The pipeline is **`designs/<bird>/<name>/{shoulder,control}.tg` → parser → c
 - `src/design_paths.py` — tool-default design paths (`DEFAULT_HUMMER_TG`,
   `HOVER_BASE_TG`, `LEGACY_BASELINE_TG`, `EAGLE_TG`). Nothing reads a design from the
   environment: every tool takes `--tg` and hands the parsed `Morphology` down.
-- `src/morphology/tg_parser.py` — `.tg` → typed `Morphology` dataclass tree
-- `src/morphology/` — geometry/symmetry derivation, MJCF emitter, wing planform (`wing_geometry.py`)
+- `src/morphology/` — the compiler (start at `compile.compile_file`): `tg_parser.py`
+  (`.tg` → the `Morphology` dataclasses of `model.py`), `geometry.py` / `tendon_net.py`
+  (strut poses, the 12 σ tendons) → `compile.py` (→ `compiled.py`), `motor_tendons.py`
+  (crank tendon ranges, measured on a probe scene), `emit_mjcf.py` / `emit_eagle.py` /
+  `mjcf_parts.py` (the XML), `wing_geometry.py` (wing planform from the STL)
 - `src/compile_tg.py` — compile CLI (`compile_tg(tg, out)` is what every tool calls)
-- `src/runtime/` — CPU simulation runtime: `aero.py` (quasi-steady blade-element aero,
-  the numpy reference), `control_signal.py`, `crank.py`, `wing_pitch.py`, `eagle_drive.py`
+- `src/runtime/` — CPU simulation runtime: `sim.py` (`PlateWingSim` / `rest_state`, the
+  plate-wing step every CPU loop uses), `aero.py` (quasi-steady blade-element aero, the
+  numpy reference), `control_signal.py`, `crank.py`, `wing_pitch.py`, `eagle_drive.py`.
+  Everything takes the `Morphology` the scene was compiled from.
 - `src/run_fixed_frequency.py`, `src/view_fixed_frequency.py`, `src/view_hover.py`,
   `src/view_eagle.py` — CPU runners/viewers; `src/demos/render_*.py` — headless MP4 renders
 - `src/runtime/mjx/` — **JAX/MJX port** of the simulation (GPU, jittable, differentiable). See the MJX section below.
-- `opt/` — co-design optimizer (`optimize_control.py`, `evolve_codesign.py`,
-  `hover_policy.py`, ...); see `opt/README.md`. `plot_fixed_frequency_gui.py` is the Tk GUI.
+- `src/codesign/` — the co-design library (`rig`, `genome`, `metrics`, `loss`, `train`,
+  `cpu_check`, `artifacts`); `opt/` — its CLIs (`optimize_control.py`,
+  `evolve_codesign.py`, `hover_policy.py`, ...). See `opt/README.md`.
+- `plot_fixed_frequency_gui.py` — the Tk GUI; `src/gui/` — its simulations.
 - `tests/` — pytest suite; `tests/golden/` — the golden behavior harness.
 - `docs/ROBUST_CODESIGN_METHODOLOGY.md` — how designs are certified (CPU peak torque).
 
@@ -66,10 +73,12 @@ that is `jit`/`vmap`-able and differentiable for gradient-based optimization. Th
 CPU path is unchanged and is the reference the port is validated against.
 
 - **Modules**: `wing_pitch.py`, `aero.py` (+ `AeroParams` pytree), `aero_runtime.py`,
-  `rollout.py` (`simulate(...)` / `rollout(...)`).
+  `rollout.py` (`physics_step`, `build_drive_config`, `simulate(...)`). The config
+  builders take the `Morphology`; `codesign.rig.setup` wires them for the optimizer.
 - **Autodiff**: forward mode (`jax.jacfwd`) works as-is; reverse mode (`jax.grad`)
-  needs `rollout.set_reverse_mode_solver(model)` / `simulate(..., differentiable=True)`.
-  **Geometry params (radius/attach/offsets) are not differentiable** (host-side compiler).
+  cannot trace MJX's solver `while_loop` unless `model.opt.iterations == 1`
+  (`opt/hover_policy.py` does that). **Geometry params (radius/attach/offsets) are not
+  differentiable** (host-side compiler).
 - **Batched**: `jax.vmap` a rollout over a swept param for parallel GPU runs.
 - **Tests**: `uv run pytest -q`; full behavior check: `uv run python -m tests.golden check`.
 - **GPU server**: SSH alias `HanatServer`; project at `/workspace/Tensegrity-Playground`

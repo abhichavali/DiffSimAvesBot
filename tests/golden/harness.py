@@ -428,7 +428,7 @@ for _n in ("shoulder", "soft_it009p"):
 
 
 def cpu_item(n, integrator, tmp, *, tendon_scale=None, ctrl=None, **kw):
-    """optimize_control.cpu_validate_design, the certification path (0.25 + 0.5 periods)."""
+    """codesign.cpu_check.cpu_rollout, the certification path (0.25 + 0.5 periods)."""
     scene = tmp / "scene.xml"
     model = compile_model(n, scene)
     cp, lag = ctrl_params(n)
