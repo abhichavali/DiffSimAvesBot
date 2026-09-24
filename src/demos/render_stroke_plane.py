@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import subprocess
 import sys
 from collections import deque
 from pathlib import Path
@@ -41,16 +40,20 @@ if str(SRC) not in sys.path:
 import mujoco  # noqa: E402
 
 import flying  # noqa: E402
-from morphology.tg_parser import load_morphology  # noqa: E402
-from render_configs import (  # noqa: E402
+from common import (  # noqa: E402
     ACTUATORS,
     TIP_SITES,
-    WING_COLORS,
-    _ffmpeg,
-    _save_still,
-    build_model,
+    airframe_xml,
+    attitude_pd,
+    captioner,
     draw_trail,
+    ffmpeg_pipe,
+    lift_free_bodies,
+    save_still,
+    scene_option,
+    smoothstep,
 )
+from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.aero import AeroBladeRuntime  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
     FourierControl,
@@ -64,9 +67,6 @@ from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 from runtime.realtime import get_actuator_id  # noqa: E402
 from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest  # noqa: E402
 
-PITCH_AXIS = np.array([0.0, 1.0, 0.0])
-MAC_FONT = Path("/System/Library/Fonts/Helvetica.ttc")
-
 # (label, stroke-plane tilt deg, stroke-plane pitch deg, drive speed x)
 # Ordered so each step changes ONE thing against the one before it.
 SEGMENTS = [
@@ -77,11 +77,6 @@ SEGMENTS = [
     ("level plane, fast drive", 0.0, 0.0, 1.40),
     ("plane rolled", 24.0, 0.0, 1.00),
 ]
-
-
-def smoothstep(x: float) -> float:
-    x = min(1.0, max(0.0, x))
-    return x * x * (3.0 - 2.0 * x)
 
 
 class Sequence:
@@ -146,8 +141,7 @@ def draw_stroke_plane(scene, disk_bid, data, radius, rgba):
 
 
 def render(args):
-    model = build_model("flying", args.tg, args.scene, skinned=False,
-                        bird_assets=args.bird_assets)
+    model = mujoco.MjModel.from_xml_string(airframe_xml(args.tg, args.scene))
     morph = load_morphology(args.tg)
     control = load_control_for_morphology(args.tg)
     seq = Sequence(args)
@@ -155,10 +149,7 @@ def render(args):
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data)
-    for j in range(model.njnt):
-        if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:
-            data.qpos[int(model.jnt_qposadr[j]) + 2] += args.lift
-    mujoco.mj_forward(model, data)
+    lift_free_bodies(model, data, args.lift)
 
     aero = AeroBladeRuntime(model)
     pitch_limit = WingPitchLimiter(model, data)
@@ -184,7 +175,6 @@ def render(args):
     prev_z = [z0]
     dt = float(model.opt.timestep)
     psi = [0.0]  # accumulated drive phase (rad)
-    qconj, q_tgt, q_err, att_err = (np.zeros(4), np.zeros(4), np.zeros(4), np.zeros(3))
 
     # Sample the trail off the physics clock, not the frame clock: one flap is
     # ~`control.period`, and a 30 fps frame is a tenth of that, so a per-frame
@@ -212,13 +202,7 @@ def render(args):
         f = np.array([0.0, 0.0,
                       m_total * g + args.z_k * (z0 - float(com[2])) - args.z_c * vz])
         rot = np.asarray(data.xmat[airframe_bid]).reshape(3, 3)
-        mujoco.mju_axisAngle2Quat(q_tgt, PITCH_AXIS, args.body_lean)
-        mujoco.mju_negQuat(qconj, data.xquat[airframe_bid])
-        mujoco.mju_mulQuat(q_err, q_tgt, qconj)
-        mujoco.mju_quat2Vel(att_err, q_err, 1.0)
-        tau = args.level_kp * att_err - args.level_kd * (
-            rot @ data.qvel[air_dofadr + 3 : air_dofadr + 6]
-        )
+        tau = attitude_pd(data, airframe_bid, air_dofadr, args.body_lean, args.level_kp, args.level_kd)
         mujoco.mj_applyFT(model, data, f, tau, com, airframe_bid, data.qfrc_applied)
 
         # Integrate the drive PHASE rather than scaling time. eval_control(t*speed)
@@ -245,18 +229,14 @@ def render(args):
     cam.azimuth = args.azimuth
     cam.elevation = args.elevation
     cam.distance = args.distance
-    scn_opt = mujoco.MjvOption()
-    for gi in range(len(scn_opt.geomgroup)):
-        scn_opt.geomgroup[gi] = 1 if gi <= 2 else 0
-    for si in range(len(scn_opt.sitegroup)):
-        scn_opt.sitegroup[si] = 0
+    scn_opt = scene_option()
 
     steps_per_frame = max(1, round((args.realtime_factor / args.fps) / dt))
     n_frames = int(seq.total / args.realtime_factor * args.fps)
     args.out.mkdir(parents=True, exist_ok=True)
     mp4 = args.out / f"{args.name}.mp4"
-    proc = _ffmpeg(mp4, args.width, args.height, args.fps)
-    caption = _captioner(args.height, args.no_captions)
+    proc = ffmpeg_pipe(mp4, args.width, args.height, args.fps)
+    caption = captioner(args.height, args.no_captions)
     still_frames = {int(n_frames * f) for f in args.still_fracs}
 
     print(f"[{args.name}] {n_frames} frames, {seq.total:.2f}s sim "
@@ -276,7 +256,7 @@ def render(args):
         px = caption(renderer.render(), seq.label(t))
         proc.stdin.write(px.tobytes())
         if frame in still_frames:
-            _save_still(args.out / f"{args.name}_f{frame:04d}.png", px)
+            save_still(args.out / f"{args.name}_f{frame:04d}.png", px)
         if frame % 20 == 0:
             tilt, sp_pitch, speed = seq.at(t)
             print(f"  frame {frame}/{n_frames} t={t:.2f}s "
@@ -289,34 +269,6 @@ def render(args):
     proc.wait()
     renderer.close()
     print(f"[{args.name}] done: {mp4}", flush=True)
-
-
-def _captioner(height, disabled):
-    """Stamp the caption into the frame itself.
-
-    Not ffmpeg's drawtext: that filter needs an ffmpeg built with libfreetype,
-    which the one on this machine is not, and a missing filter kills the encode
-    outright. PIL is already a matplotlib dependency, and stamping pixels also
-    puts the caption on the saved stills for free.
-    """
-    if disabled or not MAC_FONT.exists():
-        return lambda px, text: px
-    from PIL import Image, ImageDraw, ImageFont
-
-    font = ImageFont.truetype(str(MAC_FONT), max(11, int(height * 0.047)))
-
-    def stamp(px, text):
-        img = Image.fromarray(px)
-        draw = ImageDraw.Draw(img, "RGBA")
-        _, _, tw, th = draw.textbbox((0, 0), text, font=font)
-        x, y = (img.width - tw) // 2, img.height - th - int(height * 0.075)
-        pad = max(6, int(height * 0.017))
-        draw.rectangle([x - pad, y - pad, x + tw + pad, y + th + pad],
-                       fill=(0, 0, 0, 115))
-        draw.text((x, y), text, font=font, fill=(255, 255, 255, 245))
-        return np.asarray(img)
-
-    return stamp
 
 
 def self_check(args):

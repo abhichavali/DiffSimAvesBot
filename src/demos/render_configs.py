@@ -33,8 +33,6 @@ from __future__ import annotations
 import argparse
 import copy
 import math
-import os
-import subprocess
 import sys
 from collections import deque
 from pathlib import Path
@@ -49,7 +47,19 @@ if str(SRC) not in sys.path:
 import mujoco  # noqa: E402
 
 import flying  # noqa: E402
-from compile_tg import compile_tg  # noqa: E402
+from common import (  # noqa: E402
+    ACTUATORS,
+    TIP_SITES,
+    airframe_xml,
+    attitude_pd,
+    draw_aero_arrows,
+    draw_trail,
+    ffmpeg_pipe,
+    lift_free_bodies,
+    save_still,
+    scene_option,
+    smoothstep,
+)
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.aero import AeroBladeRuntime  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
@@ -62,12 +72,6 @@ from runtime.disk_orientation import DiskOrientation  # noqa: E402
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 from runtime.realtime import get_actuator_id  # noqa: E402
 from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest  # noqa: E402
-
-ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
-
-# Nose points +x, wings span +-y, so forward is +x and a positive rotation about
-# +y is nose-down (the forward lean of cruising flight).
-PITCH_AXIS = np.array([0.0, 1.0, 0.0])
 
 # Vertical weight-assist: F = m g (cancel) + k(z0 - z) - c vz. Horizontal and
 # rotational DOFs are untouched, so translation/pitch/roll stay physical while
@@ -87,15 +91,6 @@ Z_ASSIST = {
     "ceiling": (22.0, 2.0),
 }
 
-WING_COLORS = {
-    "L": np.array([0.10, 0.55, 1.0, 0.95], np.float32),
-    "R": np.array([1.0, 0.45, 0.10, 0.95], np.float32),
-}
-
-# Outermost aero blade site on each wing — the closest thing the model has to a
-# wingtip, and what the trail is traced from.
-TIP_SITES = {"L": "L_wing_aero_blade_04", "R": "R_wing_aero_blade_04"}
-
 # The collision course: one lone pole, then a gap made of two. Grouped by strike
 # so a pole hammered over several beats is ONE event, and so the two poles of the
 # gap are also one event (see CollisionPlan.note_hit).
@@ -106,30 +101,6 @@ POLE_NAMES = [n for g in POLE_GROUPS.values() for n in g]
 # contact ledger, the strike detection and the beat sheet are shared verbatim.
 CEILING_GEOM = "ceiling_slab"
 CEILING_GROUPS = {1: (CEILING_GEOM,)}
-
-
-def smoothstep(x: float) -> float:
-    x = min(1.0, max(0.0, x))
-    return x * x * (3.0 - 2.0 * x)
-
-
-# --------------------------------------------------------------------------- #
-# Wingtip trail (shared with render_stroke_plane)
-# --------------------------------------------------------------------------- #
-def _seg(scene, a, b, rgba, width):
-    """One capsule between two points -- a continuous tube.
-
-    `_arrow` would put a head on every sample, which reads as a dashed line
-    rather than a path.
-    """
-    if scene.ngeom >= scene.maxgeom:
-        return
-    g = scene.geoms[scene.ngeom]
-    mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_CAPSULE, np.zeros(3), np.zeros(3),
-                        np.zeros(9), np.asarray(rgba, dtype=np.float32))
-    mujoco.mjv_connector(g, mujoco.mjtGeom.mjGEOM_CAPSULE, width,
-                         a.astype(np.float64), b.astype(np.float64))
-    scene.ngeom += 1
 
 
 class WingSweep:
@@ -230,36 +201,13 @@ def wing_up(model, data, gid):
     return float(np.asarray(data.geom_xmat[gid]).reshape(3, 3)[2, 0])
 
 
-def draw_trail(scene, trail, com, rot, width):
-    """Body-local trail points, replayed into world at the bird's current pose."""
-    for side, pts in trail.items():
-        if len(pts) < 2:
-            continue
-        base = WING_COLORS[side]
-        world = [com + rot @ p for p in pts]
-        for k in range(1, len(world)):
-            rgba = base.copy()
-            # Older samples fade out, so the trail reads as a direction of travel.
-            rgba[3] = 0.10 + 0.80 * (k / (len(world) - 1))
-            _seg(scene, world[k - 1], world[k], rgba, width)
-
-
-
-
 # --------------------------------------------------------------------------- #
 # Scene building
 # --------------------------------------------------------------------------- #
 def build_model(config, tg, scene, *, skinned, bird_assets, pole_radius=0.025,
                 pole_top=2.4, ceiling_half_y=0.60, ceiling_thickness=0.055,
                 ceiling_rgba="1 1 1 1"):
-    os.environ["MORPHOLOGY_PATH"] = str(tg)
-    os.environ["MUJOCO_XML_PATH"] = str(scene)
-    # Colored structural tendons read as the tensegrity joint — vivid both bare
-    # and revealed through the fading skin.
-    compile_tg(tg, scene, color_structural_tendons=True)
-    xml = Path(scene).read_text()
-    xml = flying.to_airframe(xml)
-    xml = flying.shrink_pillar_visual(xml)
+    xml = airframe_xml(tg, scene)
     if config == "collision":
         xml = flying.add_poles(xml, POLE_NAMES, radius=pole_radius, z_hi=pole_top)
         xml = flying.enable_wing_collision(xml)
@@ -287,42 +235,6 @@ def build_model(config, tg, scene, *, skinned, bird_assets, pole_radius=0.025,
     if skinned:
         xml = flying.add_visual_bird(xml, assets_dir=bird_assets)
     return mujoco.MjModel.from_xml_string(xml)
-
-
-# --------------------------------------------------------------------------- #
-# Aero force arrows
-# --------------------------------------------------------------------------- #
-def _arrow(scene, a, b, rgba, width):
-    if scene.ngeom >= scene.maxgeom:
-        return
-    g = scene.geoms[scene.ngeom]
-    mujoco.mjv_initGeom(
-        g, mujoco.mjtGeom.mjGEOM_ARROW, np.zeros(3), np.zeros(3), np.zeros(9), rgba
-    )
-    mujoco.mjv_connector(
-        g, mujoco.mjtGeom.mjGEOM_ARROW, width, a.astype(np.float64), b.astype(np.float64)
-    )
-    scene.ngeom += 1
-
-
-def draw_aero_arrows(scene, aero, scale):
-    """Per-blade force arrows (thin) plus a bold per-wing net-force arrow."""
-    for wing in aero.wings:
-        if wing.cached_forces is None:
-            continue
-        col = WING_COLORS[wing.side]
-        thin = col.copy()
-        thin[3] = 0.55
-        net_f = np.zeros(3)
-        net_p = np.zeros(3)
-        for f, p in zip(wing.cached_forces, wing.cached_points):
-            _arrow(scene, np.asarray(p), np.asarray(p) + np.asarray(f) * scale, thin, 0.0013)
-            net_f += np.asarray(f)
-            net_p += np.asarray(p)
-        n = len(wing.cached_forces)
-        if n:
-            c = net_p / n
-            _arrow(scene, c, c + net_f * scale, col, 0.0032)
 
 
 # --------------------------------------------------------------------------- #
@@ -705,7 +617,7 @@ def stroke_plane_schedule(config, disk_orient, tilt0, pitch0, t, drive_start):
 
 
 # --------------------------------------------------------------------------- #
-# Camera / render options
+# Camera
 # --------------------------------------------------------------------------- #
 CEILING_AZIMUTH = 90.0      # side on, square to the flight path
 
@@ -750,19 +662,6 @@ def make_camera(model, airframe_bid, config):
     return cam
 
 
-def make_scene_option(config):
-    opt = mujoco.MjvOption()
-    # Show visual geoms (groups 0-2), hide collision group 3 and the anchor sites.
-    for gi in range(len(opt.geomgroup)):
-        opt.geomgroup[gi] = 1 if gi <= 2 else 0
-    for si in range(len(opt.sitegroup)):
-        opt.sitegroup[si] = 0
-    # No mjVIS_CONTACTPOINT: it pops a big yellow disk over the wing at the exact
-    # moment the strike should be readable. The crushed beat and the wingtip trail
-    # show the hit; a debug marker on top of them only hides it.
-    return opt
-
-
 # --------------------------------------------------------------------------- #
 # Main render loop
 # --------------------------------------------------------------------------- #
@@ -799,11 +698,7 @@ def render_config(config, args):
     # The ceiling clip flies just as high, for a different reason: the camera has
     # to get UNDER the bird to look up at the slab, and at the 0.28 m showcase
     # altitude there is no room between the bird and the floor to put it.
-    lift = args.collision_lift if obstacle else args.lift
-    for j in range(model.njnt):
-        if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:
-            data.qpos[int(model.jnt_qposadr[j]) + 2] += lift
-    mujoco.mj_forward(model, data)
+    lift_free_bodies(model, data, args.collision_lift if obstacle else args.lift)
 
     aero = AeroBladeRuntime(model)
     pitch = WingPitchLimiter(model, data)
@@ -835,7 +730,6 @@ def render_config(config, args):
     # clip opened with the bird already parked in the obstacle.
     plan_start = [drive_start + (args.warmup if obstacle else 0.0)]
     x_ref = [float(data.subtree_com[airframe_bid][0])]
-    qconj, q_tgt, q_err, att_err = (np.zeros(4), np.zeros(4), np.zeros(4), np.zeros(3))
     phase_ref = []                                # per-drive crank angle at clip start
     flap_lo, flap_hi = [9e9, 9e9], [-9e9, -9e9]   # per-wing beat extremes since the last print
     flap_gap = [0.0]                              # worst |L-R| elevation, i.e. how out of step
@@ -1052,15 +946,9 @@ def render_config(config, args):
                                - args.speed_gain * float(vel[1])),
                 m_total * g + z_k * (plan.z_target(t, z0) - com_z) - z_c * vz,
             ])
-            # Attitude PD toward the cruise lean. Free-joint angular qvel is
-            # body-local and mj_applyFT wants a world torque -> rotate it out.
-            rot = np.asarray(data.xmat[airframe_bid]).reshape(3, 3)
-            mujoco.mju_axisAngle2Quat(q_tgt, PITCH_AXIS, args.cruise_lean)
-            mujoco.mju_negQuat(qconj, data.xquat[airframe_bid])
-            mujoco.mju_mulQuat(q_err, q_tgt, qconj)
-            mujoco.mju_quat2Vel(att_err, q_err, 1.0)
-            tau = a * (args.level_kp * att_err - args.level_kd
-                       * (rot @ data.qvel[air_dofadr + 3 : air_dofadr + 6]))
+            # Attitude PD toward the cruise lean.
+            tau = a * attitude_pd(data, airframe_bid, air_dofadr, args.cruise_lean,
+                                  args.level_kp, args.level_kd)
             mujoco.mj_applyFT(model, data, f, tau, com, airframe_bid, data.qfrc_applied)
         ramp = ramp_factor(data.time, drive_start, ramp_seconds)
         if plan is None:
@@ -1195,11 +1083,11 @@ def render_config(config, args):
     renderer = None if args.dry_run else mujoco.Renderer(
         model, height=args.height, width=args.width)
     cam = make_camera(model, airframe_bid, config)
-    scn_opt = make_scene_option(config)
+    scn_opt = scene_option()
 
     args.out.mkdir(parents=True, exist_ok=True)
     mp4 = args.out / f"config_{config}.mp4"
-    proc = None if args.dry_run else _ffmpeg(mp4, args.width, args.height, args.fps)
+    proc = None if args.dry_run else ffmpeg_pipe(mp4, args.width, args.height, args.fps)
     still_frames = set() if args.dry_run else {int(n_frames * f) for f in args.still_fracs}
 
     print(f"[{config}] rendering {n_frames} frames "
@@ -1244,7 +1132,7 @@ def render_config(config, args):
         px = renderer.render()
         proc.stdin.write(px.tobytes())
         if frame in still_frames:
-            _save_still(args.out / f"config_{config}_f{frame:04d}.png", px)
+            save_still(args.out / f"config_{config}_f{frame:04d}.png", px)
         if plan is not None and frame % 15 == 0:
             t = data.time - plan_start[0]
             roll = math.degrees(math.asin(max(-1.0, min(1.0, data.xmat[airframe_bid][7]))))
@@ -1433,22 +1321,6 @@ def ceiling_report(args, plan, touch, sink, slab, last, upright, up_free, plateg
          f"— they are not recovering, i.e. a wing is over on its back")
     print("[ceiling] contact verified: the wings struck the slab, nothing passed through "
           "it, and the glide dropped the bird far enough to fly on underneath", flush=True)
-
-
-def _ffmpeg(path, w, h, fps):
-    cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps),
-        "-i", "-", "-an", "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
-        str(path),
-    ]
-    return subprocess.Popen(cmd, stdin=subprocess.PIPE)
-
-
-def _save_still(path, px):
-    import matplotlib.image as mpimg
-
-    mpimg.imsave(str(path), px)
 
 
 def ceiling_self_check(args):

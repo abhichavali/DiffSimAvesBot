@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import math
 import os
-import subprocess
 import sys
 from collections import deque
 from pathlib import Path
@@ -29,17 +28,27 @@ if str(SRC) not in sys.path:
 import mujoco
 import numpy as np
 
+from common import (
+    ACTUATORS,
+    TIP_SITES,
+    WING_COLORS,
+    crank_gears,
+    ctrl_per_phase_rate,
+    draw_aero_arrows,
+    draw_trail,
+    ffmpeg_pipe,
+    relative_phase,
+    scene_option,
+    smoothstep,
+)
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
-from render_configs import TIP_SITES, WING_COLORS, draw_aero_arrows, draw_trail, smoothstep
 from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
 from runtime.crank import sync_crank_disks_at_rest
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.realtime import get_actuator_id
 from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
-
-ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 
 # One waypoint per wingbeat. Step size is the constraint, not the list: the slew
 # happens in half a beat, so a step of d deg costs the right motors an extra
@@ -48,40 +57,14 @@ PHASES = [0, 90, 180, 90, 0, -90, -180, -90, 0, 45, 135, 180, 90, 0, -45, -135,
           -180, -90, 0, 60, 120, 180, 120, 60, 0, 0]
 
 
-def _crank_gears(model):
-    """Each crank hinge's rotation direction, from its actuator gear.
-
-    The right shoulder is the Y-mirror of the left, so its two cranks run the
-    opposite gear (see emit_mjcf._add_actuators). A phase offset has to follow
-    each crank's OWN direction or it breaks the t1-vs-t4 relationship inside the
-    shoulder -- which is invisible at 180 deg (+-180 are the same angle) and
-    wrong everywhere else.
-    """
-    gears = {}
-    for name in ACTUATORS:
-        side, station = name.split("_")[0], name.split("_")[2]
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_{station}_disk_hinge")
-        aid = get_actuator_id(model, name)
-        if jid >= 0 and aid >= 0:
-            gears[(side, station)] = (jid, float(np.sign(model.actuator_gear[aid][0])))
-    return gears
-
-
 def offset_right_cranks(model, data, phase_rad: float) -> None:
     """Advance the right shoulder by phase_rad (0 = the usual in-phase beat)."""
     if not phase_rad:
         return
-    for (side, _), (jid, gear) in _crank_gears(model).items():
+    for (side, _), (jid, gear) in crank_gears(model).items():
         if side == "R":
             data.qpos[model.jnt_qposadr[jid]] += gear * phase_rad
     mujoco.mj_forward(model, data)
-
-
-def relative_phase(model, data, gears) -> float:
-    """Right-vs-left crank phase in radians, each side read in its own direction."""
-    jl, gl = gears[("L", "t1")]
-    jr, gr = gears[("R", "t1")]
-    return gr * float(data.qpos[model.jnt_qposadr[jr]]) - gl * float(data.qpos[model.jnt_qposadr[jl]])
 
 
 def phase_schedule(phases_deg, dwell_beats, ramp_beats, period):
@@ -124,13 +107,7 @@ def setup(tg: Path, scene: Path, phase_deg: float, warmup_periods: float):
     actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]
     drive_start = data.time
     ramp_seconds = warmup_periods * control.period
-
-    # The nominal drive turns each crank exactly one revolution per control
-    # period, so an extra ctrl of nominal*r on the right motors adds r rev of
-    # relative phase per period. That is the whole phase-rate calibration.
-    ts = np.arange(0.0, control.period, model.opt.timestep)
-    nominal = float(np.mean([morph.motors.motor_direction * eval_control(control, t) for t in ts]))
-    ctrl_per_phase_rate = nominal * control.period / (2.0 * math.pi)
+    per_phase_rate = ctrl_per_phase_rate(model, morph, control)
 
     def step(phase_rate: float = 0.0) -> None:
         data.qfrc_applied[:] = 0.0
@@ -139,7 +116,7 @@ def setup(tg: Path, scene: Path, phase_deg: float, warmup_periods: float):
         pitch.apply(model, data)
         ramp = ramp_factor(data.time, drive_start, ramp_seconds)
         base = ramp * morph.motors.motor_direction * eval_control(control, data.time)
-        extra = phase_rate * ctrl_per_phase_rate
+        extra = phase_rate * per_phase_rate
         for name, aid in zip(ACTUATORS, actuator_ids):
             if aid >= 0:
                 data.ctrl[aid] = base + (extra if name[0] == "R" else 0.0)
@@ -182,7 +159,7 @@ def self_check(args) -> None:
     # schedule, but only inside the back half of each hold: the ramps are supposed
     # to lag, the holds are what the viewer reads.
     model, data, control, _, step = setup(args.tg, args.scene, args.phases[0], args.warmup_periods)
-    gears = _crank_gears(model)
+    gears = crank_gears(model)
     dt = model.opt.timestep
     for _ in range(math.ceil(args.warmup_periods * control.period / dt)):
         step()
@@ -339,7 +316,7 @@ def main() -> None:
     print(f"pass 1/2: motor speeds over {n_frames} frames", flush=True)
     times, speeds, lookat = [], None, None
     for frame, t, model, data, _, _ in play(args):
-        gears = _crank_gears(model)
+        gears = crank_gears(model)
         if speeds is None:
             speeds, lookat = {k: [] for k in gears}, data.xpos[1:].mean(axis=0).copy()
         times.append(t)
@@ -353,18 +330,8 @@ def main() -> None:
     cam.lookat[:] = lookat
     cam.azimuth, cam.elevation, cam.distance = 150.0, -12.0, 1.05
 
-    opt = mujoco.MjvOption()
-    for gi in range(len(opt.geomgroup)):
-        opt.geomgroup[gi] = 1 if gi <= 2 else 0
-    for si in range(len(opt.sitegroup)):
-        opt.sitegroup[si] = 0
-
-    proc = subprocess.Popen(
-        ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
-         "-s", f"{args.width}x{args.height + args.plot_height}", "-r", str(args.fps), "-i", "-",
-         "-an", "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", str(args.out)],
-        stdin=subprocess.PIPE,
-    )
+    opt = scene_option()
+    proc = ffmpeg_pipe(args.out, args.width, args.height + args.plot_height, args.fps)
     print(f"pass 2/2: rendering {n_frames} frames, {seconds / control.period:.0f} beats, "
           f"phases {args.phases} -> {args.out}", flush=True)
 
@@ -383,7 +350,7 @@ def main() -> None:
         if frame % 60 == 0:
             print(f"  frame {frame:4d}/{n_frames}  t={t:5.2f}s  "
                   f"phase cmd={math.degrees(phase_at(t)):+7.1f} "
-                  f"actual={math.degrees(relative_phase(model, data, _crank_gears(model))):+7.1f} deg",
+                  f"actual={math.degrees(relative_phase(model, data, crank_gears(model))):+7.1f} deg",
                   flush=True)
 
     proc.stdin.close()
