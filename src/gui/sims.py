@@ -55,13 +55,14 @@ def cached_sim(func, tg_path: Path, scene_path: Path, *args, control_path: Path 
                settle_periods: float = SETTLE_PERIODS):
     """Disk-cache sim results keyed by the design files' mtimes; unchanged designs plot instantly.
 
-    scene_path is excluded from the key: it's a per-pane temp compile target and
-    doesn't affect results.
+    The newest mtime under src/ is in the key too, so a physics edit (aero, sim,
+    compiler) misses. scene_path is excluded: it's a per-pane temp compile target
+    and doesn't affect results.
     """
     tg = tg_path.resolve()
     control = (control_path or coupled_control_path(tg)).resolve()
     sp_json = tg.parent / "strokeplane_optimized.json"
-    key = (func.__name__, Path(func.__code__.co_filename).stat().st_mtime_ns,
+    key = (func.__name__, max(p.stat().st_mtime_ns for p in (ROOT / "src").rglob("*.py")),
            str(tg), tg.stat().st_mtime_ns, str(control), control.stat().st_mtime_ns,
            sp_json.stat().st_mtime_ns if sp_json.exists() else 0, args, settle_periods)
     cache_file = PLOT_CACHE_DIR / (hashlib.sha1(repr(key).encode()).hexdigest() + ".pkl")

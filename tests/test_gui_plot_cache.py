@@ -64,6 +64,12 @@ def test_plot_cache_and_resize_guard(tmp_path, monkeypatch) -> None:
     sims.cached_sim(fake_sim, tg, scene, 5.0, control_path=control, settle_periods=3.0)
     assert calls == [5.0, 2.0, 5.0], "touched design must miss"
 
+    monkeypatch.setattr(sims, "ROOT", tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "aero.py").write_text("")
+    sims.cached_sim(fake_sim, tg, scene, 5.0, control_path=control, settle_periods=3.0)
+    assert calls == [5.0, 2.0, 5.0, 5.0], "edited physics code must miss"
+
     monkeypatch.setattr(gui, "FigureCanvasTkAgg", FakeCanvas)
     canvas = gui.embed_figure(object(), object(), expand=True)
     canvas.widget.emit("<Configure>")
