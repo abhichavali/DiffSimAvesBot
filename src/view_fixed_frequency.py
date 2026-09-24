@@ -23,16 +23,13 @@ import numpy as np
 from compile_tg import compile_tg
 from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
-from runtime.aero import AeroBladeRuntime
-from runtime.control_signal import eval_control, load_control, load_control_for_morphology, ramp_factor
-from runtime.crank import sync_crank_disks_at_rest
+from runtime.control_signal import drive_command, load_control, load_control_for_morphology
 from runtime.disk_orientation import DiskOrientation
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.realtime import RealtimeSync, get_actuator_id
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
+from runtime.realtime import RealtimeSync
+from runtime.sim import PlateWingSim
 
 ROOT = Path(__file__).resolve().parent.parent
-ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 
 
 def main() -> None:
@@ -58,10 +55,8 @@ def main() -> None:
 
     morph = load_morphology(args.tg)
     require_bird(morph, *PLATE_BIRDS, tool="view_fixed_frequency")
-    model = mujoco.MjModel.from_xml_path(str(args.scene))
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
+    sim = PlateWingSim(mujoco.MjModel.from_xml_path(str(args.scene)), morph)
+    model, data = sim.model, sim.data
 
     # A learned stroke-plane signal next to the design (optimizer artifact) is
     # applied automatically; --stroke-plane-demo overrides it with the test circle.
@@ -89,9 +84,6 @@ def main() -> None:
         assert np.allclose(model.body_quat[body_ids], compiled_quats, atol=1e-9)
 
     control = load_control(args.control) if args.control else load_control_for_morphology(args.tg)
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
-    actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]
     drive_start = data.time
     ramp_seconds = 2.0 * control.period
 
@@ -111,14 +103,7 @@ def main() -> None:
                 tilt0 + args.stroke_plane_amp * math.sin(phase),
                 pitch0 + args.stroke_plane_amp * math.sin(phase + math.pi / 2.0),
             )
-        aero.apply(model, data)
-        pitch.apply(model, data)
-        data.ctrl[:] = 0.0
-        ramp = ramp_factor(data.time, drive_start, ramp_seconds)
-        base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
-        for aid in actuator_ids:
-            if aid >= 0:
-                data.ctrl[aid] = base_ctrl
+        sim.apply(drive_command(control, morph.motors.motor_direction, data.time, drive_start, ramp_seconds))
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         sync = RealtimeSync(data, realtime_factor=args.speed)

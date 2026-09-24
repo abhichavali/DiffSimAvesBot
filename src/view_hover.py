@@ -34,15 +34,12 @@ import numpy as np
 import flying
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
-from runtime.aero import AeroBladeRuntime
-from runtime.crank import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
 from runtime.hover_control import HoverCfg, hover_features, level_stroke_plane, policy_commands
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.realtime import RealtimeSync, get_actuator_id
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
+from runtime.realtime import RealtimeSync
+from runtime.sim import PlateWingSim
 
-ACT = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 MODES = ("hover", "vector", "multimodal", "flying", "collision")
 WING_COLORS = {"L": np.array([0.10, 0.55, 1.0, 0.95]), "R": np.array([1.0, 0.45, 0.10, 0.95])}
 # modes that hold the body extra-stiffly so it stays a clean platform while the
@@ -159,9 +156,8 @@ def main() -> None:
     model.opt.timestep = meta["dt_ms"] * 1e-3
     model.opt.gravity[2] = -meta["gravity"]
     level_stroke_plane(model)  # leveled hover base; multimodal/vector re-tilt it live
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data, morph.motors.crank_phase_lag_rad)
+    sim = PlateWingSim(model, morph)
+    data = sim.data
 
     f_max = HOLD_FMAX.get(args.mode, meta["f_max"])
     cfg = HoverCfg(a0=meta["a0"], f_max=f_max, tau_max=meta["tau_max"],
@@ -176,10 +172,7 @@ def main() -> None:
         com0 = com0.copy(); com0[2] += args.hover_height
         mujoco.mj_forward(model, data)
 
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
     disk = DiskOrientation(model)
-    aids = [get_actuator_id(model, n) for n in ACT]
     alpha = float(meta.get("filter_alpha", 1.0))
     ema = hover_features(data.qpos, data.qvel, cfg, com0, np)
 
@@ -211,15 +204,12 @@ def main() -> None:
         feats = hover_features(data.qpos, data.qvel, cfg, com0, np)
         ema = ema + alpha * (feats - ema)
         force, tau, _u = policy_commands(K, b, ema, cfg, np)
-        data.qfrc_applied[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
-        data.qfrc_applied[dof : dof + 3] += np.asarray(force, float)
-        data.qfrc_applied[dof + 3 : dof + 6] += np.asarray(tau, float)
-        data.ctrl[:] = 0.0
-        for aid in aids:
-            if aid >= 0:
-                data.ctrl[aid] = float(cfg.a0) * crank_factor
+
+        def wrench(_m, d) -> None:
+            d.qfrc_applied[dof : dof + 3] += np.asarray(force, float)
+            d.qfrc_applied[dof + 3 : dof + 6] += np.asarray(tau, float)
+
+        sim.apply(float(cfg.a0) * crank_factor, wrench)
 
     print(f"[{args.mode}] gravity={meta['gravity']:.3f} dt={meta['dt_ms']:.3f}ms "
           f"f_max={f_max} arrows={draw_arrows} height={args.hover_height}", flush=True)
@@ -231,7 +221,7 @@ def main() -> None:
         while viewer.is_running():
             sync.step_and_sync(model, data, viewer, pre_mj_step_hook=step_forces)
             if draw_arrows:
-                draw_aero_arrows(viewer.user_scn, aero, args.force_scale)
+                draw_aero_arrows(viewer.user_scn, sim.aero, args.force_scale)
 
 
 if __name__ == "__main__":
