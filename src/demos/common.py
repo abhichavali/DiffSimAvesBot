@@ -2,8 +2,8 @@
 
 Scene dressing (wing colours, the wingtip trail, per-blade aero arrows, burned-in
 captions, the render option), the ffmpeg pipe and PNG stills, the free-flight
-pieces (the airframe MJCF, lifting it off the floor, the attitude PD) and the
-crank-phase helpers of the two L/R phase clips. Each render_*.py keeps its own
+pieces (the airframe MJCF, lifting it off the floor) and the crank-phase helpers
+of the two L/R phase clips. Each render_*.py keeps its own
 CPU drive loop.
 """
 
@@ -20,10 +20,6 @@ import flying
 from compile_tg import compile_tg
 from runtime.control_signal import eval_control
 from runtime.crank import CRANK_ACTUATORS
-
-# Nose points +x, wings span +-y, so forward is +x and a positive rotation about
-# +y is nose-down (the forward lean of cruising flight).
-PITCH_AXIS = np.array([0.0, 1.0, 0.0])
 
 WING_COLORS = {
     "L": np.array([0.10, 0.55, 1.0, 0.95], np.float32),
@@ -68,21 +64,6 @@ def lift_free_bodies(model, data, dz: float) -> None:
         if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:
             data.qpos[int(model.jnt_qposadr[j]) + 2] += dz
     mujoco.mj_forward(model, data)
-
-
-def attitude_pd(data, bid, dofadr: int, lean: float, kp: float, kd: float) -> np.ndarray:
-    """World-frame PD torque on free body `bid` toward a pitch of `lean` about PITCH_AXIS.
-
-    Free-joint angular qvel is body-local and mj_applyFT wants a world torque, so
-    the damping term is rotated out.
-    """
-    q_tgt, qconj, q_err, att_err = np.zeros(4), np.zeros(4), np.zeros(4), np.zeros(3)
-    rot = np.asarray(data.xmat[bid]).reshape(3, 3)
-    mujoco.mju_axisAngle2Quat(q_tgt, PITCH_AXIS, lean)
-    mujoco.mju_negQuat(qconj, data.xquat[bid])
-    mujoco.mju_mulQuat(q_err, q_tgt, qconj)
-    mujoco.mju_quat2Vel(att_err, q_err, 1.0)
-    return kp * att_err - kd * (rot @ data.qvel[dofadr + 3 : dofadr + 6])
 
 
 # --------------------------------------------------------------------------- #

@@ -1,28 +1,21 @@
 """Render the three flight-demo configs to MP4 (headless, no mjpython needed).
 
   1. flying     — the whole robot as one free airframe (tensegrity joint, wings,
-                  and body-mounted motors), flapping and holding altitude on a
-                  soft vertical weight-assist while pitch/roll/aero stay physical.
+                  and body-mounted motors), flapping.
   2. multimodal — same airframe with a live stroke-plane schedule that tilts the
                   disks, producing up/down-stroke asymmetry; per-blade aero force
                   arrows are drawn so the asymmetry is visible.
-  3. collision  — the bird cruises level down a line of poles and hits them TWICE,
-                  and each hit plays the same beat: the wing FEELS the pole (real
-                  MuJoCo contact, nothing scripted), sweeps back into a tuck, and
-                  the bird glides on out of the obstacle with its wings folded
-                  before the motors spool back up and it flies the sag off. Then
-                  it flies into a GAP between two poles narrower than its own
-                  wingspan, so both wings are caught at once — same event, bigger.
-                  Attitude authority is reduced through each knock but never cut:
-                  this flapper is open-loop unstable, so cutting it outright shows
-                  the airframe diverging rather than the poles hitting it (see
-                  --upset-floor).
-  4. ceiling    — the same beat against an overhead slab instead of poles. The
-                  bird cruises under a soffit, tilts forward and CLIMBS into it
-                  until a wing plate physically strikes the underside (again a
-                  real MuJoCo contact, not a timestamp), then folds, glides for
-                  a second losing height, and flies on underneath with the whole
-                  stroke clearing the slab. Shares every envelope with 3.
+  3. collision  — a line of poles down the flight path, struck TWICE, and each hit
+                  plays the same beat: the wing FEELS the pole (real MuJoCo
+                  contact, nothing scripted), the drive knocks down, the wings
+                  sweep back into a tuck, and the motors spool back up. The second
+                  strike is a GAP between two poles narrower than the wingspan, so
+                  both wings are caught at once — same event, bigger.
+  4. ceiling    — the same beat against an overhead slab planted just above the
+                  stroke (again a real MuJoCo contact, not a timestamp). Shares
+                  every envelope with 3.
+
+Free flight is uncontrolled until the closed-loop hover policy drives it.
 
 Frames are piped straight to ffmpeg (already on PATH) — no imageio/opencv dep.
 Reuses the existing runtime (control, aero, crank-sync, pitch, disk-orientation).
@@ -49,7 +42,6 @@ import mujoco  # noqa: E402
 import flying  # noqa: E402
 from common import (  # noqa: E402
     airframe_xml,
-    attitude_pd,
     draw_aero_arrows,
     draw_trail,
     ffmpeg_pipe,
@@ -68,24 +60,6 @@ from runtime.control_signal import (  # noqa: E402
 )
 from runtime.disk_orientation import DiskOrientation  # noqa: E402
 from runtime.sim import PlateWingSim  # noqa: E402
-
-# Vertical weight-assist: F = m g (cancel) + k(z0 - z) - c vz. Horizontal and
-# rotational DOFs are untouched, so translation/pitch/roll stay physical while
-# the airframe holds frame. Soft for the free-flight showcase (visible bob);
-# stiff and near-critically damped for collision, where the cruise has to be
-# genuinely level: at c=0.9 (zeta 0.37) the altitude mode rang +-0.05 m, enough
-# to throw the wingtip into the ceiling a second after the clip opened, long
-# before the scripted climb. c=2.0 is zeta 0.83 against 2*sqrt(k m)=2.42.
-# ponytail: k = altitude-hold stiffness, c = vertical damping.
-Z_ASSIST = {
-    "flying": (4.0, 0.08),
-    "multimodal": (4.0, 0.08),
-    "collision": (22.0, 2.0),
-    # The ceiling clip needs this even more than the poles do: the whole event is
-    # a 45 mm bite out of the wing arc, so a ringing altitude mode would either
-    # miss the slab or hit it on frame one.
-    "ceiling": (22.0, 2.0),
-}
 
 # The collision course: one lone pole, then a gap made of two. Grouped by strike
 # so a pole hammered over several beats is ONE event, and so the two poles of the
@@ -239,32 +213,22 @@ def build_model(config, tg, scene, *, skinned, bird_assets, pole_radius=0.025,
 class CollisionPlan:
     """Two-strike pole clip, in sim seconds since the plan clock started.
 
-      cruise  — level forward flight down the line of poles.
+      cruise  — full drive down the line of poles.
       strike  — a wing catches a pole. The wings keep beating INTO it for
                 `strike_seconds`: cutting the drive on the instant of contact
                 stopped the wings so fast that the pole never appeared to do
                 anything to the wingbeat.
       fold    — the drive fades to the `glide_drive` trickle over
                 `stop_seconds` and the wings sweep aft into a tuck (WingSweep).
-      glide   — wings folded, motors barely turning, but still FLYING: the speed
-                is back to cruise within `glide_pickup` of the release, so the
-                glide is what carries the bird clear of the pole it just hit
-                rather than parking it in the obstacle. It sags `hit_drop`
-                through this, which is what an unpowered glide does.
+      glide   — wings folded, motors barely turning.
       recover — after `glide_seconds` the motors spool back up over
-                `spool_seconds`, the wings come back out, the sag is flown off
-                and the cruise resumes.
-      again   — `gap_seconds` of recovered cruise later it flies into a GAP
-                between two poles that is narrower than its own wingspan, so
-                both wings are caught at once. Same knock; the clip closes on
-                the recovery from it.
+                `spool_seconds` and the wings come back out.
+      again   — `gap_seconds` after the recovery, a GAP between two poles that
+                is narrower than the wingspan, so both wings are caught at once.
+                Same knock; the clip closes on the recovery from it.
 
     The strike times are unscripted — they come from the actual contacts, so
     everything downstream keys off the real hits, not guessed timestamps.
-
-    The VERTICAL assist never lets go. It is not a stabiliser here, it is what
-    stands in for gravity: these wings out-lift the cancelled weight by ~0.3 N,
-    so a hands-off window doesn't drop the bird, it fires it 0.6 m upward.
     """
 
     def __init__(self, args):
@@ -297,59 +261,21 @@ class CollisionPlan:
         """Spool complete: full stroke, cruising again."""
         return self.t_spool(h) + self.a.spool_seconds
 
-    def _knock(self, h, t, floor, t_on=None, ramp=None):
-        """One strike's knock-down-and-recover envelope: 1 -> `floor` -> 1.
-
-        `t_on`/`ramp` say when the recovery starts and how long it takes. The
-        default is the motor spool, but the SPEED channel comes back on the much
-        shorter fold timescale — see speed_target.
-        """
+    def _knock(self, h, t, floor):
+        """One strike's knock-down-and-recover envelope: 1 -> `floor` -> 1,
+        recovering over the motor spool."""
         off = 1.0 - smoothstep((t - h - self.a.strike_seconds) / self.a.stop_seconds)
         # Blended from the floor, not max()'d against it: smoothstep is flat at
         # its start, so a decaying trickle plus a rising ramp actually DIPPED
         # below the floor for the first tenth of a second after release.
-        on = smoothstep((t - (self.t_spool(h) if t_on is None else t_on))
-                        / (self.a.spool_seconds if ramp is None else ramp))
+        on = smoothstep((t - self.t_spool(h)) / self.a.spool_seconds)
         return max(off, floor + (1.0 - floor) * on)
 
-    def _env(self, t, floor, **kw):
+    def _env(self, t, floor):
         """The worst knock in force right now. Causal: a strike still in the
         future contributes exactly 1.0, so the whole beat sheet can be built up
-        front (which is what lets the poles be PLACED from it, see path_x)."""
-        return min([1.0] + [self._knock(h, t, floor, **kw) for h in self.hits.values()])
-
-    def assist(self, t):
-        """Attitude hold + station keeping: 1 = flying it, `upset_floor` = knocked.
-
-        The floor is not timidity. The wings are separate free bodies held on by
-        tendons alone, so with attitude hold at a hard 0 the airframe thrashes and
-        the two wings swing independently — they went 64 deg out of step and beat
-        anywhere from 35 to 78 deg, which reads as broken flapping, not as a bird
-        taking a knock. A floor caps the airframe's angular excursion.
-        """
-        f = self.a.upset_floor
-        return min([1.0] + [f + (1.0 - f) * smoothstep(
-            (t - h - self.a.upset) / self.a.recover) for h in self.hits.values()])
-
-    def speed_target(self, t):
-        """Cruise, CHECKED by each strike, then carried on by the glide.
-
-        Speed does not ride the drive envelope. It used to, and that is what made
-        the clip read as a knock-then-recover script instead of one movement: the
-        bird was held at `stall_frac` for the whole unpowered window, so it sat in
-        the obstacle it had just hit — 1.4 s of sim wedged in the gap, grinding —
-        and only crept clear once the motors were already back.
-
-        A glide is not a stall. The speed dips at the impact, which is what sells
-        the pole actually checking the bird, and is back by the time the fold has
-        completed (`glide_pickup`, the fold timescale — NOT `spool_seconds`), so
-        the glide is what carries it clear of the poles. Hit, fold, glide out,
-        fly on: the wings are still unpowered right through it.
-        """
-        return self.a.cruise_speed * min(
-            [1.0] + [self._knock(h, t, self.a.stall_frac,
-                                 t_on=self.t_release(h), ramp=self.a.glide_pickup)
-                     for h in self.hits.values()])
+        front."""
+        return min([1.0] + [self._knock(h, t, floor) for h in self.hits.values()])
 
     def drive(self, t):
         """Full, knocked down by each strike, then spooling straight back up.
@@ -383,29 +309,19 @@ class CollisionPlan:
             folds.append(out - back)
         return self.a.fold_sweep * max([0.0] + folds)
 
-    def z_target(self, t, z0):
-        """Level cruise, sagging `hit_drop` under each strike and flying it back off.
-
-        Reuses the drive envelope rather than carrying a schedule of its own: the
-        bird loses height exactly while it has lost its stroke, which is both what
-        a knocked bird does and one fewer timeline to keep in step with the rest.
-        """
-        return z0 - self.a.hit_drop * (1.0 - self._env(t, 0.0))
-
 
 def ceiling_args(args):
     """The pole beat sheet's knobs, overwritten with the ceiling's own.
 
     A COPY, not a mutation. The pole numbers are tuned and asserted against each
     other (`--glide-seconds < 0.7`, "the bird should be flapping again as soon as
-    it is past the pole") and the ceiling wants the opposite — a full second of
-    folded descent, because the recovery here IS losing height. Copying means the
-    two clips can disagree without either config gaining an `if`.
+    it is past the pole") and the ceiling wants the opposite — a long glide under
+    the slab. Copying means the two clips can disagree without either config
+    gaining an `if`.
 
     Rebinding a handful of fields rather than threading a second args object
-    through the render loop also means every downstream read — the plan, the
-    stroke-plane tilt, the attitude target, the servos — picks the ceiling values
-    up with no extra plumbing.
+    through the render loop also means every downstream read — the plan and the
+    stroke-plane tilt — picks the ceiling values up with no extra plumbing.
     """
     a = copy.copy(args)
     a.strike_seconds = args.ceiling_strike_seconds
@@ -413,97 +329,19 @@ def ceiling_args(args):
     # No tuck here. A pole is something to get a wing PAST, so sweeping it aft
     # earns its keep; a ceiling is not, and the swept wings read as folded back
     # and hunched up when what the shot wants is a bird holding its wings out and
-    # skimming along underneath. The recovery is the height, not the pose.
+    # skimming along underneath.
     a.fold_sweep = args.ceiling_fold_sweep
     a.cruise_pitch = args.ceiling_pitch
-    a.cruise_lean = args.ceiling_lean
-    a.hit_drop = 0.0            # unused: CeilingPlan.z_target replaces it wholesale
     return a
 
 
 class CeilingPlan(CollisionPlan):
-    """One-strike overhead-slab beat, in sim seconds since the plan clock started.
-
-    Every envelope is inherited — drive, assist, speed_target, wing_sweep, the
-    knock/recover shape, the release and spool times. Only HEIGHT differs, in the
-    two ways that make this a ceiling rather than a pole:
-
-      climb   — the approach is not level. `--ceiling-climb` walks the bird up
-                into the slab over the last `--ceiling-climb-seconds` of the
-                cruise, so the wings arrive at the ceiling driving forward and
-                UP (with the stroke plane and the body already tilted forward,
-                see ceiling_args) instead of drifting into it. It is also what
-                sets WHEN the strike lands: the slab is planted `--ceiling-bite`
-                inside the top of the climbed stroke, so contact happens partway
-                up the climb — unscripted, off the real geometry.
-      drop    — the sag is PERMANENT. The pole clip flies its sag back off; here
-                losing height is the entire recovery, so once the bird has
-                dropped `--ceiling-drop` it stays there and flies on underneath.
-                Coming back up would fly it straight into the slab again.
-
-    ponytail: both are kinematic scripts written onto the altitude servo's
-    setpoint — the bird does not climb because its wings made lift, and it does
-    not descend because it stopped making any. This clip is a visual; the beat is
-    the point, not the mechanism. Upgrade path if that stops being true: drive
-    the height through the stroke-plane amplitude and let the aero do it.
-    """
+    """One-strike overhead-slab beat: CollisionPlan's envelopes, one knock, no gap leg."""
 
     def __init__(self, args):
         super().__init__(args)
-        # One strike, so one knock -- not the pole clip's two, and no gap leg.
         self.total = (args.cruise_seconds + args.strike_seconds + args.stop_seconds
                       + args.glide_seconds + args.spool_seconds + args.flap_seconds)
-
-    def climbed(self, t):
-        """Scripted climb into the slab, finishing at `--cruise-seconds`.
-
-        Late rather than spread over the whole approach: the opening beat has to
-        be level flight with visible clearance under the ceiling, or there is
-        nothing for the climb to be a change FROM.
-        """
-        r = self.a.ceiling_climb_seconds
-        return self.a.ceiling_climb * smoothstep((t - (self.a.cruise_seconds - r)) / r)
-
-    def dropped(self, t):
-        """The descent, in two moves — and neither of them ever comes back.
-
-        Two moves, not one. A quick `ceiling_graze_drop` the instant the wings come
-        off the slab, sized to do exactly one thing — take the trickling stroke out
-        of contact with the underside, so the bird skims a few tens of mm clear
-        rather than scraping along it. Then the rest of the drop at the end, to
-        make room for the full stroke returning. The first is small enough to read
-        as pulling clear, not as falling; the second lands with the stroke.
-        """
-        out = 0.0
-        for h in self.hits.values():
-            graze = self.a.ceiling_graze_drop * smoothstep(
-                (t - self.t_release(h)) / self.a.ceiling_graze_seconds)
-            duck = (self.a.ceiling_drop - self.a.ceiling_graze_drop) * smoothstep(
-                (t - (self.t_spool(h) - self.a.ceiling_duck_seconds))
-                / self.a.ceiling_duck_seconds)
-            out = max(out, graze + duck)
-        return out
-
-    def z_target(self, t, z0):
-        return z0 + self.climbed(t) - self.dropped(t)
-
-
-def path_x(args, marks, dt=1e-3):
-    """Distance flown by each of `marks` (sim seconds), from the plan's own schedule.
-
-    This is what plants the poles. `x_ref` in the render loop is the exact
-    integral of `speed_target`, and the station servo tracks it hard, so replaying
-    the schedule says where the bird will BE at the moment each strike is wanted.
-    Hardcoded distances stop lining up the moment cruise-speed, stall-frac or the
-    knockdown timing changes.
-    """
-    plan = CollisionPlan(args)
-    for i, m in enumerate(marks):
-        plan.note_hit(m, i + 1)     # causal, see CollisionPlan._env
-    ts = np.arange(0.0, max(marks) + dt, dt)
-    v = np.array([plan.speed_target(float(t)) for t in ts])
-    x = np.concatenate([[0.0], np.cumsum(v[:-1]) * dt])
-    return [float(np.interp(m, ts, x)) for m in marks]
 
 
 def strike_times(args):
@@ -641,11 +479,9 @@ def make_camera(model, airframe_bid, config):
     # flattening the gap.
     #
     # It is also HEIGHT-LOCKED, not tracking (the render loop drives `lookat`).
-    # A tracking camera rises and falls with the bird, so the one thing this clip
-    # exists to show — that it recovers by losing height — is the one thing it
-    # cannot show: the bird stays dead centre and the ceiling drifts about
-    # instead. Pinning the lookat height nails the slab in place and lets the
-    # bird climb into it and then sink away from it.
+    # A tracking camera rises and falls with the bird, so the bird stays dead
+    # centre and the ceiling drifts about instead. Pinning the lookat height
+    # nails the slab in place and shows the bird's height changing against it.
     if config == "ceiling":
         cam.type = mujoco.mjtCamera.mjCAMERA_FREE
         # Azimuth is re-driven per frame in the render loop; this is the opening
@@ -700,10 +536,6 @@ def render_config(config, args):
     drive_start = data.time
 
     airframe_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, flying.AIRFRAME_BODY)
-    m_total = float(model.body_subtreemass[airframe_bid])
-    g = float(-model.opt.gravity[2])
-    z0 = float(data.subtree_com[airframe_bid][2])
-    prev_z = [z0]
 
     disk_orient = None
     tilt0 = pitch0 = 0.0
@@ -721,7 +553,6 @@ def render_config(config, args):
     # at drive_start ran the whole approach during the unrecorded warmup, so the
     # clip opened with the bird already parked in the obstacle.
     plan_start = [drive_start + (args.warmup if obstacle else 0.0)]
-    x_ref = [float(data.subtree_com[airframe_bid][0])]
     phase_ref = []                                # per-drive crank angle at clip start
     flap_lo, flap_hi = [9e9, 9e9], [-9e9, -9e9]   # per-wing beat extremes since the last print
     flap_gap = [0.0]                              # worst |L-R| elevation, i.e. how out of step
@@ -733,13 +564,11 @@ def render_config(config, args):
     cam_hold = [0.0]                              # locked camera framing height (ceiling clip)
     # The ceiling's own ledger, alongside the pole one below. `pierce` is the
     # slab's answer to `clear`: how far the highest plate corner ever got PAST the
-    # underside (negative = under it, where it belongs). `after` is the highest a
-    # plate ever got once the glide was over, i.e. the direct statement that the
-    # bird ended up low enough for its whole stroke to clear.
+    # underside (negative = under it, where it belongs).
     # `wings` is per-PLATE, unlike `touch`, which is per strike group: the brief
     # says "its wings strike the ceiling", plural, and a slab that only ever
     # caught one wingtip would read as a clip, not as flying into a ceiling.
-    slab = {"bottom": 9e9, "gid": -1, "pierce": -9e9, "after": -9e9, "wings": {}}
+    slab = {"bottom": 9e9, "gid": -1, "pierce": -9e9, "wings": {}}
     # The contact ledger. This is the whole "did the wings actually HIT the poles,
     # or slide through them" question, measured rather than assumed:
     #   touch  — steps with a wing plate <-> pole contact pair, per group
@@ -803,114 +632,64 @@ def render_config(config, args):
     # Cruise feathering, to blend away from and back to through the strike.
     pitch0_free = (sim.pitch.upstroke_pitch, sim.pitch.downstroke_pitch)
 
-    z_k, z_c = Z_ASSIST[config]
     dt = float(model.opt.timestep)
     steps_per_frame = max(1, round((args.realtime_factor / args.fps) / dt))
 
-    def assist(_m, _d):
+    def ledger():
+        """The obstacle clips' per-step bookkeeping: beat, uprightness, contacts."""
         com = np.asarray(data.subtree_com[airframe_bid])
-        com_z = float(com[2])
-        vz = (com_z - prev_z[0]) / dt
-        prev_z[0] = com_z
-        if not obstacle:
-            # Vertical weight-assist, applied at the airframe subtree COM so it
-            # induces no spurious torque.
-            fz = m_total * g + z_k * (z0 - com_z) - z_c * vz
-            mujoco.mj_applyFT(model, data, np.array([0.0, 0.0, fz]), np.zeros(3),
-                              com, airframe_bid, data.qfrc_applied)
-        else:
-            t = data.time - plan_start[0]
-            # Beat amplitude has to be sampled every STEP: the flap period and the
-            # frame interval are both ~0.1 s, so per-frame samples alias.
-            flaps = [wing_flap_deg(model, data, g_) for g_ in tip_gids]
-            for k, fd in enumerate(flaps):
-                flap_lo[k], flap_hi[k] = min(flap_lo[k], fd), max(flap_hi[k], fd)
-            flap_gap[0] = max(flap_gap[0], abs(flaps[0] - flaps[1]))
-            pitches = [wing_pitch_deg(model, data, g_) for g_ in tip_gids]
-            pitch_gap[0] = max(pitch_gap[0], abs(abs(pitches[0]) - abs(pitches[1])))
-            # Before the first strike nothing has touched the wings and no fold is
-            # applied, so that stretch IS the free-flapping baseline.
-            acc = upright if plan.hits else up_free
-            ups = [wing_up(model, data, g_) for g_ in tip_gids]
-            acc[0] = min(acc[0], min(ups))
-            acc[1] = max(acc[1], min(ups))   # min over the two wings, max over time
-            # Contact ledger. Every step, not every frame: contact with a pole
-            # lasts a few ms and a 30 fps sample would miss most of the strike.
-            for pg, other, depth in pole_contacts(data, obstacle_gids):
-                if other not in tip_gids:
-                    continue        # not a wing plate -> not a strike (should not happen)
-                grp = obstacle_gids[pg]
-                touch[grp] += 1
-                last[grp] = t
-                sink[0] = max(sink[0], depth)
-                if slab["gid"] >= 0:
-                    side = "L" if other == tip_gids[0] else "R"
-                    slab["wings"][side] = slab["wings"].get(side, 0) + 1
-                if grp not in plan.hits:
-                    plan.note_hit(t, grp)
-                    print(f"  [strike {grp}] t={t:.2f}s "
-                          f"{mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, pg)} x "
-                          f"{mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, other)} "
-                          f"depth={depth * 1000:.2f}mm", flush=True)
-            # Per strike, because the two do not behave alike: the lone pole hits
-            # ONE wing, so that wing gets driven across while the other does not,
-            # and the closest approach there is worse than at the symmetric gap.
-            if plan.wing_sweep(t) > 0.0:
-                grp = max(plan.hits, key=plan.hits.get)      # the strike now in force
-                plategap[grp] = min(plategap.get(grp, 9e9), plate_gap(model, data, *tip_gids))
-            if pole_xy:
-                for g_ in tip_gids:
-                    pts = plate_span_pts(model, data, g_)
-                    for pg, xy in pole_xy.items():
-                        clear[0] = min(clear[0], pole_axis_gap(pts, xy))
-                for xy in pole_xy.values():
-                    bodygap[0] = min(bodygap[0], float(np.hypot(com[0] - xy[0], com[1] - xy[1])))
-            if slab["bottom"] < 9e9:
-                # The slab's "did it pass through" measure, and its "is it low
-                # enough now" one. Both off the plate corners, both every step:
-                # the strike is a few milliseconds long and a per-frame sample
-                # would step straight over it.
-                top = max(plate_top(model, data, g_) for g_ in tip_gids)
-                slab["pierce"] = max(slab["pierce"], top - slab["bottom"])
-                if plan.hits and t >= plan.t_spool(min(plan.hits.values())):
-                    slab["after"] = max(slab["after"], top)
-            a = plan.assist(t)
-            # `a` gates ONLY attitude + station keeping (see CollisionPlan): the
-            # vertical channel stands in for gravity and never lets go.
-            #
-            # The HORIZONTAL channel gets its own floor from the release onward.
-            # Gating it by `a` too meant that after the strike the bird merely
-            # coasted, bleeding 0.96 m/s down to 0.5 over the glide; a glide is
-            # supposed to hold its speed, and this is the channel that stands in
-            # for the airspeed it would be trading altitude for.
-            gliding = any(t >= plan.t_release(h) for h in plan.hits.values())
-            ax = max(a, args.glide_hold) if gliding else a
-            if a > 0.999 or gliding:
-                x_ref[0] += plan.speed_target(t) * dt
-            else:
-                x_ref[0] = float(com[0])  # no control, no reference -> no snap back
-            # Anti-windup, and it is the difference between fluid and a lurch.
-            # While a pole is physically holding the bird up the reference keeps
-            # integrating at cruise speed, so the station error banks — it reached
-            # 0.17 m — and the moment the wing came free the servo fired the bird
-            # forward at 1.03 m/s against a 0.6 m/s cruise. That whip is also what
-            # threw the free wings through a 78 deg swing and dropped the stroke
-            # into its low limit cycle, from which it never recovered (the beat
-            # sat at 18 deg for the whole approach to the gap instead of 51).
-            # Leashing the reference to the body lets the speed servo do the work.
-            x_ref[0] = min(x_ref[0], float(com[0]) + args.ref_leash)
-            vel = data.qvel[air_dofadr : air_dofadr + 3]
-            f = np.array([
-                ax * m_total * (args.pos_gain * (x_ref[0] - float(com[0]))
-                                + args.speed_gain * (plan.speed_target(t) - float(vel[0]))),
-                ax * m_total * (-args.pos_gain * float(com[1])
-                               - args.speed_gain * float(vel[1])),
-                m_total * g + z_k * (plan.z_target(t, z0) - com_z) - z_c * vz,
-            ])
-            # Attitude PD toward the cruise lean.
-            tau = a * attitude_pd(data, airframe_bid, air_dofadr, args.cruise_lean,
-                                  args.level_kp, args.level_kd)
-            mujoco.mj_applyFT(model, data, f, tau, com, airframe_bid, data.qfrc_applied)
+        t = data.time - plan_start[0]
+        # Beat amplitude has to be sampled every STEP: the flap period and the
+        # frame interval are both ~0.1 s, so per-frame samples alias.
+        flaps = [wing_flap_deg(model, data, g_) for g_ in tip_gids]
+        for k, fd in enumerate(flaps):
+            flap_lo[k], flap_hi[k] = min(flap_lo[k], fd), max(flap_hi[k], fd)
+        flap_gap[0] = max(flap_gap[0], abs(flaps[0] - flaps[1]))
+        pitches = [wing_pitch_deg(model, data, g_) for g_ in tip_gids]
+        pitch_gap[0] = max(pitch_gap[0], abs(abs(pitches[0]) - abs(pitches[1])))
+        # Before the first strike nothing has touched the wings and no fold is
+        # applied, so that stretch IS the free-flapping baseline.
+        acc = upright if plan.hits else up_free
+        ups = [wing_up(model, data, g_) for g_ in tip_gids]
+        acc[0] = min(acc[0], min(ups))
+        acc[1] = max(acc[1], min(ups))   # min over the two wings, max over time
+        # Contact ledger. Every step, not every frame: contact with a pole
+        # lasts a few ms and a 30 fps sample would miss most of the strike.
+        for pg, other, depth in pole_contacts(data, obstacle_gids):
+            if other not in tip_gids:
+                continue        # not a wing plate -> not a strike (should not happen)
+            grp = obstacle_gids[pg]
+            touch[grp] += 1
+            last[grp] = t
+            sink[0] = max(sink[0], depth)
+            if slab["gid"] >= 0:
+                side = "L" if other == tip_gids[0] else "R"
+                slab["wings"][side] = slab["wings"].get(side, 0) + 1
+            if grp not in plan.hits:
+                plan.note_hit(t, grp)
+                print(f"  [strike {grp}] t={t:.2f}s "
+                      f"{mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, pg)} x "
+                      f"{mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, other)} "
+                      f"depth={depth * 1000:.2f}mm", flush=True)
+        # Per strike, because the two do not behave alike: the lone pole hits
+        # ONE wing, so that wing gets driven across while the other does not,
+        # and the closest approach there is worse than at the symmetric gap.
+        if plan.wing_sweep(t) > 0.0:
+            grp = max(plan.hits, key=plan.hits.get)      # the strike now in force
+            plategap[grp] = min(plategap.get(grp, 9e9), plate_gap(model, data, *tip_gids))
+        if pole_xy:
+            for g_ in tip_gids:
+                pts = plate_span_pts(model, data, g_)
+                for pg, xy in pole_xy.items():
+                    clear[0] = min(clear[0], pole_axis_gap(pts, xy))
+            for xy in pole_xy.values():
+                bodygap[0] = min(bodygap[0], float(np.hypot(com[0] - xy[0], com[1] - xy[1])))
+        if slab["bottom"] < 9e9:
+            # The slab's "did it pass through" measure, off the plate corners,
+            # every step: the strike is a few milliseconds long and a per-frame
+            # sample would step straight over it.
+            top = max(plate_top(model, data, g_) for g_ in tip_gids)
+            slab["pierce"] = max(slab["pierce"], top - slab["bottom"])
 
     def drive_ctrl():
         ramp = ramp_factor(data.time, drive_start, ramp_seconds)
@@ -961,9 +740,12 @@ def render_config(config, args):
                 1.0 - plan.drive(data.time - plan_start[0]))
             sim.pitch.upstroke_pitch = pitch0_free[0] * flat
             sim.pitch.downstroke_pitch = pitch0_free[1] * flat
-        # drive_ctrl reads plan.drive before assist's contact ledger notes a strike;
-        # a strike noted this step leaves plan.drive at exactly 1.0, so the order is moot.
-        sim.step(drive_ctrl(), assist)
+        # drive_ctrl reads plan.drive before the contact ledger notes a strike; a
+        # strike noted this step leaves plan.drive at exactly 1.0, so the order is moot.
+        ctrl = drive_ctrl()
+        if plan is not None:
+            ledger()
+        sim.step(ctrl)
 
     if config == "collision":
         # Flap unrecorded for a moment with the poles parked out of the way and
@@ -982,14 +764,14 @@ def render_config(config, args):
                         for g_ in tip_gids)
                 reach[0], reach[1] = max(reach[0], r), min(reach[1], r)
         com0 = np.asarray(data.subtree_com[airframe_bid])
-        x_ref[0] = float(com0[0])
         # reach[1] is the reach at the TOP of the stroke, where the wing is most
         # upright and least far out. A pole inside it cannot be missed whatever
         # the beat phase happens to be when the bird arrives; a pole between
         # reach[1] and reach[0] is only caught over part of the cycle.
         y1 = args.pole1_frac * reach[0]
         y2 = args.pole23_frac * reach[0]
-        stations = path_x(args, strike_times(args))
+        # Laid out for a bird flying at --cruise-speed.
+        stations = [args.cruise_speed * t for t in strike_times(args)]
         # The lone pole sits on the CAMERA side (-y, see make_camera) so the
         # strike happens in the foreground rather than behind the airframe.
         plant = [("pole_a", stations[0], -y1),
@@ -1023,20 +805,9 @@ def render_config(config, args):
                 peak[0] = max(peak[0], max(plate_top(model, data, g_)
                                            for g_ in tip_gids) - cz)
         com0 = np.asarray(data.subtree_com[airframe_bid])
-        x_ref[0] = float(com0[0])
-        # The whole event in one line. The slab sits `--ceiling-bite` INSIDE the
-        # top of the climbed stroke, so:
-        #   * on the level approach the wings miss it by (climb - bite),
-        #   * at the top of the climb they are driven `bite` into it and stopped,
-        #   * once the bird has dropped `--ceiling-drop` they clear it by
-        #     (drop - bite) with the stroke back at full amplitude.
-        # Every one of those three is measured back out of the render below.
-        slab["bottom"] = float(com0[2]) + args.ceiling_climb + peak[0] - args.ceiling_bite
-        # Midway between the two EXTREMES of the flight (the top of the climb and
-        # whichever is lower of the start and the end of the drop), so the bird
-        # has room to move both ways inside a frame that never moves.
-        cam_hold[0] = float(com0[2]) + 0.5 * (
-            args.ceiling_climb + min(0.0, args.ceiling_climb - args.ceiling_drop))
+        # The slab underside sits `--ceiling-gap` above the top of the stroke.
+        slab["bottom"] = float(com0[2]) + peak[0] + args.ceiling_gap
+        cam_hold[0] = float(com0[2])
         gid = slab["gid"]
         # Reaching well behind the bird and far ahead of it: the soffit has to be
         # overhead from frame one (an edge sliding into shot mid-clip reads as the
@@ -1046,12 +817,8 @@ def render_config(config, args):
             slab["bottom"] + args.ceiling_thickness / 2.0]
         print(f"[ceiling] wing plate peaks {peak[0] * 1000:.0f} mm above the COM; "
               f"slab underside at z={slab['bottom']:.3f} m "
-              f"(bird z={com0[2]:.3f}) -> approach clearance "
-              f"{(args.ceiling_climb - args.ceiling_bite) * 1000:.0f} mm, "
-              f"bite {args.ceiling_bite * 1000:.0f} mm at the top of the "
-              f"{args.ceiling_climb * 1000:.0f} mm climb, "
-              f"clearance after the {args.ceiling_drop * 1000:.0f} mm drop "
-              f"{(args.ceiling_drop - args.ceiling_bite) * 1000:.0f} mm", flush=True)
+              f"(bird z={com0[2]:.3f}), {args.ceiling_gap * 1000:.0f} mm over the stroke",
+              flush=True)
 
     sim_seconds = plan.total if obstacle else args.seconds * args.realtime_factor
     n_frames = int(sim_seconds / args.realtime_factor * args.fps)
@@ -1120,9 +887,8 @@ def render_config(config, args):
         if plan is not None and frame % 15 == 0:
             t = data.time - plan_start[0]
             roll = math.degrees(math.asin(max(-1.0, min(1.0, data.xmat[airframe_bid][7]))))
-            print(f"  t={t:4.2f}s assist={plan.assist(t):.2f} "
-                  f"z={data.subtree_com[airframe_bid][2]:.3f}"
-                  f"(tgt {plan.z_target(t, z0):.3f}) "
+            print(f"  t={t:4.2f}s "
+                  f"z={data.subtree_com[airframe_bid][2]:.3f} "
                   f"x={data.subtree_com[airframe_bid][0]:+.3f} "
                   f"vx={data.qvel[air_dofadr]:+.2f} roll={roll:+5.1f}deg "
                   f"beatL={flap_hi[0] - flap_lo[0]:5.1f} beatR={flap_hi[1] - flap_lo[1]:5.1f} "
@@ -1229,31 +995,23 @@ def contact_report(args, plan, touch, sink, clear, bodygap, last, upright, up_fr
 
 
 def ceiling_report(args, plan, touch, sink, slab, last, upright, up_free, plategap, dt):
-    """The ceiling clip's runnable check: did the wings HIT the slab, and did
-    dropping actually get them out from under it?
+    """The ceiling clip's runnable check: did the wings HIT the slab?
 
     Same failure mode as the poles — a mask, a geom group or a missing pair, and
     the wing sails through the ceiling in a render that otherwise looks perfect —
-    plus one the poles do not have: this clip's whole recovery is a scripted
-    descent, and a descent that is too shallow leaves the bird flapping into the
-    slab for the rest of the clip. Both are asserted rather than eyeballed:
+    so it is asserted rather than eyeballed:
 
       * the wings must register real wing<->slab contacts (the strike is not a
         timestamp; every downstream beat keys off this),
-      * they must strike AFTER a real approach, not on frame one — the first
-        ceiling clip's altitude mode did exactly that,
+      * they must strike AFTER a real approach, not on frame one,
       * the highest plate corner must never get more than `--max-sink` past the
         slab underside. That is the geometric "it did not pass through", computed
         from the plate corners with no help from the contact solver, and it is
         what collapses to a large positive number if contact silently stops,
       * a wing may spend no more than `--clear-seconds` touching the slab,
-      * once the glide is over, the whole stroke must clear the underside by
-        `--ceiling-clearance` and never touch it again. This is requirements 3
-        and 4 of the brief as two numbers: low enough, and stays flying,
       * and, as for the poles, the strike and the fold may not roll a wing any
         further over than the bird's own untouched approach stroke does.
     """
-    clearance = slab["bottom"] - slab["after"]
     print(f"[ceiling] contact ledger: touch={touch} per_wing={slab['wings']} "
           f"deepest_sink={sink * 1000:.2f}mm "
           f"deepest_pierce={slab['pierce'] * 1000:+.2f}mm (past the underside; "
@@ -1261,7 +1019,6 @@ def ceiling_report(args, plan, touch, sink, slab, last, upright, up_free, plateg
           f"{ {k: round(touch.get(k, 0) * dt, 3) for k in sorted(plan.hits)} }s "
           f"struck at t={ {k: round(v, 2) for k, v in sorted(plan.hits.items())} }s "
           f"last touch={ {k: round(v, 2) for k, v in sorted(last.items())} }s "
-          f"post-glide clearance={clearance * 1000:.0f}mm "
           f"wing_up struck=[{upright[0]:+.2f},{upright[1]:+.2f}] "
           f"approach=[{up_free[0]:+.2f},{up_free[1]:+.2f}] "
           f"tucked_plate_gap={ {k: round(v * 1000) for k, v in sorted(plategap.items())} }mm",
@@ -1281,83 +1038,39 @@ def ceiling_report(args, plan, touch, sink, slab, last, upright, up_free, plateg
     assert held <= args.clear_seconds, \
         (f"a wing was in contact with the ceiling for {held:.2f} s (limit "
          f"{args.clear_seconds} s) — that is scraping along it, not striking it")
-    # The point of the whole clip: it got low enough. Measured off the plate
-    # corners at full stroke amplitude AFTER the glide, so it is the real arc and
-    # not the commanded altitude.
-    assert clearance >= args.ceiling_clearance, \
-        (f"after the glide the stroke still came within {clearance * 1000:.0f} mm of the "
-         f"slab (want {args.ceiling_clearance * 1000:.0f} mm) — the bird did not drop far "
-         f"enough to fly on underneath; raise --ceiling-drop")
-    # Contact belongs to the STRIKE and nothing else. Once the graze drop has
-    # pulled the wings clear they must skim without touching for the whole glide —
-    # not merely be clear by the time the glide ends. Checked against the graze,
-    # not the spool, because the whole glide is the shot and a wing scraping along
-    # the underside for a second of it is the thing this is here to catch. It is a
-    # real edge: a 75 mm graze drop still dragged to t=2.73 s, 85 mm clears.
-    graze_done = plan.t_release(hit) + args.ceiling_graze_seconds
-    assert last.get(1, -9e9) <= graze_done, \
-        (f"the wings were still on the ceiling at t={last.get(1):.2f} s, after the graze "
-         f"drop finished at t={graze_done:.2f} s — they are scraping along it, not "
-         f"skimming under it; raise --ceiling-graze-drop")
     assert upright[1] >= up_free[1] - args.wing_up_margin, \
         (f"after being struck the wing plates only came back to {upright[1]:+.2f} upright, "
          f"against {up_free[1]:+.2f} on the approach (margin {args.wing_up_margin:.2f}) "
          f"— they are not recovering, i.e. a wing is over on its back")
-    print("[ceiling] contact verified: the wings struck the slab, nothing passed through "
-          "it, and the glide dropped the bird far enough to fly on underneath", flush=True)
+    print("[ceiling] contact verified: the wings struck the slab and nothing passed "
+          "through it", flush=True)
 
 
 def ceiling_self_check(args):
-    """The ceiling beat sheet: only the HEIGHT story, since everything else in it
-    is CollisionPlan and is already asserted by `self_check` above.
+    """The ceiling beat sheet: only what differs from CollisionPlan, which
+    `self_check` already asserts.
 
     (The other half is `ceiling_report`, which runs at the end of every ceiling
-    render and asserts the wings actually hit the slab and then got clear of it.
-    That one needs the sim, so it lives there.)
+    render and asserts the wings actually hit the slab. That one needs the sim,
+    so it lives there.)
     """
     a = ceiling_args(args)
-    plan, z0 = CeilingPlan(a), 1.0
-    assert a.cruise_pitch > args.cruise_pitch and a.cruise_lean > args.cruise_lean, \
+    plan = CeilingPlan(a)
+    assert a.cruise_pitch > args.cruise_pitch, \
         "the ceiling approach must be tilted further forward than the pole cruise"
     assert a.glide_seconds >= 0.8, \
         "the brief asks for about a second of glide -- that is --ceiling-glide-seconds"
-
-    # The approach: level, with clearance, and only THEN climbing into the slab.
-    assert plan.z_target(0.0, z0) == z0, "opens in level cruise under the ceiling"
-    assert plan.climbed(a.cruise_seconds - a.ceiling_climb_seconds) == 0.0, \
-        "still level when the climb is due to start"
-    assert abs(plan.climbed(a.cruise_seconds) - a.ceiling_climb) < 1e-9, \
-        "fully climbed by the end of the approach"
-    assert 0.0 < args.ceiling_bite < args.ceiling_climb, \
-        ("the slab has to sit inside the CLIMBED stroke but outside the level one, or "
-         "the bird either misses it entirely or is already in it on frame one")
-
-    # The strike, then the glide DOWN. This is the whole ask: it recovers by
-    # losing height, and the height never comes back.
+    assert args.ceiling_gap > 0.0, \
+        "the slab must sit above the stroke, or the wings are in it on frame one"
     t1 = a.cruise_seconds
     plan.note_hit(t1, 1)
-    rel, sp = plan.t_release(t1), plan.t_spool(t1)
-    assert plan.dropped(rel) == 0.0, "the descent starts as the wings come off the slab"
-    assert abs(plan.dropped(sp) - args.ceiling_drop) < 1e-9, \
-        ("the whole drop is spent inside the glide -- that is what 'glide down until "
-         "it is low enough' means")
-    assert plan.dropped(sp + 10.0) == plan.dropped(sp), \
-        ("the sag must be PERMANENT: the pole clip flies its sag back off, but here "
-         "climbing back up would fly straight into the ceiling again")
-    assert args.ceiling_drop > args.ceiling_bite + args.ceiling_clearance, \
-        (f"a {args.ceiling_drop * 1000:.0f} mm drop cannot clear a {args.ceiling_bite * 1000:.0f} mm "
-         f"bite by {args.ceiling_clearance * 1000:.0f} mm — the wings would still be in the slab")
-    # Same statement, arrived at through z_target rather than through the knobs.
-    assert (plan.z_target(sp, z0) + args.ceiling_bite
-            < plan.z_target(t1, z0) + args.ceiling_climb - args.ceiling_clearance), \
-        "the post-glide stroke must sit clear of where the slab was planted"
+    sp = plan.t_spool(t1)
     assert plan.wing_sweep(sp) == 0.0 and plan.drive(sp) == args.glide_drive, \
         "wings out of the tuck and the stroke not yet driven at the end of the glide"
     assert plan.total > plan.t_powered(t1) + 0.5, \
         "the clip must outlast the recovery, so it closes on normal flight under the slab"
     print(f"render_configs ceiling self-check OK (strike due ~t={t1:.2f} s, "
-          f"climb {args.ceiling_climb * 1000:.0f} mm, bite {args.ceiling_bite * 1000:.0f} mm, "
-          f"glide {a.glide_seconds:.1f} s, drop {args.ceiling_drop * 1000:.0f} mm, "
+          f"gap {args.ceiling_gap * 1000:.0f} mm, glide {a.glide_seconds:.1f} s, "
           f"clip {plan.total:.2f} s)")
 
 
@@ -1368,9 +1081,7 @@ def self_check(args):
     every collision render and asserts the wings actually HIT the poles. That one
     needs the sim, so it lives there rather than here.)
     """
-    plan, z0 = CollisionPlan(args), 1.0
-    assert plan.assist(0.0) == 1.0, "cruise: full assist"
-    assert plan.z_target(0.0, z0) == z0, "cruise: holds altitude"
+    plan = CollisionPlan(args)
     assert plan.drive(0.0) == 1.0 and plan.wing_sweep(0.0) == 0.0, \
         "cruise: full stroke, wings out"
 
@@ -1378,11 +1089,6 @@ def self_check(args):
     plan.note_hit(t1, 1)
     plan.note_hit(t1 + 0.3, 1)
     assert plan.hits == {1: t1}, "only the FIRST contact with a pole counts as its strike"
-
-    assert 0.0 <= args.upset_floor < 1.0, "the upset must actually give something up"
-    assert plan.assist(t1) == args.upset_floor, "impact: authority drops to the floor"
-    assert plan.assist(t1 + args.upset) == args.upset_floor, "upset: still at the floor"
-    assert plan.assist(t1 + args.upset + args.recover) == 1.0, "recovered: full authority back"
 
     # The strike: full drive INTO the pole, then knocked down to the trickle.
     rel, sp = plan.t_release(t1), plan.t_spool(t1)
@@ -1436,45 +1142,14 @@ def self_check(args):
         (f"a {args.glide_seconds} s tuck is a glide, not a crossing — the bird should be "
          f"flapping again as soon as it is past the pole")
 
-    # The sag: down under the knock, flown back off with the stroke.
-    assert plan.z_target(rel, z0) < z0 - 0.5 * args.hit_drop, "the strike knocks it down"
-    assert abs(plan.z_target(sp, z0) - (z0 - args.hit_drop)) < 1e-9, \
-        "the whole sag is exactly --hit-drop, and it is still down there at the spool"
-    assert abs(plan.z_target(plan.t_powered(t1), z0) - z0) < 1e-9, \
-        "back at cruise altitude by the time the stroke is back"
-
-    # The glide CARRIES it. This is the anti-wedge property, and the one thing
-    # that separates a glide from parking in the obstacle you just hit.
-    assert args.stall_frac > 0.0, "the impact checks the speed, it does not stop the bird"
-    assert abs(plan.speed_target(0.0) - args.cruise_speed) < 1e-9, "cruises in"
-    assert plan.speed_target(rel) == args.cruise_speed * args.stall_frac, \
-        "the strike checks it hard at the release"
-    assert args.fold_seconds < args.glide_pickup < args.glide_seconds, \
-        "fold first, THEN up to glide speed, and both inside the glide window"
-    flying_glide = rel + args.glide_pickup
-    assert abs(plan.speed_target(flying_glide) - args.cruise_speed) < 1e-9, \
-        "back at full speed once the fold is done -- the glide is what carries it clear"
-    assert plan.drive(flying_glide) == args.glide_drive, \
-        "and it is still UNPOWERED there: gliding at speed, not flapping again"
-    assert abs(plan.wing_sweep(flying_glide) - args.fold_sweep) < 1e-9, \
-        "with the wings still swept fully back"
-    assert abs(plan.speed_target(plan.t_powered(t1)) - args.cruise_speed) < 1e-9, \
-        "and cruising again by the end of the spool -- it is not done yet"
-
     # The SECOND strike: same shape, and it must land on a fully recovered bird.
-    assert t2 > plan.t_powered(t1), "strike 2 must come after strike 1 is fully flown off"
+    assert t2 > plan.t_powered(t1), "strike 2 must come after strike 1 is fully recovered"
     assert abs(t2 - plan.t_powered(t1) - args.gap_seconds) < 1e-9, \
         "--gap-seconds IS the recovered cruise between the two strikes"
-    assert plan.drive(t2) == 1.0 and plan.assist(t2) == 1.0, \
-        "at full stroke and full authority when it reaches the gap"
+    assert plan.drive(t2) == 1.0, "at full stroke when it reaches the gap"
     plan.note_hit(t2, 2)
     assert plan.drive(t2) == 1.0, "and, as at strike 1, still full AT the moment of contact"
-    assert plan.assist(t2) == args.upset_floor, "the second knock lands as hard as the first"
     assert plan.drive(plan.t_release(t2)) == args.glide_drive, "and knocked down again"
-    rel2 = plan.t_release(t2)
-    assert plan.speed_target(rel2) == args.cruise_speed * args.stall_frac \
-        and abs(plan.speed_target(rel2 + args.glide_pickup) - args.cruise_speed) < 1e-9, \
-        "the gap is the SAME event, just bigger: checked, folded, then glided clear"
     assert plan.drive(t1 + 0.5 * (t2 - t1)) > args.glide_drive, \
         "the two knocks must not merge -- there is a real recovery between them"
     assert plan.total > plan.t_powered(t2), "the clip must outlast the second recovery"
@@ -1493,13 +1168,7 @@ def self_check(args):
     assert max(couple_brake([0.0, 3.0], 10.0)) <= 0.0, \
         "coupling must never speed a drive up — that would fight the pole"
 
-    # The poles are PLACED from this schedule, so the schedule has to be walkable.
-    d1, d2 = path_x(args, strike_times(args))
-    assert 0.0 < d1 < d2, "the second strike must be further down the corridor than the first"
-    assert abs(d1 - args.cruise_speed * args.cruise_seconds) < 1e-3, \
-        "nothing has knocked it yet at strike 1, so that leg is a plain cruise"
-    print(f"render_configs collision self-check OK "
-          f"(strikes at t={t1:.2f}/{t2:.2f} s, {d1:.2f}/{d2:.2f} m downrange)")
+    print(f"render_configs collision self-check OK (strikes at t={t1:.2f}/{t2:.2f} s)")
 
 
 def main():
@@ -1540,49 +1209,13 @@ def main():
     p.add_argument("--self-check", action="store_true",
                    help="assert the collision and ceiling beat sheets, no render")
     # ceiling: the overhead-slab clip. Everything it does not name here it takes
-    # from the pole knobs above (see ceiling_args) -- same fold, same spool, same
-    # servos. What it overrides is HEIGHT and the forward tilt.
-    p.add_argument("--ceiling-climb", type=float, default=0.20,
-                   help="how far the bird climbs into the slab over the approach (m); "
-                        "must exceed --ceiling-bite or it would already be in the ceiling "
-                        "on frame one")
-    p.add_argument("--ceiling-climb-seconds", type=float, default=0.5,
-                   help="tail of the approach the climb happens over (s) — late, so the "
-                        "clip opens on level flight with visible clearance to climb out of")
-    # 85 mm out of a measured 311 mm of stroke, i.e. the ceiling takes the top
-    # quarter of the beat. 45 mm was the first try and it read as a brush: the
-    # truncation is what shows on screen, and a seventh of the arc is not enough
-    # of one. Sink stays at 4.5 mm against the 10 mm limit either way.
-    p.add_argument("--ceiling-bite", type=float, default=0.135,
-                   help="how far INSIDE the top of the climbed stroke the slab underside "
-                        "sits (m) — i.e. how much wing the ceiling takes. This is what "
-                        "makes the strike a strike rather than a brush")
-    # Just clears an 85 mm bite by the 60 mm clearance and stops. 220 mm was the
-    # first pass and it dropped the bird well out from under the slab, which threw
-    # away the shot: the ceiling has to stay a presence right over the wingtips
-    # after the recovery, not become something it left behind.
-    p.add_argument("--ceiling-drop", type=float, default=0.20,
-                   help="how far the bird ducks after the strike (m). Permanent: this IS "
-                        "the recovery, so it has to beat --ceiling-bite by "
-                        "--ceiling-clearance — and by little else, or it stops skimming")
-    p.add_argument("--ceiling-graze-drop", type=float, default=0.10,
-                   help="the small immediate drop at the release (m), sized only to lift "
-                        "the trickling stroke off the underside so the bird skims close "
-                        "WITHOUT touching. Must stay well under --ceiling-drop or it reads "
-                        "as falling rather than as pulling clear")
-    p.add_argument("--ceiling-graze-seconds", type=float, default=0.15,
-                   help="how fast the graze drop happens (s) — quick, it is the wings "
-                        "pulling out of the ceiling, not a descent")
-    p.add_argument("--ceiling-duck-seconds", type=float, default=0.3,
-                   help="how long the duck takes (s), ending as the stroke returns. Much "
-                        "shorter than --ceiling-glide-seconds on purpose: the bird skims "
-                        "the ceiling with its wings folded for most of the glide and only "
-                        "drops at the end, to make room for the stroke coming back")
-    # This is the shot, so it gets the time. The wings are folded and the bird is
-    # holding station right under the slab for all of it bar the closing duck.
+    # from the pole knobs below (see ceiling_args) -- same fold, same spool. What
+    # it overrides is the slab, the timings and the forward tilt.
+    p.add_argument("--ceiling-gap", type=float, default=0.065,
+                   help="how far above the top of the stroke the slab underside sits (m)")
     p.add_argument("--ceiling-glide-seconds", type=float, default=1.6,
-                   help="wings-tucked glide after the strike (s), spent skimming along "
-                        "under the slab. The pole clip's 0.5 is a crossing, not a glide")
+                   help="wings-tucked glide after the strike (s). The pole clip's 0.5 is "
+                        "a crossing, not a glide")
     p.add_argument("--ceiling-strike-seconds", type=float, default=0.20,
                    help="how long the motors keep driving the wing into the slab after "
                         "contact (s). Shorter than the poles': a slab stops the upstroke "
@@ -1594,8 +1227,6 @@ def main():
                    help="forward stroke-plane tilt on the ceiling clip (rad), fixed — "
                         "steeper than the pole cruise so the bird is visibly driving "
                         "forward and up INTO the slab rather than drifting up to it")
-    p.add_argument("--ceiling-lean", type=float, default=math.radians(17.0),
-                   help="commanded nose-down body pitch on the ceiling clip (rad), fixed")
     p.add_argument("--ceiling-half-y", type=float, default=0.60,
                    help="half-width of the overhead slab (m). This is the framing knob: "
                         "narrow enough that BOTH long edges are in shot and converge away "
@@ -1608,9 +1239,6 @@ def main():
                    help="downrange offset of the slab centre from the bird's start (m); "
                         "with the default 6 m half-length it is overhead from frame one "
                         "and outlasts the flight")
-    p.add_argument("--ceiling-clearance", type=float, default=0.04,
-                   help="how far below the slab the whole stroke must sit once the glide "
-                        "is over (m) — the measured form of 'low enough to avoid it'")
     p.add_argument("--ceiling-fold-sweep", type=float, default=0.0,
                    help="how far the wings sweep aft on the ceiling clip (rad). 0: they "
                         "stay out at the side and glide there. The pole clip's tuck is "
@@ -1631,17 +1259,15 @@ def main():
                    help="how long the swing to the front takes (s), starting at the "
                         "strike — over the fold, so the move and the tuck land together")
     p.add_argument("--ceiling-min-approach", type=float, default=0.45,
-                   help="earliest the strike may land (s); guards the failure the first "
-                        "ceiling clip had, where the altitude mode threw a wingtip into "
-                        "the slab a moment after the clip opened")
+                   help="earliest the strike may land (s); a strike on the opening "
+                        "frames means the slab was planted inside the stroke")
     # The stroke keeps growing for ~3 s after the drive ramp is over; sampling
     # through the build-up reads the reach ~35% low, which would plant the poles
     # inside the wing arc and have them hit on frame one.
     p.add_argument("--warmup", type=float, default=3.0,
                    help="unrecorded flapping before the clip, to settle the stroke (s)")
     p.add_argument("--peak-window", type=float, default=1.5,
-                   help="tail of the warmup the wing's lateral reach is measured over (s); "
-                        "must span the slow altitude mode, not just a few flap cycles")
+                   help="tail of the warmup the wing's lateral reach is measured over (s)")
     p.add_argument("--cruise-seconds", type=float, default=1.2,
                    help="level approach to the first pole (s) — this is also what places it")
     # Longer than the ceiling clip's 0.08: a slab stops the upstroke dead, but a
@@ -1650,15 +1276,6 @@ def main():
     p.add_argument("--strike-seconds", type=float, default=0.18,
                    help="how long the motors keep driving the wing into the pole after "
                         "contact (s) — keep short or the wings look welded to it")
-    p.add_argument("--upset", type=float, default=0.40, help="knocked-about window (s)")
-    # 0 is NOT "more honest": this flapper is open-loop unstable, so cutting
-    # attitude authority outright doesn't show the pole knocking the bird, it
-    # shows the airframe diverging (35 deg roll, wings 64 deg out of step, beat
-    # amplitude wandering 35-78 deg — the broken flapping). Any authority at all
-    # stops the divergence; the transition sits between 0.00 and 0.02.
-    p.add_argument("--upset-floor", type=float, default=0.15,
-                   help="attitude/station authority retained through the upset")
-    p.add_argument("--recover", type=float, default=1.5, help="assist ramp-back (s)")
     # 0.06 is the window. At 0.00 the cranks stop dead and the stroke never
     # recovers past 20 deg; at 0.15 the wings swing through 120 deg and it reads
     # as thrashing. At 0.06 the wings look folded and still, and it comes back.
@@ -1716,27 +1333,9 @@ def main():
     p.add_argument("--glide-seconds", type=float, default=0.5,
                    help="how long the wings stay tucked after each strike before the "
                         "motors start building again (s)")
-    p.add_argument("--glide-hold", type=float, default=0.85,
-                   help="horizontal (speed/station) authority kept from the release on, so "
-                        "the glide carries forward instead of coasting to a stop")
     p.add_argument("--gap-seconds", type=float, default=1.3,
                    help="recovered cruise between finishing the first strike and reaching "
                         "the two-pole gap (s) — this is what places the gap")
-    p.add_argument("--hit-drop", type=float, default=0.10,
-                   help="how far it sags while the stroke is gone (m); flown back off as "
-                        "the drive spools up")
-    # The momentary CHECK at the impact, not a hold: see speed_target. It is only
-    # in force for `--glide-pickup` around the release, so it can be deep enough
-    # to read as a real hit without parking the bird in the pole.
-    p.add_argument("--stall-frac", type=float, default=0.30,
-                   help="fraction of cruise speed at the moment the strike lands (0-1)")
-    # Has to sit inside the tuck, and the tuck is now only --glide-seconds long,
-    # so 0.35 no longer fits: speed must be back BEFORE the wings start coming out,
-    # or the "carrying speed while folded" beat has nowhere to happen.
-    p.add_argument("--glide-pickup", type=float, default=0.25,
-                   help="release to full glide speed (s). This is the FOLD timescale, not "
-                        "the spool: the bird must be carrying speed while its wings are "
-                        "still folded, or it sits in the obstacle it just hit")
     # collision: pole geometry
     p.add_argument("--pole-radius", type=float, default=0.025, help="pole radius (m)")
     p.add_argument("--pole-top", type=float, default=2.4,
@@ -1779,19 +1378,10 @@ def main():
                    help="how far outside a pole's surface the airframe COM must stay (m); "
                         "the poles are masked to ignore the body, so only geometry keeps "
                         "it from rendering as flying through one")
-    p.add_argument("--cruise-speed", type=float, default=0.6, help="forward speed (m/s)")
+    p.add_argument("--cruise-speed", type=float, default=0.6,
+                   help="forward speed the pole course is laid out for (m/s)")
     p.add_argument("--cruise-pitch", type=float, default=math.radians(18.0),
                    help="forward stroke-plane tilt (rad)")
-    p.add_argument("--cruise-lean", type=float, default=math.radians(10.0),
-                   help="commanded nose-down body pitch (rad)")
-    p.add_argument("--speed-gain", type=float, default=20.0, help="speed servo gain (1/s)")
-    p.add_argument("--pos-gain", type=float, default=80.0, help="station-keeping gain (1/s^2)")
-    p.add_argument("--ref-leash", type=float, default=0.05,
-                   help="how far the station reference may run ahead of the airframe (m) "
-                        "while an obstacle is holding it up — anti-windup, so the bird "
-                        "flies out of a strike instead of being catapulted out of it")
-    p.add_argument("--level-kp", type=float, default=0.9, help="attitude spring (N m/rad)")
-    p.add_argument("--level-kd", type=float, default=0.05, help="attitude damping (N m s/rad)")
     # wingtip trail (collision clip)
     p.add_argument("--trail-pts", type=int, default=115, help="trail samples per flap cycle")
     p.add_argument("--trail-cycles", type=float, default=1.0, help="cycles of trail kept")
