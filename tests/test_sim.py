@@ -19,7 +19,7 @@ import run_fixed_frequency
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from opt.optimize_control import cpu_validate_design
-from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
+from runtime.control_signal import drive_command, load_control_for_morphology
 from runtime.disk_orientation import DiskOrientation
 from runtime.morphology_runtime import load_design_morphology
 from runtime.sim import PlateWingSim
@@ -120,8 +120,7 @@ def test_matches_run_fixed_frequency(design):
     data, start, ramp = sim.data, sim.data.time, warmup * control.period
 
     def step():
-        t = data.time
-        return sim.step(ramp_factor(t, start, ramp) * morph.motors.motor_direction * eval_control(control, t))
+        return sim.step(drive_command(control, morph.motors.motor_direction, data.time, start, ramp))
 
     dt = model.opt.timestep
     for _ in range(math.ceil(warmup * control.period / dt)):

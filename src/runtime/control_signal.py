@@ -1,7 +1,8 @@
 """The drive signal: a control .tg's Fourier series, and the ramp that eases it in.
 
 ``load_control_for_morphology`` reads the control file a design names (and checks
-the two agree on the bird); ``eval_control`` is the crank velocity command at time t.
+the two agree on the bird); ``eval_control`` is the series at time t and
+``drive_command`` the ramped, direction-signed crank command built from it.
 """
 
 from __future__ import annotations
@@ -100,6 +101,12 @@ def eval_control(control: FourierControl, t: float) -> float:
     for n, (a_n, b_n) in enumerate(zip(control.a, control.b), start=1):
         value += a_n * math.cos(n * phase) + b_n * math.sin(n * phase)
     return value
+
+
+def drive_command(control: FourierControl, motor_direction: float, t: float,
+                  t0: float = 0.0, ramp_seconds: float = 0.0) -> float:
+    """The crank velocity command at ``t``: the ramped, direction-signed Fourier drive."""
+    return ramp_factor(t, t0, ramp_seconds) * motor_direction * eval_control(control, t)
 
 
 def _parse_scalar(text: str) -> float:

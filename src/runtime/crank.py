@@ -20,7 +20,7 @@ import math
 import mujoco
 
 from morphology.tg_parser import load_morphology
-from runtime.control_signal import FourierControl, eval_control, ramp_factor
+from runtime.control_signal import FourierControl, drive_command
 from runtime.morphology_runtime import resolve_morphology_path
 
 CRANK_ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
@@ -173,11 +173,7 @@ class CrankDrive:
         self._lr_target: float | None = None
 
     def command(self, t: float, t0: float = 0.0) -> float:
-        return (
-            ramp_factor(t, t0, self.ramp)
-            * self.morph.motors.motor_direction
-            * eval_control(self.control, t)
-        )
+        return drive_command(self.control, self.morph.motors.motor_direction, t, t0, self.ramp)
 
     def lag_error(self, data) -> float:
         """How far the t1/t4 offset has walked from its startup value (rad), worst side."""
