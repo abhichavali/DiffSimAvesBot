@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -44,6 +45,7 @@ import mujoco.mjx as mjx  # noqa: E402
 import numpy as np  # noqa: E402
 
 import flying  # noqa: E402
+from codesign.rig import compile_lock  # noqa: E402
 from compile_tg import compile_tg  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
@@ -57,9 +59,7 @@ from runtime.mjx import aero_runtime, rollout as mroll, wing_pitch as mwp  # noq
 # model build (free-flying it009p, gravity matched to lift)
 # --------------------------------------------------------------------------- #
 def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_substep):
-    with open(ROOT / "opt" / ".compile.lock", "w") as _lk:
-        import fcntl, os
-        fcntl.flock(_lk, fcntl.LOCK_EX)
+    with compile_lock():
         os.environ["MORPHOLOGY_PATH"] = str(tg_path)
         os.environ["MUJOCO_XML_PATH"] = str(scene_out)
         tmp = scene_out.with_suffix(".bench.xml")
@@ -72,7 +72,7 @@ def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_sub
     if dt_ms is not None:
         model.opt.timestep = dt_ms * 1e-3
     model.opt.gravity[2] = -gravity
-    model.opt.iterations = 1  # reverse-mode differentiable (rollout.set_reverse_mode_solver)
+    model.opt.iterations = 1  # one solver iteration: no while_loop, so reverse mode can trace it
     level_stroke_plane(model)  # pure vertical stroke -> hover in place, no fwd thrust
 
     data = mujoco.MjData(model)
@@ -90,7 +90,6 @@ def measure_mean_lift(tg_path: Path, scene_bench: Path, *, ncyc=6) -> float:
     from runtime.aero import AeroBladeRuntime
     from runtime.wing_pitch import WingPitchLimiter
     from runtime.realtime import get_actuator_id
-    import os
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_bench)
     compile_tg(tg_path, scene_bench)
