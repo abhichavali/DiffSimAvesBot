@@ -5,5 +5,5 @@ CPU (numpy + MuJoCo), the reference the JAX port in ``mjx/`` is validated agains
 forces), ``wing_pitch`` (rest calibration + pitch limiter), ``crank`` (crank sync,
 phase-holding drive), ``control_signal`` (the Fourier drive), ``disk_orientation``
 (stroke-plane steering), ``eagle_drive`` / ``wing_cables`` (eagle wing),
-``realtime`` (viewer pacing), ``morphology_runtime`` (design paths).
+``realtime`` (viewer pacing).
 """

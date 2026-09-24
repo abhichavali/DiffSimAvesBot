@@ -31,6 +31,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from matplotlib.ticker import MultipleLocator
 
+from design_paths import DEFAULT_HUMMER_TG, DESIGNS_DIR
 from gui.impulse import REF_MOTOR, ImpulseSim, cut_wraps, wrap_deg
 from gui.sims import (
     PLOT_CHOICES,
@@ -48,7 +49,6 @@ from gui.sims import (
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control
 from runtime.crank import CRANK_ACTUATORS
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG, DESIGNS_DIR
 
 
 DEFAULT_PHASE_PLOTS = (

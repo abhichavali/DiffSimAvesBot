@@ -52,6 +52,7 @@ from common import (  # noqa: E402
     scene_option,
     smoothstep,
 )
+from design_paths import DEFAULT_HUMMER_TG  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
     FourierControl,
@@ -60,7 +61,6 @@ from runtime.control_signal import (  # noqa: E402
     ramp_factor,
 )
 from runtime.disk_orientation import DiskOrientation  # noqa: E402
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 from runtime.sim import PlateWingSim  # noqa: E402
 
 # (label, stroke-plane tilt deg, stroke-plane pitch deg, drive speed x)

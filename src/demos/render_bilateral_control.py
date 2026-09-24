@@ -48,9 +48,9 @@ from common import (
     smoothstep,
 )
 from compile_tg import compile_tg
+from design_paths import DEFAULT_HUMMER_TG
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import drive_command, load_control_for_morphology
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.sim import PlateWingSim
 
 # label, group, plane pitch L/R (deg), plane tilt L/R (deg), stroke weight L/R, L-R phase (deg)

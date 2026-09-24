@@ -59,6 +59,7 @@ from common import (  # noqa: E402
     scene_option,
     smoothstep,
 )
+from design_paths import DEFAULT_HUMMER_TG  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
     eval_control,
@@ -66,7 +67,6 @@ from runtime.control_signal import (  # noqa: E402
     ramp_factor,
 )
 from runtime.disk_orientation import DiskOrientation  # noqa: E402
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 from runtime.sim import PlateWingSim  # noqa: E402
 
 # Vertical weight-assist: F = m g (cancel) + k(z0 - z) - c vz. Horizontal and

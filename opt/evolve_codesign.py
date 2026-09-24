@@ -39,8 +39,8 @@ from codesign.artifacts import fourier_control_tg, motor_json, repoint_control, 
 from codesign.genome import Genome  # noqa: E402
 from codesign.metrics import Metrics, build_rollout  # noqa: E402
 from codesign.rig import flap_t1_mask, setup, step_counts  # noqa: E402
+from design_paths import HOVER_BASE_TG  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
-from runtime.morphology_runtime import HOVER_BASE_TG  # noqa: E402
 
 
 def log(msg):

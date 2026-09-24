@@ -40,9 +40,9 @@ from common import (
     smoothstep,
 )
 from compile_tg import compile_tg
+from design_paths import DEFAULT_HUMMER_TG
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import drive_command, load_control_for_morphology
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.sim import PlateWingSim
 
 # One waypoint per wingbeat. Step size is the constraint, not the list: the slew

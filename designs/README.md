@@ -5,14 +5,14 @@ legacy), and `control.tg`, the Fourier crank-velocity command (`a0` in rad/s,
 `a_n`/`b_n` absolute). `shoulder.tg`'s `control = control.tg` resolves next to it,
 a relative `meshdir = assets` resolves against the repo root, and both files carry
 the same `bird =` tag. The directory name is the design name. Tool defaults are
-the constants in `src/runtime/morphology_runtime.py` (`DEFAULT_HUMMER_TG`, ...).
+the constants in `src/design_paths.py` (`DEFAULT_HUMMER_TG`, ...).
 
 Peak torque is the CPU certification number: worst case over integrators/dt, exact
 per-cycle peaks (see `docs/ROBUST_CODESIGN_METHODOLOGY.md`).
 
 | design | bird | what it is | lineage | key numbers | default for |
 |---|---|---|---|---|---|
-| `hummer/hover/` | hummer | The codesign seed: hover geometry with 24 hand-tuned per-tendon overrides, zero harmonics. `hover_policy/` holds its trained 6-DOF stabilizing hover controller (`policy_best.npz` = the PD in `hover_meta.json`'s `pd_gains`; `policy_final.npz` is the failed BPTT result) for `src/view_hover.py`. | hover-base -> hand-tuned (git history) -> this. Was also committed as `hovering-tuned` and, misleadingly, `hovering-it009p`. | a0 65 (10.345 Hz), lag 6 deg, mean k 246.7 N/m; peak 174.7 mNm | runtime (no `MORPHOLOGY_PATH`), `view_fixed_frequency`, `run_mjx_fixed_frequency`, renders, GUI first tab, `hover_policy`, `view_hover`, `harmonic1_lift_sweep` |
+| `hummer/hover/` | hummer | The codesign seed: hover geometry with 24 hand-tuned per-tendon overrides, zero harmonics. `hover_policy/` holds its trained 6-DOF stabilizing hover controller (`policy_best.npz` = the PD in `hover_meta.json`'s `pd_gains`; `policy_final.npz` is the failed BPTT result) for `src/view_hover.py`. | hover-base -> hand-tuned (git history) -> this. Was also committed as `hovering-tuned` and, misleadingly, `hovering-it009p`. | a0 65 (10.345 Hz), lag 6 deg, mean k 246.7 N/m; peak 174.7 mNm | `view_fixed_frequency`, `run_mjx_fixed_frequency`, renders, GUI first tab, `hover_policy`, `view_hover`, `harmonic1_lift_sweep` |
 | `hummer/hover-soft-it009p/` | hummer | FLAGSHIP: codesign run-5 it009. Softened per-tendon overrides (L and R differ) and three small harmonics. `strokeplane_optimized.json` is applied automatically by `view_fixed_frequency` and the GUI, never by the optimizer or certification. | seed -> run-4 it018 -> this | a0 65.07, mean k 197.2 N/m; peak 156.5 mNm (-10.4% vs seed), lift 345-348 mN | `tests/test_wing_lock.py` |
 | `hummer/hover-base/` | hummer | Untuned hover geometry: stroke plane pitched 20 deg, uniform tendons. | ancestor of the seed | a0 63 (10.017 Hz), lag 12 deg, 200 N/m | `evolve_codesign`, `run_gui` |
 | `hummer/legacy-baseline/` | hummer | The June demo baseline (pitch 50 deg, lag 180 deg, implicitfast). NOT a hover design: negative lift. | pre-hover | a0 63 (10.017 Hz), motor tendon rest 53 mm | `optimize_control`, `compile_tg`, `run_fixed_frequency` (pass `--tg`!); `tests/test_tendon_overrides.py` fixture |

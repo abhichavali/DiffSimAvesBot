@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from codesign import train  # noqa: E402
 from codesign.loss import OBJ_CHOICES  # noqa: E402
 from codesign.rig import INTEGRATORS  # noqa: E402
-from runtime.morphology_runtime import LEGACY_BASELINE_TG  # noqa: E402
+from design_paths import LEGACY_BASELINE_TG  # noqa: E402
 
 
 def parse_args(argv=None) -> argparse.Namespace:

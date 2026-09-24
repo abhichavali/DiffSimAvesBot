@@ -34,9 +34,9 @@ The pipeline is **`designs/<bird>/<name>/{shoulder,control}.tg` → parser → c
 - `designs/` — the committed designs; **`designs/README.md`** lists each one (what it
   is, lineage, key numbers, which tool defaults to it). `shoulder.tg` is the whole
   morphology, `control.tg` the Fourier crank-velocity command beside it.
-- `src/runtime/morphology_runtime.py` — tool-default design paths (`DEFAULT_HUMMER_TG`,
-  `HOVER_BASE_TG`, `LEGACY_BASELINE_TG`, `EAGLE_TG`) and the runtime design loader
-  (override with `MORPHOLOGY_PATH`).
+- `src/design_paths.py` — tool-default design paths (`DEFAULT_HUMMER_TG`,
+  `HOVER_BASE_TG`, `LEGACY_BASELINE_TG`, `EAGLE_TG`). Nothing reads a design from the
+  environment: every tool takes `--tg` and hands the parsed `Morphology` down.
 - `src/morphology/tg_parser.py` — `.tg` → typed `Morphology` dataclass tree
 - `src/morphology/` — geometry/symmetry derivation, MJCF emitter, wing planform (`wing_geometry.py`)
 - `src/compile_tg.py` — compile CLI (`compile_tg(tg, out)` is what every tool calls)

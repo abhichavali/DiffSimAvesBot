@@ -19,11 +19,11 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from codesign.rig import INTEGRATORS, set_unsteady_aero, setup
+from design_paths import DESIGNS_DIR
 from runtime.control_signal import eval_control
 from runtime.mjx import aero_runtime as maero
 from runtime.mjx import rollout as mroll
 from runtime.mjx import wing_pitch as mwing
-from runtime.morphology_runtime import DESIGNS_DIR
 from runtime.sim import PlateWingSim
 
 

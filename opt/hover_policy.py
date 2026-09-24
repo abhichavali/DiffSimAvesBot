@@ -45,11 +45,11 @@ import numpy as np  # noqa: E402
 
 import flying  # noqa: E402
 from compile_tg import compile_tg  # noqa: E402
+from design_paths import DEFAULT_HUMMER_TG  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.control_signal import load_control_for_morphology  # noqa: E402
 from runtime.hover_control import (N_CTRL, N_FEAT, HoverCfg, hover_features,  # noqa: E402
                                    level_stroke_plane, pd_init_theta, policy_commands)
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 from runtime.sim import PlateWingSim, rest_state  # noqa: E402
 from runtime.mjx import aero_runtime, rollout as mroll, wing_pitch as mwp  # noqa: E402
 

@@ -11,8 +11,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from design_paths import LEGACY_BASELINE_TG
 from morphology.compile import compile_file
-from runtime.morphology_runtime import LEGACY_BASELINE_TG
 
 ROOT = Path(__file__).resolve().parent.parent
 

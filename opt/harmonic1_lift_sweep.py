@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from codesign.cpu_check import CpuDesign, cpu_rollout  # noqa: E402
 from codesign.rig import set_unsteady_aero, setup  # noqa: E402
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
+from design_paths import DEFAULT_HUMMER_TG  # noqa: E402
 
 
 def run(task):

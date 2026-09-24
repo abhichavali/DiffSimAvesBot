@@ -404,7 +404,7 @@ if __name__ == "__main__":
     import numpy as np
 
     from compile_tg import compile_tg
-    from runtime.morphology_runtime import DEFAULT_HUMMER_TG
+    from design_paths import DEFAULT_HUMMER_TG
 
     with tempfile.TemporaryDirectory() as tmp:
         xml = compile_tg(DEFAULT_HUMMER_TG, Path(tmp) / "scene.xml").read_text()

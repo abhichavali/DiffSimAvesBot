@@ -20,12 +20,12 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from compile_tg import compile_tg
+from design_paths import DEFAULT_HUMMER_TG
 from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from run_fixed_frequency import print_lift_stats
 from runtime.control_signal import load_control_for_morphology
 from runtime.mjx import aero_runtime, rollout, wing_pitch
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.sim import rest_state
 
 ROOT = Path(__file__).resolve().parent.parent

@@ -32,10 +32,10 @@ import numpy as np
 
 import flying
 from compile_tg import compile_tg
+from design_paths import DEFAULT_HUMMER_TG
 from morphology.tg_parser import load_morphology
 from runtime.disk_orientation import DiskOrientation
 from runtime.hover_control import HoverCfg, hover_features, level_stroke_plane, policy_commands
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.realtime import RealtimeSync
 from runtime.sim import PlateWingSim
 
