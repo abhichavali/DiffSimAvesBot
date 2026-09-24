@@ -31,7 +31,6 @@ from compile_tg import compile_tg
 from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
 from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
-import runtime.aero as cpu_aero
 from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control, load_control_for_morphology, ramp_factor
 from runtime.crank import sync_crank_disks_at_rest
@@ -223,14 +222,7 @@ def data_by_phase(
     def step() -> None:
         data.qfrc_applied[:] = 0.0
         data.ctrl[:] = 0.0
-        caps = (cpu_aero.OMEGA_DOT_CAP, cpu_aero.LIN_ACC_CAP)
-        if is_mean_lift_plot:
-            cpu_aero.OMEGA_DOT_CAP = cpu_aero.LIN_ACC_CAP = 0.0
-        try:
-            aero.apply(model, data)
-        finally:
-            if is_mean_lift_plot:
-                cpu_aero.OMEGA_DOT_CAP, cpu_aero.LIN_ACC_CAP = caps
+        aero.apply(model, data)
         pitch.apply(model, data)
         ramp = ramp_factor(data.time, drive_start, settle_periods * control.period)
         base_ctrl = ramp * morph.motors.motor_direction * eval_control(control, data.time)
@@ -359,22 +351,6 @@ def data_by_phase(
     elif plot_kind == "Angular velocity vs time":
         xlabel = "Time (s)"
     return x_values, series, plot_kind, xlabel, ylabel, colors
-
-
-def actuator_torque_by_phase(
-    tg_path: Path,
-    scene_path: Path,
-    periods: float,
-    settle_periods: float = SETTLE_PERIODS,
-) -> tuple[list[float], dict[str, list[float]]]:
-    phases, series, _title, _xlabel, _ylabel, _colors = data_by_phase(
-        tg_path,
-        scene_path,
-        periods,
-        "Left actuator torque vs phase",
-        settle_periods=settle_periods,
-    )
-    return phases, series
 
 
 def tendon_tension(model: mujoco.MjModel, data: mujoco.MjData, tid: int, rest_length: float) -> float:
@@ -1902,11 +1878,6 @@ class PlotGui:
         pane = self.active_pane()
         if pane:
             pane.reload_design()
-
-    def update_phase_plots(self) -> None:
-        pane = self.active_pane()
-        if pane:
-            pane.update_phase_plots()
 
     def update_current_tab_graphs(self) -> None:
         pane = self.active_pane()
