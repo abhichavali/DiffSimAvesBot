@@ -8,7 +8,9 @@ the same `bird =` tag. The directory name is the design name. Tool defaults are
 the constants in `src/design_paths.py` (`DEFAULT_HUMMER_TG`, ...).
 
 Peak torque is the CPU certification number: worst case over integrators/dt, exact
-per-cycle peaks (see `docs/ROBUST_CODESIGN_METHODOLOGY.md`).
+per-cycle peaks (see `docs/ROBUST_CODESIGN_METHODOLOGY.md` section 12). Reproduce it
+with `opt/design_io.py <dir> --periods 24` (its docstring has the two doctrine
+commands); the seed `hummer/hover` certifies at 174.3 mNm that way.
 
 | design | bird | what it is | lineage | key numbers | default for |
 |---|---|---|---|---|---|

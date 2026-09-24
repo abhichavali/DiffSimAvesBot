@@ -90,7 +90,13 @@ CPU validation is a manual checkpoint replay, not an in-loop gate.
 ## 4. The optimizer and reward
 
 The optimizer was one file, `opt/optimize_control.py`, during this campaign; it is now
-that CLI over the `src/codesign/` library (`opt/README.md`). Parameterization
+that CLI over the `src/codesign/` library (`opt/README.md`). The refactor dropped the
+validity-penalized Adam stage (`--w-valid`, `--alpha-stall-deg`, `--alpha-smooth-deg`,
+`--k-max`, `--k-smooth`, `--lp-power`, `--avg-periods`, `--conv-eps`; the July-6 run of
+`opt/run_validity_codesign.sh` used `--w-valid 10 --alpha-stall-deg 81 --k-max 0.38`),
+`--swing-mode`, `--lift-above-weight` and `--init-tendons`: `C_valid` is still computed
+and logged but no longer enters the loss. They are in git history before commit
+`0b4f12d`. Parameterization
 (57 params total, all log-factors except harmonic depths):
 
 - Control (7): `[a0_log, a_1..a_3, b_1..b_3]`; a0 as log-factor of the seed a0; harmonics

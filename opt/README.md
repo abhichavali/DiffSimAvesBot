@@ -7,8 +7,8 @@ simulation. The CLIs live here; the library is `src/codesign/`.
 |---|---|
 | `optimize_control.py` | Gradient co-design CLI (argparse -> `codesign.train.run`) |
 | `evolve_codesign.py` | EA over the same genome, optional `.tg` geometry genes (`--geom-genes`) |
-| `run_gui.py` | Tk front-end: GA -> Adam chain over the two CLIs above |
-| `design_io.py` | Replay a design dir on MuJoCo CPU (`codesign.artifacts.validate`) |
+| `run_gui.py` | Tk codesign launcher: GA -> Adam chain over the two CLIs above (not the design-inspector GUI, `plot_fixed_frequency_gui.py`) |
+| `design_io.py` | Replay or certify a design dir (optimizer output or committed `designs/`) on MuJoCo CPU (`codesign.artifacts.validate`) |
 | `hover_policy.py` | Free-flight hover model + BPTT trainer (controller: `src/runtime/hover_control.py`) |
 | `tg_scalars.py` | `.tg` scalar flatten/substitute for the GUI and geometry genes |
 | `diag_mjx_cpu_parity.py`, `harmonic1_lift_sweep.py` | MJX<->CPU step diff; first-harmonic lift sweep |
@@ -20,11 +20,13 @@ pairs), `genome.py` (the packed theta), `metrics.py` (theta -> `Metrics` rollout
 
 ## Run
 
-Smoke test (CPU, ~15 s):
+Smoke test (CPU, ~15 s warm, up to a minute cold):
 ```sh
 uv run python opt/optimize_control.py --tg designs/hummer/hover-soft-it009p/shoulder.tg \
     --warmup-periods 0.2 --sample-periods 0.2 --iters-per-stage 1 --harmonics 2 --out /tmp/oc
 ```
+It only proves the pipeline runs: on 0.2-period windows the metrics are meaningless
+(a ~37000 mNm `tau_hat` baseline, `best tau=inf`, `swing=nan` are expected).
 The default `--tg` (`designs/hummer/legacy-baseline`) is NOT a hover design (negative
 lift): pass a hover `.tg`. Always pass `--timestep` when using `--cpu-timestep-factors`
 (without it the factors silently check the base dt again). On a GPU box rsync the repo
@@ -142,6 +144,11 @@ every 3 iterations, `cpu_best/`, `robust_best/`, `*preharmonics/`) holds `should
 uv run python opt/design_io.py opt/runs/cpu_best --integrator euler implicitfast --timestep 0.06
 ```
 
+`design_io.py` also replays a committed design dir on its own `control.tg`; with
+`--periods 24` it runs the certification doctrine of `docs/ROBUST_CODESIGN_METHODOLOGY.md`
+section 12 (see its docstring). The seed `designs/hummer/hover` certifies at 174.3 mNm
+worst case this way (section 12's 174.7 came from the campaign's own scripts).
+
 ## Known issues (kept as-is for now; each fix changes outputs)
 
 - The MJX rollout drives harmonics on the crank-locked clock `omega*exp(f_log + a0_log)`;
@@ -151,3 +158,9 @@ uv run python opt/design_io.py opt/runs/cpu_best --integrator euler implicitfast
 - `--init-codesign` slices by position, so a `theta_full.json` from a `--tune-pitch` or
   `--tune-frequency` run is mis-decoded.
 - `evolve_codesign.py` hard-codes K=5 harmonics and ranks on `tau_hat`, not `tau_peak`.
+- `--wavelet` writes a `control.tg` (`basis = wavelet`, `w_j = ...`) that no runtime tool
+  loads (`load_control` rejects it), and `design_io` KeyErrors on its `theta_best.json`.
+- The validity-penalized Adam stage (`--w-valid`, `--alpha-stall-deg`, `--k-max`, ...)
+  and `--init-tendons` were removed with `opt/run_validity_codesign.sh`; `C_valid` is
+  still computed and logged but no longer enters the loss. Restore from git history
+  (before commit 0b4f12d) if that campaign is rerun.
