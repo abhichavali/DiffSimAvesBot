@@ -189,8 +189,9 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # Rotational aerodynamic force
     # --------------------------------------------------------
 
+    # Per strip: rho * Gamma * U * dr with dr = Rw / NumBlade, the width every term here uses.
     Circulation_rot = np.pi * ((0.75 if hinge_leads else 0.25) - x_rot) * (chord ** 2) * omega_w[1]
-    F_rot_i = c4 * abs(rle) * (1 / NumBlade) * np.array([rho * Circulation_rot * norm_v, 0, 0])
+    F_rot_i = c4 * (Rw / NumBlade) * np.array([rho * Circulation_rot * norm_v, 0, 0])
 
     # --------------------------------------------------------
     # Added-mass effects

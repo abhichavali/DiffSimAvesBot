@@ -82,3 +82,17 @@ def test_aero_strips_sit_on_the_compiled_wing_mesh():
             s = chordwise * _section_values(tris, 2, z, 1)
             assert s.max() - s.min() == pytest.approx(g.chords[j], abs=1e-6)
             assert s.min() == pytest.approx(-g.x_rot[j] * g.chords[j], abs=1e-6)
+
+
+def test_uniform_flow_loads_every_strip_alike():
+    """Uniform flow plus a pitch rate (omega_y adds no strip velocity): every strip of a
+    uniform-chord wing sees the same flow, so gets the same force, rotational lift included."""
+    v, omega, zero = np.array([1.0, 0.0, 2.0]), np.array([0.0, 5.0, 0.0]), np.zeros(3)
+    f_in, f_out = (aerodynamics("L", omega, zero, v, zero, i, DT, LENGTH, 2, RHO_AIR, CHORD, np.zeros(2),
+                                x_rot=X_ROT, root=ROOT_OFFSET)[0] for i in (0.25, 0.75))
+    np.testing.assert_allclose(f_in, f_out, rtol=1e-12)
+    f = aero_wing(jnp.asarray(omega), jnp.zeros(3), jnp.asarray(v), jnp.zeros(3), jnp.asarray(v), side="L",
+                  chords=jnp.full(2, CHORD), x_rot=jnp.full(2, X_ROT), span_cutoffs=jnp.zeros(2),
+                  length=LENGTH, root=ROOT_OFFSET, num_blade=2, dt=DT)[0]
+    np.testing.assert_allclose(f[0], f[1], rtol=1e-6)
+    np.testing.assert_allclose(f[0], f_in, rtol=1e-5)

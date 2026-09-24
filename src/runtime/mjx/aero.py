@@ -142,7 +142,7 @@ def aero_strip(
 
     # --- Rotational circulation force ---
     circulation_rot = _PI * (jnp.where(hinge_leads, 0.75, 0.25) - x_rot) * chord**2 * omega_w[1]
-    f_rot_x = p.c4 * jnp.abs(rle) * (1.0 / num_blade) * rho * circulation_rot * norm_v
+    f_rot_x = p.c4 * (Rw / num_blade) * rho * circulation_rot * norm_v
     F_rot_i = jnp.stack([f_rot_x, jnp.zeros_like(f_rot_x), jnp.zeros_like(f_rot_x)])
 
     # --- Added mass ---
