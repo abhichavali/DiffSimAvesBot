@@ -1,8 +1,9 @@
 """Offline CPU rollouts behind the design-inspector GUI's plots, and its two caches.
 
-``data_by_phase``, ``work_loop_data`` and ``wing_path_data`` each compile a design,
-settle it on the ramped crank drive and record one kind of trace; ``cached_sim``
-pickles their results under .gui_plot_cache/ keyed on the design files' mtimes, and
+``phase_trace`` (every phase-plot series in one rollout; ``phase_plot`` picks one),
+``work_loop_data`` and ``wing_path_data`` each compile a design and settle it on the
+ramped crank drive (``settled_drive``) before recording. ``cached_sim`` pickles
+their results under .gui_plot_cache/ keyed on the design files' mtimes, and
 ``prepare_scene`` skips recompiling an unchanged .tg. ``plot_fixed_frequency_gui.py``
 is the Tk front end that draws them.
 """
@@ -35,19 +36,22 @@ ROOT = Path(__file__).resolve().parents[2]
 
 ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 PLOT_ACTUATORS = ("L_motor_t1", "L_motor_t4")
-PLOT_CHOICES = (
-    "Left actuator torque vs phase",
-    "Left motor tendon tension vs phase",
-    "Angular velocity vs phase",
-    "Angular velocity vs time",
-    "Structural tendon tension vs phase",
-    "Structural tendon displacement vs phase",
-    "Structural elastic energy vs phase",
-    "Wingtip stroke vs phase (3D)",
-    "Stroke plane deviation vs phase",
-    "Mean lift per cycle",
-    "Mean lift per half-cycle",
-)
+# Phase-plot kind -> its y-axis label; the keys are the GUI's plot menu.
+PLOT_YLABELS = {
+    "Left actuator torque vs phase": "Actuator torque (mN m)",
+    "Left motor tendon tension vs phase": "Motor tendon tension (N)",
+    "Angular velocity vs phase": "|Angular velocity| (rad/s)",
+    "Angular velocity vs time": "|Angular velocity| (rad/s)",
+    "Structural tendon tension vs phase": "Structural tendon tension (N)",
+    "Structural tendon displacement vs phase": "Structural tendon displacement (mm)",
+    "Structural elastic energy vs phase": "Elastic energy (J)",
+    "Wingtip stroke vs phase (3D)": "Wingtip excursion from mean (mm)",
+    "Stroke plane deviation vs phase": "Stroke-plane deviation (deg)",
+    "Mean lift per cycle": "Mean lift (mN)",
+    "Mean lift per half-cycle": "Mean lift (mN)",
+}
+PLOT_CHOICES = tuple(PLOT_YLABELS)
+MEAN_LIFT_PLOTS = ("Mean lift per cycle", "Mean lift per half-cycle")
 SETTLE_PERIODS = 3
 WINGTIP_SITE = "L_wing_aero_blade_04"
 PLOT_CACHE_DIR = ROOT / ".gui_plot_cache"
@@ -168,6 +172,123 @@ def settled_drive(tg_path: Path, scene_path: Path, control_path: Path | None, se
     return model, data, control, aero, step, sp
 
 
+def phase_trace(
+    tg_path: Path,
+    scene_path: Path,
+    periods: float,
+    control_path: Path | None = None,
+    settle_periods: float = SETTLE_PERIODS,
+) -> dict:
+    """Settle the design, then record every phase-plot series over `periods` cycles.
+
+    One rollout serves all PLOT_CHOICES; ``phase_plot`` picks one out. Series are
+    per step except the mean lift, kept as per-(half-)cycle running sums.
+    """
+    model, data, control, aero, step, sp = settled_drive(
+        tg_path, scene_path, control_path, settle_periods, strokeplane=True)
+    plot_ids = {name: get_actuator_id(model, name) for name in PLOT_ACTUATORS}
+    tendon_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name) for name in PLOT_ACTUATORS}
+    qvel_ids = {}
+    for name in PLOT_ACTUATORS:
+        prefix, station = name.split("_motor_")
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{station}_disk_hinge")
+        qvel_ids[name] = int(model.jnt_dofadr[jid])
+    structural_ids, structural_names = structural_tendons(model)
+    tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
+
+    trace = {
+        "elapsed": [], "phase": [], "U_tens": [], "tilt": [], "pitch": [], "x": [], "y": [], "z": [],
+        "torque": {name: [] for name in PLOT_ACTUATORS},
+        "motor_tension": {name: [] for name in PLOT_ACTUATORS},
+        "speed": {name: [] for name in PLOT_ACTUATORS},
+        "tension": {name: [] for name in structural_names},
+        "displacement": {name: [] for name in structural_names},
+        "lift": {kind: ({}, {}) for kind in MEAN_LIFT_PLOTS},  # kind -> (sums, counts) by (half-)cycle
+    }
+    start_time = data.time
+    for _ in range(math.ceil(periods * control.period / model.opt.timestep)):
+        step()
+        elapsed = data.time - start_time
+        phase = elapsed * control.fundamental_frequency_hz
+        trace["elapsed"].append(elapsed)
+        trace["phase"].append(phase)
+        for name, aid in plot_ids.items():
+            trace["torque"][name].append(1000.0 * float(data.actuator_force[aid]))
+        for name, tid in tendon_ids.items():
+            trace["motor_tension"][name].append(
+                tendon_tension(model, data, tid, float(model.tendon_lengthspring[tid][0])))
+        for name, dof in qvel_ids.items():
+            trace["speed"][name].append(abs(float(data.qvel[dof])))
+        energy = 0.0
+        for name, tid in zip(structural_names, structural_ids):
+            rest_length = float(model.tendon_range[tid][1])
+            displacement = float(data.ten_length[tid]) - rest_length
+            trace["tension"][name].append(tendon_tension(model, data, tid, rest_length))
+            trace["displacement"][name].append(1000.0 * displacement)
+            energy += 0.5 * float(model.tendon_stiffness[tid]) * displacement * displacement
+        trace["U_tens"].append(energy)
+        if sp is not None:
+            tilt, pitv = sp.angles(data)
+            dev_t, dev_p = tilt - sp.tilt0, pitv - sp.pitch0
+        else:  # no learned signal next to this design: flat zero deviation
+            dev_t = dev_p = 0.0
+        trace["tilt"].append(math.degrees(dev_t))
+        trace["pitch"].append(math.degrees(dev_p))
+        pos = data.site_xpos[tip_id]
+        trace["x"].append(1000.0 * float(pos[0]))
+        trace["y"].append(1000.0 * float(pos[1]))
+        trace["z"].append(1000.0 * float(pos[2]))
+        if phase < periods:
+            lift = sum(float(sum(force[2] for force in (wing.cached_forces or []))) for wing in aero.wings)
+            cycle = int(phase) + int(math.floor(settle_periods)) + 1
+            for kind, key in (("Mean lift per cycle", cycle),
+                              ("Mean lift per half-cycle", cycle + (0.0 if phase % 1.0 < 0.5 else 0.5))):
+                lift_sums, lift_counts = trace["lift"][kind]
+                lift_sums[key] = lift_sums.get(key, 0.0) + 1000.0 * lift
+                lift_counts[key] = lift_counts.get(key, 0) + 1
+    return trace
+
+
+def phase_plot(trace: dict, plot_kind: str) -> tuple[list[float], dict[str, list[float]], str, str, str, dict[str, str]]:
+    """(x, series, title, xlabel, ylabel, colors) of one PLOT_CHOICES kind from a phase_trace."""
+    x_values = trace["elapsed"] if plot_kind == "Angular velocity vs time" else trace["phase"]
+    colors: dict[str, str] = {}
+    if plot_kind in MEAN_LIFT_PLOTS:
+        lift_sums, lift_counts = trace["lift"][plot_kind]
+        x_values = sorted(lift_sums)
+        series = {"mean_lift": [lift_sums[key] / lift_counts[key] for key in x_values]}
+    elif plot_kind == "Left motor tendon tension vs phase":
+        series = trace["motor_tension"]
+    elif plot_kind in ("Angular velocity vs phase", "Angular velocity vs time"):
+        series = trace["speed"]
+    elif plot_kind in ("Structural tendon tension vs phase", "Structural tendon displacement vs phase"):
+        series = trace["tension" if plot_kind == "Structural tendon tension vs phase" else "displacement"]
+        colors = {name: STRUCTURAL_TENDON_COLORS[i] for i, name in enumerate(series)}
+    elif plot_kind == "Structural elastic energy vs phase":
+        series = {"U_tens": trace["U_tens"]}
+    elif plot_kind == "Stroke plane deviation vs phase":
+        series = {"tilt": trace["tilt"], "pitch": trace["pitch"]}
+    elif plot_kind == "Wingtip stroke vs phase (3D)":
+        # Center each axis on its cycle mean; flapping amplitude = peak-to-peak
+        # excursion per axis, plus the resultant 3D radial excursion magnitude.
+        centered = {k: np.array(trace[k]) - np.mean(trace[k]) for k in ("x", "y", "z")}
+        mag = np.sqrt(sum(centered[k] ** 2 for k in ("x", "y", "z")))
+        series = {
+            f"{k} (pp {centered[k].max() - centered[k].min():.1f} mm)": centered[k].tolist()
+            for k in ("x", "y", "z")
+        }
+        series[f"|3D| (max {mag.max():.1f} mm)"] = mag.tolist()
+    else:
+        series = trace["torque"]
+
+    xlabel = "Crank phase (cycles)"
+    if plot_kind in MEAN_LIFT_PLOTS:
+        xlabel = "Cycle"
+    elif plot_kind == "Angular velocity vs time":
+        xlabel = "Time (s)"
+    return x_values, series, plot_kind, xlabel, PLOT_YLABELS[plot_kind], colors
+
+
 def data_by_phase(
     tg_path: Path,
     scene_path: Path,
@@ -176,125 +297,8 @@ def data_by_phase(
     control_path: Path | None = None,
     settle_periods: float = SETTLE_PERIODS,
 ) -> tuple[list[float], dict[str, list[float]], str, str, str, dict[str, str]]:
-    is_mean_lift_plot = plot_kind in ("Mean lift per cycle", "Mean lift per half-cycle")
-    model, data, control, aero, step, sp_signal = settled_drive(
-        tg_path, scene_path, control_path, settle_periods, strokeplane=True)
-    period = control.period
-    plot_ids = {name: get_actuator_id(model, name) for name in PLOT_ACTUATORS}
-    tendon_ids = {name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, name) for name in PLOT_ACTUATORS}
-    qvel_ids = {}
-    for name in PLOT_ACTUATORS:
-        prefix, station = name.split("_motor_")
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{station}_disk_hinge")
-        qvel_ids[name] = int(model.jnt_dofadr[jid])
-    structural_tendon_ids, structural_tendon_names = structural_tendons(model)
-    tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, WINGTIP_SITE)
-
-    x_values: list[float] = []
-    is_structural_plot = plot_kind in (
-        "Structural tendon tension vs phase",
-        "Structural tendon displacement vs phase",
-    )
-    is_wingtip = plot_kind == "Wingtip stroke vs phase (3D)"
-    is_strokeplane = plot_kind == "Stroke plane deviation vs phase"
-    names = ["x", "y", "z"] if is_wingtip else (
-        ["tilt", "pitch"] if is_strokeplane else
-        ["U_tens"] if plot_kind == "Structural elastic energy vs phase" else
-        ["mean_lift"] if is_mean_lift_plot else
-        structural_tendon_names if is_structural_plot else list(PLOT_ACTUATORS)
-    )
-    series = {name: [] for name in names}
-    colors = (
-        {name: STRUCTURAL_TENDON_COLORS[i] for i, name in enumerate(structural_tendon_names)}
-        if is_structural_plot
-        else {}
-    )
-    start_time = data.time
-    steps = math.ceil(periods * period / model.opt.timestep)
-    lift_sums: dict[int | float, float] = {}
-    lift_counts: dict[int | float, int] = {}
-
-    for _ in range(steps):
-        step()
-        elapsed = data.time - start_time
-        phase = elapsed * control.fundamental_frequency_hz
-        if plot_kind != "Mean lift per cycle":
-            x_values.append(elapsed if plot_kind == "Angular velocity vs time" else phase)
-        if is_mean_lift_plot:
-            if phase >= periods:
-                continue
-            lift = sum(float(sum(force[2] for force in (wing.cached_forces or []))) for wing in aero.wings)
-            cycle = int(phase) + int(math.floor(settle_periods)) + 1
-            key = cycle if plot_kind == "Mean lift per cycle" else cycle + (0.0 if phase % 1.0 < 0.5 else 0.5)
-            lift_sums[key] = lift_sums.get(key, 0.0) + 1000.0 * lift
-            lift_counts[key] = lift_counts.get(key, 0) + 1
-            ylabel = "Mean lift (mN)"
-        elif plot_kind == "Left motor tendon tension vs phase":
-            for name, tid in tendon_ids.items():
-                series[name].append(tendon_tension(model, data, tid, float(model.tendon_lengthspring[tid][0])))
-            ylabel = "Motor tendon tension (N)"
-        elif plot_kind in ("Angular velocity vs phase", "Angular velocity vs time"):
-            for name, dof in qvel_ids.items():
-                series[name].append(abs(float(data.qvel[dof])))
-            ylabel = "|Angular velocity| (rad/s)"
-        elif plot_kind == "Structural tendon tension vs phase":
-            for name, tid in zip(structural_tendon_names, structural_tendon_ids):
-                series[name].append(tendon_tension(model, data, tid, float(model.tendon_range[tid][1])))
-            ylabel = "Structural tendon tension (N)"
-        elif plot_kind == "Structural tendon displacement vs phase":
-            for name, tid in zip(structural_tendon_names, structural_tendon_ids):
-                rest_length = float(model.tendon_range[tid][1])
-                series[name].append(1000.0 * (float(data.ten_length[tid]) - rest_length))
-            ylabel = "Structural tendon displacement (mm)"
-        elif plot_kind == "Structural elastic energy vs phase":
-            energy = 0.0
-            for tid in structural_tendon_ids:
-                rest_length = float(model.tendon_range[tid][1])
-                displacement = float(data.ten_length[tid]) - rest_length
-                energy += 0.5 * float(model.tendon_stiffness[tid]) * displacement * displacement
-            series["U_tens"].append(energy)
-            ylabel = "Elastic energy (J)"
-        elif is_strokeplane:
-            if sp_signal is not None:
-                tilt, pitv = sp_signal.angles(data)
-                dev_t, dev_p = tilt - sp_signal.tilt0, pitv - sp_signal.pitch0
-            else:  # no learned signal next to this design: flat zero deviation
-                dev_t = dev_p = 0.0
-            series["tilt"].append(math.degrees(dev_t))
-            series["pitch"].append(math.degrees(dev_p))
-            ylabel = "Stroke-plane deviation (deg)"
-        elif is_wingtip:
-            pos = data.site_xpos[tip_id]
-            series["x"].append(1000.0 * float(pos[0]))
-            series["y"].append(1000.0 * float(pos[1]))
-            series["z"].append(1000.0 * float(pos[2]))
-            ylabel = "Wingtip excursion from mean (mm)"
-        else:
-            for name, aid in plot_ids.items():
-                series[name].append(1000.0 * float(data.actuator_force[aid]))
-            ylabel = "Actuator torque (mN m)"
-
-    if is_mean_lift_plot:
-        x_values = sorted(lift_sums)
-        series["mean_lift"] = [lift_sums[key] / lift_counts[key] for key in x_values]
-
-    if is_wingtip:
-        # Center each axis on its cycle mean; flapping amplitude = peak-to-peak
-        # excursion per axis, plus the resultant 3D radial excursion magnitude.
-        centered = {k: np.array(series[k]) - np.mean(series[k]) for k in ("x", "y", "z")}
-        mag = np.sqrt(sum(centered[k] ** 2 for k in ("x", "y", "z")))
-        series = {
-            f"{k} (pp {centered[k].max() - centered[k].min():.1f} mm)": centered[k].tolist()
-            for k in ("x", "y", "z")
-        }
-        series[f"|3D| (max {mag.max():.1f} mm)"] = mag.tolist()
-
-    xlabel = "Crank phase (cycles)"
-    if is_mean_lift_plot:
-        xlabel = "Cycle"
-    elif plot_kind == "Angular velocity vs time":
-        xlabel = "Time (s)"
-    return x_values, series, plot_kind, xlabel, ylabel, colors
+    """One phase plot straight from a fresh rollout (the GUI caches phase_trace instead)."""
+    return phase_plot(phase_trace(tg_path, scene_path, periods, control_path, settle_periods), plot_kind)
 
 
 def tendon_tension(model: mujoco.MjModel, data: mujoco.MjData, tid: int, rest_length: float) -> float:

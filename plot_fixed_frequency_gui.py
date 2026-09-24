@@ -38,13 +38,15 @@ from gui.sims import (
     SETTLE_PERIODS,
     cached_sim,
     coupled_control_path,
-    data_by_phase,
+    phase_plot,
+    phase_trace,
     prepare_scene,
     structural_tendon_stiffness_rows,
     wing_path_correlation,
     wing_path_data,
     work_loop_data,
 )
+from gui.sims import data_by_phase  # noqa: F401  TEMP re-export: remove after integration (tests/golden/harness.py gui_trace)
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG, DESIGNS_DIR
@@ -740,15 +742,15 @@ class DesignPane:
         self.status.set("Running simulation...")
         self.root.update_idletasks()
         try:
-            x_values, series, title, xlabel, ylabel, colors = cached_sim(
-                data_by_phase,
+            trace = cached_sim(
+                phase_trace,
                 Path(self.tg_var.get()),
                 self.scene_path,
                 periods,
-                plot_choice.get(),
                 control_path=Path(self.control_var.get()),
                 settle_periods=settle_periods,
             )
+            x_values, series, title, xlabel, ylabel, colors = phase_plot(trace, plot_choice.get())
         except Exception as exc:
             self.status.set(f"Error: {exc}")
             raise
