@@ -21,7 +21,7 @@ import numpy as np
 
 from compile_tg import compile_tg
 from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
-from morphology.model import PLATE_BIRDS, require_bird
+from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import drive_command, load_control, load_control_for_morphology
 from runtime.disk_orientation import DiskOrientation
@@ -80,7 +80,7 @@ def cached_sim(func, tg_path: Path, scene_path: Path, *args, control_path: Path 
 def coupled_control_path(tg_path: Path) -> Path:
     """Control file referenced by a morphology, resolved relative to it."""
     morph = load_morphology(tg_path)
-    require_bird(morph, *PLATE_BIRDS, tool="the plotting GUI")
+    require_bird(morph, "hummer", tool="the plotting GUI")
     control_path = Path(morph.motors.control_file)
     if not control_path.is_absolute():
         control_path = tg_path.parent / control_path

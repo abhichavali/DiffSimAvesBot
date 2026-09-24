@@ -61,8 +61,8 @@ def load_control(path: Path) -> FourierControl:
         values[key] = _parse_scalar(value)
     if bird not in BIRDS:
         raise ValueError(
-            f"{path}: missing or unknown bird tag {bird!r}; put `bird = hummer`, "
-            "`bird = swift` or `bird = eagle` at the top of the control .tg"
+            f"{path}: missing or unknown bird tag {bird!r}; put `bird = hummer` "
+            "or `bird = eagle` at the top of the control .tg"
         )
 
     harmonics = int(values.get("harmonics", 0))

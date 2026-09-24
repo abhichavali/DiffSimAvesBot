@@ -15,20 +15,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional, Tuple
 
-#: Every .tg carries `bird = <tag>`; it says which rig the file describes.
-BIRDS = ("hummer", "swift", "eagle")
-#: The flat plate wing on the tensegrity shoulder: the fixed-frequency runners,
-#: the plotting GUI and the codesign optimizers are all plate-wing tools.
-#: `eagle` is the three-linkage bone wing (designs/eagle/shoulder.tg, src/view_eagle.py).
-PLATE_BIRDS = ("hummer", "swift")
+#: Every .tg carries `bird = <tag>`; it says which rig the file describes. `hummer`
+#: is the flat plate wing on the tensegrity shoulder (the fixed-frequency runners,
+#: the plotting GUI and the codesign optimizers); `eagle` is the three-linkage bone
+#: wing (designs/eagle/shoulder.tg, src/view_eagle.py).
+BIRDS = ("hummer", "eagle")
 
 
-def require_bird(morph: "Morphology", *allowed: str, tool: str = "this tool") -> None:
+def require_bird(morph: "Morphology", bird: str, *, tool: str) -> None:
     """Refuse a design the tool was not written for; the .tg's `bird` tag decides."""
-    if morph.bird not in allowed:
-        raise ValueError(
-            f"{tool} drives {' / '.join(allowed)} designs, but {morph.name} is tagged bird = {morph.bird or '(none)'}"
-        )
+    if morph.bird != bird:
+        raise ValueError(f"{tool} drives {bird} designs, but {morph.name} is tagged bird = {morph.bird or '(none)'}")
 
 
 class StrutRole(str, Enum):
@@ -434,7 +431,7 @@ class Morphology:
         if self.bird not in BIRDS:
             raise ValueError(
                 f"{self.name}: missing or unknown bird tag {self.bird!r}; put "
-                "`bird = hummer`, `bird = swift` or `bird = eagle` at the top of the .tg"
+                "`bird = hummer` or `bird = eagle` at the top of the .tg"
             )
         if (self.bird == "eagle") != (self.wing.bones is not None):
             raise ValueError(

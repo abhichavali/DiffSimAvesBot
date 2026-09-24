@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from morphology.model import BIRDS, PLATE_BIRDS, require_bird
+from morphology.model import BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control, load_control_for_morphology
 
@@ -78,9 +78,9 @@ def test_a_control_of_another_bird_cannot_be_paired(tmp_path):
 
 def test_require_bird_keeps_the_tools_apart():
     hummer, eagle = load_morphology(SHOULDER), load_morphology(EAGLE)
-    require_bird(hummer, *PLATE_BIRDS, tool="plate tool")
+    require_bird(hummer, "hummer", tool="plate tool")
     require_bird(eagle, "eagle", tool="eagle tool")
-    with pytest.raises(ValueError, match="plate tool drives hummer / swift"):
-        require_bird(eagle, *PLATE_BIRDS, tool="plate tool")
+    with pytest.raises(ValueError, match="plate tool drives hummer designs"):
+        require_bird(eagle, "hummer", tool="plate tool")
     with pytest.raises(ValueError, match="eagle tool drives eagle"):
         require_bird(hummer, "eagle", tool="eagle tool")

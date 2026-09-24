@@ -37,11 +37,11 @@ the Fourier control signal. The default generated scene is `scene.xml`.
 
 ## Birds
 
-Every `.tg` (morphology and control) starts with a tag: `bird = hummer`,
-`bird = swift` or `bird = eagle`. The parser refuses an untagged file, refuses a
-control paired with a morphology of another bird, and checks the tag against the
-wing: `eagle` must carry the `bones:` three-linkage wing, `hummer` and `swift`
-are the flat plate on the tensegrity shoulder. The plate-wing tools
-(`run_fixed_frequency`, `view_fixed_frequency`, `plot_fixed_frequency_gui`, the
-`opt/` codesign) refuse eagle designs, and `view_eagle` refuses the plate wing.
-The plotting GUI shows the bird in each design tab's title.
+Every `.tg` (morphology and control) starts with a tag: `bird = hummer` or
+`bird = eagle`. The parser refuses an untagged file, refuses a control paired
+with a morphology of another bird, and checks the tag against the wing: `eagle`
+must carry the `bones:` three-linkage wing, `hummer` is the flat plate on the
+tensegrity shoulder. The plate-wing tools (`run_fixed_frequency`,
+`view_fixed_frequency`, `plot_fixed_frequency_gui`, the `opt/` codesign) refuse
+eagle designs, and `view_eagle` refuses the plate wing. The plotting GUI shows
+the bird in each design tab's title.

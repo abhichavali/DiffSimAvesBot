@@ -20,7 +20,7 @@ import mujoco.viewer
 import numpy as np
 
 from compile_tg import compile_tg
-from morphology.model import PLATE_BIRDS, require_bird
+from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import drive_command, load_control, load_control_for_morphology
 from runtime.disk_orientation import DiskOrientation
@@ -51,7 +51,7 @@ def main() -> None:
     compile_tg(args.tg, args.scene, color_structural_tendons=args.color)
 
     morph = load_morphology(args.tg)
-    require_bird(morph, *PLATE_BIRDS, tool="view_fixed_frequency")
+    require_bird(morph, "hummer", tool="view_fixed_frequency")
     sim = PlateWingSim(mujoco.MjModel.from_xml_path(str(args.scene)), morph)
     model, data = sim.model, sim.data
 

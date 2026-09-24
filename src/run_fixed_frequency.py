@@ -17,7 +17,7 @@ import mujoco
 import numpy as np
 
 from compile_tg import compile_tg
-from morphology.model import PLATE_BIRDS, require_bird
+from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import drive_command, load_control_for_morphology
 from runtime.morphology_runtime import LEGACY_BASELINE_TG
@@ -31,7 +31,7 @@ def lift_trace(tg_path: Path, scene_path: Path, periods: float, warmup_periods: 
     compile_tg(tg_path, scene_path)
 
     morph = load_morphology(tg_path)
-    require_bird(morph, *PLATE_BIRDS, tool="run_fixed_frequency")
+    require_bird(morph, "hummer", tool="run_fixed_frequency")
     model = mujoco.MjModel.from_xml_path(str(scene_path))
     sim = PlateWingSim(model, morph)
     data = sim.data

@@ -19,7 +19,7 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from compile_tg import compile_tg
-from morphology.model import PLATE_BIRDS, require_bird
+from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
 from runtime.mjx import aero_runtime, rollout, wing_pitch
@@ -84,7 +84,7 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     if lock_wings:
         symmetrize_wings(model)  # BEFORE MjData/put_model: both wings must be one design
     morph = load_morphology(tg_path)
-    require_bird(morph, *PLATE_BIRDS, tool="the codesign optimizer")
+    require_bird(morph, "hummer", tool="the codesign optimizer")
     data = rest_state(model, morph, phase_lag)
 
     control = load_control_for_morphology(tg_path)

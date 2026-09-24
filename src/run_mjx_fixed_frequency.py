@@ -20,7 +20,7 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from compile_tg import compile_tg
-from morphology.model import PLATE_BIRDS, require_bird
+from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from run_fixed_frequency import print_lift_stats
 from runtime.control_signal import load_control_for_morphology
@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) -> None:
     compile_tg(tg_path, scene_path)
     morph = load_morphology(tg_path)
-    require_bird(morph, *PLATE_BIRDS, tool="run_mjx_fixed_frequency")
+    require_bird(morph, "hummer", tool="run_mjx_fixed_frequency")
 
     model = mujoco.MjModel.from_xml_path(str(scene_path))
     data = rest_state(model, morph)
