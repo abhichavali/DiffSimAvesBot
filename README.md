@@ -21,8 +21,8 @@ uv run pytest -q                                  # tests + golden quick tier
 
 The viewers (`src/view_fixed_frequency.py`, `src/view_hover.py`, `src/view_eagle.py`)
 need `mjpython` on macOS; see `AGENTS.md` for the exact command. Pass `--tg` to the
-compiler: it defaults to `designs/hummer/legacy-baseline`, which is not a hover design
-(negative lift).
+compiler: it defaults to `designs/hummer/legacy-baseline`, the June demo baseline, which
+is not a hover design.
 
 `designs/eagle/` is the AvesEagle spinoff: the same shoulder carrying a three-linkage
 bone wing (humerus / ulna / manus). `uv run python src/view_eagle.py --gif out/eagle.gif`

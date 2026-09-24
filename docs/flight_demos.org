@@ -72,10 +72,15 @@ authority the mechanism lacks/.
 1. *Match gravity to the mean flap lift* so hover is even possible (real weight
    >> lift). The mean lift is measured on the grounded bench; gravity is set so
    ~weight = lift~ (~385 mN -> ~5.27 m/s^2 for the leveled config).
+   /Note (2026-09-24):/ those lift numbers are from the aero before the 2026-09
+   fixes. On today's aero the leveled bench makes ~219 mN (-> ~3.0 m/s^2), but
+   ~hover_meta.json~ still stores 5.27 m/s^2 and the policy was trained at it, so
+   the bird is overweight until ~opt/hover_policy.py~ is re-run. At its 0.13 ms
+   step the seed's passive pitch is also no longer periodic.
 2. *Level the stroke plane* (~level_stroke_plane~: set the crank-disk mount pitch
    from the design's 20 deg to 0). The 20 deg pitch pumped a constant /forward
    thrust/ that dragged the bird off-station; leveling makes the flap a pure
-   vertical stroke (and actually raises lift, 363 -> 385 mN).
+   vertical stroke (and actually raises lift, 363 -> 385 mN; pre-2026-09 aero).
 3. *The controller applies a 6-DOF wrench to the airframe body*: a world-frame
    force (3) + a body-frame torque (3), written into
    ~data.qfrc_applied[dofadr:dofadr+6]~ of the airframe freejoint each step.

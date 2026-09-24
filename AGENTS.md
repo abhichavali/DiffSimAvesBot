@@ -22,7 +22,7 @@ running tools concurrently, or they overwrite each other's scene.
 
 - **Compile** a design (`.tg` DSL → MuJoCo XML):
   - `uv run python src/compile_tg.py --tg designs/hummer/hover/shoulder.tg --out scene.xml`
-  - With no `--tg` it compiles `designs/hummer/legacy-baseline/` (negative lift, not a hover design).
+  - With no `--tg` it compiles `designs/hummer/legacy-baseline/` (the June demo baseline, not a hover design).
 - **Headless CPU run** (compiles, simulates, prints lift stats):
   - `uv run python src/run_fixed_frequency.py --tg designs/hummer/hover/shoulder.tg --periods 5`
   - MJX lift stats: `uv run python src/run_mjx_fixed_frequency.py --periods 5` (same
@@ -133,3 +133,6 @@ CPU path is unchanged and is the reference the port is validated against.
 - Morphology: the R fixed strut keeps the L site quats.
 - GUI: `run_gui`'s `RunConfig.loss` is never read; a leaked `mkdtemp`.
 - `opt/hover_policy.py` writes no `pd_gains` into `hover_meta.json` (descriptive; nothing reads it).
+- `designs/hummer/hover/hover_policy/hover_meta.json` gravity (5.27 m/s^2) and its policy
+  predate the 2026-09 aero fixes; the leveled bench now lifts ~219 mN (~3.0 m/s^2), so
+  `view_hover` flies an overweight bird until `opt/hover_policy.py` is re-run.

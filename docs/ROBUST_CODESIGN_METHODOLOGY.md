@@ -22,6 +22,17 @@ end-to-end from it.
 > standings, the harmonics verdict, and phase-lag findings are in §11–14. All cloud
 > instances are destroyed; artifacts live in the `DiffSimAvesBot-fixed` worktree (§14).
 
+> **NOTE (2026-09-24): two findings below are superseded.**
+> (1) *"Harmonics are dt-specialized"* (§7, §12, §13) was a clock bug, not physics: the
+> rest settle left `data.time` at 2000·dt, so every ω·t harmonic started rotated by a
+> dt-dependent angle (447° at 0.06 ms). With the clock reset, run-4 it021 went from
+> 151.5 @0.06 / 157.6 @0.03 to 151.5–151.7 mNm flat over dt 0.03–0.09 (euler, same aero).
+> (2) Every mNm / mN number here was certified on an aero whose hinge edge always led,
+> sat on the leading edge and started the strips at the hinge. Re-certified on the
+> current aero (doctrine, 8+24 cycles): seed 193.1 mNm at 187–210 mN; it009p 170.5
+> (−11.7%) at 183–186 mN; it021 168.4 (−12.8%) at 184–186 mN, dt-flat (euler 164.5
+> @0.06, 164.3 @0.03) and now the best of the three. See `designs/README.md`.
+
 ---
 
 ## 1. Threat model: what "hacking" looks like here
@@ -188,6 +199,9 @@ The old run-2 command below is now superseded for continuation work. Current set
 annealing, and harmonics unlocked early/always depending on the seed.
 
 ### 6.1 2×5090 continuation from the it009 seed
+
+`opt/init_from_g1_it009.json` was deleted in `0d1fe0b`; recover it with
+`git show 4889063:opt/init_from_g1_it009.json > opt/init_from_g1_it009.json`.
 
 ```bash
 uv run python opt/optimize_control.py \
@@ -540,7 +554,8 @@ require stationary per-cycle peaks.
 | 5 "polish" | it018 warm start (full 57-value genome), w_drift 60, rotate-batch 3, sample-periods 4, lr 2e-4, swing out of selection score, harmonics unlock at it008 (`run_polish_it018.sh`) | **it009 = FLAGSHIP, −10.4%**; it021 harmonics dt-specialized again; it025 DRIFT-rejected; killed after it025 |
 | 6 "lag arbitrage" | crank_phase_lag 12° baked in seed (`hovering-tuned-lag12/`), it009 genome warm start, harmonics locked all run, lr 8e-4 (`run_lag12_it009.sh`) | parity + ~5 mN lift; lift→torque conversion collapsed after ~10 iters; killed at it057 |
 
-**Final standings** (CPU exact peaks, 8+24 cycles, vs seed worst 174.7):
+**Final standings** (CPU exact peaks, 8+24 cycles, vs seed worst 174.7; pre-2026-09 aero
+and harmonic clock, see the note at the top):
 
 | Design | Doctrine worst | Wide worst | Lift (mN) | Status |
 |---|---|---|---|---|
@@ -561,6 +576,10 @@ Two optimizer processes on one GPU → cuSolver crash; verify kills by PID and
 jax[cuda12] — always `uv run --no-sync`.
 
 ## 13. Harmonics verdict, phase-lag findings, marginal-channel measurement
+
+> **Superseded (2026-09-24):** failure mode 2 below, and the marginal sweep's cross-dt
+> cost, were measured with the harmonic clock offset by 2000·dt (see the note at the
+> top). With the clock reset it021 certifies flat across dt; the verdict needs re-running.
 
 **Harmonics: abandoned, with a precise story.** Two distinct failure modes:
 
