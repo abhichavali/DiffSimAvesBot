@@ -22,16 +22,16 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from codesign.cpu_check import CpuDesign, cpu_rollout  # noqa: E402
 from codesign.rig import set_unsteady_aero, setup  # noqa: E402
-from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 
 
 def run(task):
     set_unsteady_aero(False)  # doctrine: quasi-steady lift only (added-mass FD is itself dt-dependent)
-    scene, a0, omega, lag, integ, dt, d, phi, warmup, periods = task
+    scene, morph, a0, omega, integ, dt, d, phi, warmup, periods = task
     ph = math.radians(phi)
     r = cpu_rollout(scene, CpuDesign((a0, [d * math.cos(ph)], [d * math.sin(ph)], omega)), integ,
-                    warmup=warmup, periods=periods, phase_lag=lag, timestep_ms=dt, aero_substep=1)
+                    morph=morph, warmup=warmup, periods=periods,
+                    phase_lag=morph.motors.crank_phase_lag_rad, timestep_ms=dt, aero_substep=1)
     return dict(integ=integ, dt=dt, d=d, phi=phi, lift_mN=r.lift * 1e3, peak_mNm=r.peak * 1e3,
                 power_W=r.power, drift_mNm=(r.cycle_peaks[-1] - r.cycle_peaks[0]) * 1e3)
 
@@ -77,11 +77,11 @@ def main():
         scene = ROOT / "opt" / "scene_h1_sweep.xml"
         rig = setup(args.tg, scene)  # compiles the scene once
         a0, omega = float(rig.drive.a0), float(rig.control.omega)
-        lag = load_morphology(args.tg).motors.crank_phase_lag_rad
+        lag = rig.morph.motors.crank_phase_lag_rad
         grid = [(0.0, 0.0)] + [(d, 360.0 * k / args.phases)
                                for d in args.depths for k in range(args.phases)]
         seen = {(r["integ"], r["dt"], r["d"], r["phi"]) for r in done}
-        tasks = [(str(scene), a0, omega, lag, i, dt, d, phi, args.warmup, args.periods)
+        tasks = [(str(scene), rig.morph, a0, omega, i, dt, d, phi, args.warmup, args.periods)
                  for i, dt in cells for d, phi in grid if (i, dt, d, phi) not in seen]
         print(f"a0={a0} omega={omega:.4f} lag={math.degrees(lag):.1f}deg  "
               f"{len(tasks)} rollouts ({len(done)} cached)", flush=True)

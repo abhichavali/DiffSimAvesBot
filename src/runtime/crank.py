@@ -19,21 +19,16 @@ import math
 
 import mujoco
 
-from morphology.tg_parser import load_morphology
 from runtime.control_signal import FourierControl, drive_command
-from runtime.morphology_runtime import resolve_morphology_path
 
 CRANK_ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 
 
-def sync_crank_disks_at_rest(model, data, lag_rad: float | None = None, morph=None) -> None:
+def sync_crank_disks_at_rest(model, data, morph, lag_rad: float | None = None) -> None:
     """Mirror R onto L at every motor station, stop the disks, then apply the t4 lag.
 
-    ``morph`` names the stations (and, with ``lag_rad=None``, the lag); without it
-    the design at ``MORPHOLOGY_PATH`` is parsed.
+    ``morph`` names the stations and, with ``lag_rad=None``, the lag.
     """
-    if morph is None:
-        morph = load_morphology(resolve_morphology_path())
     feet = morph.motors.feet
 
     def joint_id(name: str) -> int:

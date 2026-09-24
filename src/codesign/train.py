@@ -232,7 +232,7 @@ def run(cfg) -> None:
 
     three_integrators = cfg.tri_integrator or cfg.rotate_batch
     cpu_sp = cfg.cpu_sample_periods if cfg.cpu_sample_periods else cfg.sample_periods
-    cpu_kw = dict(warmup=cfg.warmup_periods, periods=cpu_sp,
+    cpu_kw = dict(morph=morph, warmup=cfg.warmup_periods, periods=cpu_sp,
                   phase_lag=morph.motors.crank_phase_lag_rad, aero_substep=cfg.aero_substep,
                   wavelet=wavelet_dict)
     cpu_cells = [(cfg.integrator, cfg.timestep)]

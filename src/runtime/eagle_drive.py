@@ -133,7 +133,7 @@ def calibrate_stroke(
     so one pass leaves a residual. ``calibrated_drive`` does that loop for you.
     """
     data = mujoco.MjData(model)
-    sync_crank_disks_at_rest(model, data, morph=morph)
+    sync_crank_disks_at_rest(model, data, morph)
     qadr, bid = _ids(model)
     period = crank_period(control)
     settle_steps = round(max(2.0, cycles - 2.0) * period / model.opt.timestep)

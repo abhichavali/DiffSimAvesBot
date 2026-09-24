@@ -19,11 +19,11 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from codesign.rig import INTEGRATORS, set_unsteady_aero, setup
-from runtime.control_signal import eval_control, load_control_for_morphology
+from runtime.control_signal import eval_control
 from runtime.mjx import aero_runtime as maero
 from runtime.mjx import rollout as mroll
 from runtime.mjx import wing_pitch as mwing
-from runtime.morphology_runtime import DESIGNS_DIR, load_design_morphology
+from runtime.morphology_runtime import DESIGNS_DIR
 from runtime.sim import PlateWingSim
 
 
@@ -35,11 +35,10 @@ def diff_norm(a, b) -> float:
     return float(np.linalg.norm(np.asarray(a) - np.asarray(b)))
 
 
-def make_cpu(model, tg: Path, substep: int):
-    sim = PlateWingSim(model, aero_substep=substep)
+def make_cpu(model, morph, control, substep: int):
+    sim = PlateWingSim(model, morph, aero_substep=substep)
     data = sim.data
-    control = load_control_for_morphology(tg)
-    motor_dir = load_design_morphology().motors.motor_direction
+    motor_dir = morph.motors.motor_direction
 
     def pre_forces():
         """PlateWingSim.apply's order, with the aero and pitch terms read out separately."""
@@ -88,7 +87,7 @@ def main() -> None:
     set_unsteady_aero(False)
     rig = setup(args.tg, args.scene, aero_substep=args.aero_substep, integrator=args.integrator)
     model, mx, dx, drive, pitch, aero = rig.model, rig.mx, rig.dx0, rig.drive, rig.pitch, rig.aero
-    cpu, cpu_pre = make_cpu(model, args.tg, args.aero_substep)
+    cpu, cpu_pre = make_cpu(model, rig.morph, rig.control, args.aero_substep)
     mjx_pre = make_mjx_pre(mx, drive, pitch, aero, args.aero_substep)
     state = maero.init_aero_state(aero)
     carry = (dx, state, jnp.zeros_like(dx.qvel), jnp.zeros(3, dtype=dx.qvel.dtype), jnp.int32(0))

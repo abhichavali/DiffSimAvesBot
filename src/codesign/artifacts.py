@@ -35,7 +35,6 @@ from codesign.cpu_check import CpuDesign, CpuResult, cpu_rollout
 from codesign.genome import Genome, wavelet_dictionary
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
-from runtime.morphology_runtime import load_design_morphology
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -155,7 +154,7 @@ class DesignSpec(NamedTuple):
     """A design dir rebuilt for CPU replay."""
     scene_path: Path
     design: CpuDesign
-    phase_lag: float
+    morph: object  # the design's Morphology
 
 
 def reconstruct_design(design_dir) -> DesignSpec:
@@ -172,7 +171,7 @@ def reconstruct_design(design_dir) -> DesignSpec:
     ctrl = (a0, np.asarray(th["a"]) / a0, np.asarray(th["b"]) / a0, th["omega"])
     return DesignSpec(scene, CpuDesign(ctrl, _tendon_arrays(scene, design_dir),
                                        _pitch_params(design_dir)),
-                      load_morphology(tg).motors.crank_phase_lag_rad)
+                      load_morphology(tg))
 
 
 def validate(design_dir, integrators=("euler", "implicitfast"), *, timestep_ms=0.06,
@@ -180,8 +179,9 @@ def validate(design_dir, integrators=("euler", "implicitfast"), *, timestep_ms=0
     """Reconstruct and roll out on MuJoCo CPU; warmup=8 periods is load-bearing (the rig
     builds lift for ~8 cycles)."""
     spec = reconstruct_design(design_dir)
-    return {integ: cpu_rollout(spec.scene_path, spec.design, integ, warmup=warmup, periods=periods,
-                               phase_lag=spec.phase_lag, timestep_ms=timestep_ms)
+    return {integ: cpu_rollout(spec.scene_path, spec.design, integ, morph=spec.morph, warmup=warmup,
+                               periods=periods, phase_lag=spec.morph.motors.crank_phase_lag_rad,
+                               timestep_ms=timestep_ms)
             for integ in integrators}
 
 
@@ -197,7 +197,6 @@ def _compiled_scene(design_dir: Path):
     tg = design_dir / "_recon_shoulder.tg"
     tg.write_text(src)
     os.environ["MORPHOLOGY_PATH"] = str(tg.resolve())
-    load_design_morphology.cache_clear()  # lru-cached; must refresh per design
     scene = design_dir / "_recon_scene.xml"
     compile_tg(tg, scene)
     return tg, scene

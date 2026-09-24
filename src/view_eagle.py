@@ -68,7 +68,7 @@ def build(args):
     model = mujoco.MjModel.from_xml_path(str(args.scene))
     _tension_cables(model, morph, args)
     data = mujoco.MjData(model)
-    sync_crank_disks_at_rest(model, data)
+    sync_crank_disks_at_rest(model, data, morph)
     held = elbow_targets(model, args.elbow) if args.elbow is not None else {}
     if held:
         settle_elbow(model, data, held, control)

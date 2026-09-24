@@ -36,10 +36,11 @@ class CpuResult(NamedTuple):
     swing: float  # std of the |torque| trace (the MJX Metrics.swing)
 
 
-def cpu_rollout(scene_path, design: CpuDesign, integrator, *, periods=3.0, warmup=2.0,
+def cpu_rollout(scene_path, design: CpuDesign, integrator, *, morph, periods=3.0, warmup=2.0,
                 phase_lag=0.0, timestep_ms=None, aero_substep=None, wavelet=None) -> CpuResult:
     """Run ``design`` for ``warmup`` + ``periods`` drive periods on MuJoCo CPU.
 
+    ``morph`` is the Morphology ``scene_path`` was compiled from.
     ``wavelet`` is genome.wavelet_dictionary(...) when the control coefficients are
     Ricker atom amplitudes (all in ctrl[1]; ctrl[2] unused).
     """
@@ -55,7 +56,8 @@ def cpu_rollout(scene_path, design: CpuDesign, integrator, *, periods=3.0, warmu
         stiff, lenspring = design.tendons
         model.tendon_stiffness[:] = np.asarray(stiff)
         model.tendon_lengthspring[:] = np.asarray(lenspring)
-    sim = PlateWingSim(model, phase_lag=phase_lag, aero_substep=aero_substep, pitch_params=design.pitch)
+    sim = PlateWingSim(model, morph, phase_lag=phase_lag, aero_substep=aero_substep,
+                       pitch_params=design.pitch)
     data, aids = sim.data, sim.crank_ids
     disk_orient = None
     if design.strokeplane is not None:  # the signal the MJX rollout applied

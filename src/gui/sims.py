@@ -26,7 +26,6 @@ from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import drive_command, load_control, load_control_for_morphology
 from runtime.disk_orientation import DiskOrientation
-from runtime.morphology_runtime import load_design_morphology
 from runtime.sim import PlateWingSim
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,7 +94,6 @@ def prepare_scene(tg_path: Path, scene_path: Path, *, color_structural_tendons: 
     scene_path = scene_path.resolve()
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_path)
-    load_design_morphology.cache_clear()
     stamp_file = scene_path.with_suffix(scene_path.suffix + (".color.stamp" if color_structural_tendons else ".stamp"))
     stamp_text = f"{tg_path}\n{tg_path.stat().st_mtime_ns}\n{int(color_structural_tendons)}\n"
     if not scene_path.exists() or not stamp_file.exists() or stamp_file.read_text() != stamp_text:

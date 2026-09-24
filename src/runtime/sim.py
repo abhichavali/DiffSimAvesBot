@@ -14,7 +14,7 @@ the command depends only on ``data.time``, so callers make them before ``step``.
 Loops that need to own ``mj_step`` (a viewer's pacing hook) call ``apply``.
 
 The model is the caller's: set its integrator, timestep and tendon arrays before
-constructing the sim. ``morph=None`` takes the design from ``MORPHOLOGY_PATH``.
+constructing the sim. ``morph`` is the Morphology the model was compiled from.
 """
 
 import mujoco
@@ -24,7 +24,7 @@ from runtime.crank import CRANK_ACTUATORS, sync_crank_disks_at_rest
 from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
 
 
-def rest_state(model, morph=None, phase_lag: float | None = None) -> mujoco.MjData:
+def rest_state(model, morph, phase_lag: float | None = None) -> mujoco.MjData:
     """A fresh MjData at the rest pose: settled, pitch neutral, cranks synced.
 
     ``phase_lag=None`` applies the design's crank lag; ``data.time`` is left at the
@@ -32,7 +32,7 @@ def rest_state(model, morph=None, phase_lag: float | None = None) -> mujoco.MjDa
     """
     data = mujoco.MjData(model)
     calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data, phase_lag, morph=morph)
+    sync_crank_disks_at_rest(model, data, morph, phase_lag)
     return data
 
 
@@ -43,7 +43,7 @@ class PlateWingSim:
     downstroke stiffness) overrides the design's feathering.
     """
 
-    def __init__(self, model, morph=None, *, phase_lag=None, aero_substep=None, pitch_params=None):
+    def __init__(self, model, morph, *, phase_lag=None, aero_substep=None, pitch_params=None):
         self.model = model
         self.data = rest_state(model, morph, phase_lag)
         self.aero = AeroBladeRuntime(model, morph, substep=aero_substep)

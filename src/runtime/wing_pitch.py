@@ -23,8 +23,6 @@ from dataclasses import dataclass
 
 import mujoco
 
-from runtime.morphology_runtime import load_design_morphology
-
 
 def _reset_pitch_to_neutral(model, data, wing_name: str) -> None:
     joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{wing_name}_pitch")
@@ -62,9 +60,9 @@ class _PitchJoint:
 
 
 class WingPitchLimiter:
-    def __init__(self, model, data, morph=None):
-        """``morph`` supplies ``wing.pitch``; without it the design at ``MORPHOLOGY_PATH`` does."""
-        pitch = (load_design_morphology() if morph is None else morph).wing.pitch
+    def __init__(self, model, data, morph):
+        """``morph`` supplies ``wing.pitch``."""
+        pitch = morph.wing.pitch
         self.upstroke_pitch = float(pitch.upstroke_pitch_rad)
         self.downstroke_pitch = float(pitch.downstroke_pitch_rad)
         self.upstroke_stiffness = float(pitch.upstroke_stiffness)

@@ -34,9 +34,9 @@ def tendon_pairs(model):
     return {k: (v["L"], v["R"]) for k, v in lr_tendon_pairs(model).items() if "L" in v and "R" in v}
 
 
-def roll(model, control, cycles=CYCLES):
+def roll(model, morph, control, cycles=CYCLES):
     """Drive the shared crank command with aero+pitch live; return per-wing traces."""
-    sim = PlateWingSim(model, aero_substep=4)
+    sim = PlateWingSim(model, morph, aero_substep=4)
     data, aids = sim.data, sim.crank_ids
     tips = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, s) for s in WINGTIP_SITES]
     a0, a, b = control.a0, np.asarray(control.a), np.asarray(control.b)
@@ -62,10 +62,6 @@ def asymmetry(tip_tr):
 
 def test_lock_wings(tg: Path = TG):
     print(f"design: {tg}")
-    # The runtime caches ONE design regardless of MORPHOLOGY_PATH; drop whatever an
-    # earlier test in this process loaded so aero/pitch read `tg`.
-    from runtime.morphology_runtime import load_design_morphology
-    load_design_morphology.cache_clear()
     free = setup(tg, SCENE, lock_wings=False)
     lock = setup(tg, SCENE, lock_wings=True)
     free_model, free_tendons = free.model, free.tendons
@@ -84,8 +80,8 @@ def test_lock_wings(tg: Path = TG):
                  for l, r in tendon_pairs(lock_model).values())
     assert locked < 1e-9, f"locked model still has L/R stiffness spread: {locked}"
 
-    free_tip, free_tau = roll(free_model, control)
-    lock_tip, lock_tau = roll(lock_model, control)
+    free_tip, free_tau = roll(free_model, free.morph, control)
+    lock_tip, lock_tau = roll(lock_model, lock.morph, control)
     free_err, free_rel = asymmetry(free_tip)
     lock_err, lock_rel = asymmetry(lock_tip)
     free_dtau = abs(free_tau[:, :2].max() - free_tau[:, 2:].max()) / max(free_tau.max(), 1e-9)

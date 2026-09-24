@@ -21,22 +21,17 @@ from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import drive_command, load_control_for_morphology
 from runtime.disk_orientation import DiskOrientation
-from runtime.morphology_runtime import load_design_morphology
 from runtime.sim import PlateWingSim
 
 TG = Path(__file__).resolve().parents[1] / "designs" / "hummer" / "hover-soft-it009p" / "shoulder.tg"
 
 
 @pytest.fixture
-def design(tmp_path, monkeypatch):
-    """The design compiled to a scratch scene, with the env the legacy loops read pointed at it."""
+def design(tmp_path):
+    """The design compiled to a scratch scene."""
     scene = tmp_path / "scene.xml"
-    monkeypatch.setenv("MORPHOLOGY_PATH", str(TG))
-    monkeypatch.setenv("MUJOCO_XML_PATH", str(scene))
-    load_design_morphology.cache_clear()
     compile_tg(TG, scene)
-    yield scene, load_morphology(TG), load_control_for_morphology(TG)
-    load_design_morphology.cache_clear()
+    return scene, load_morphology(TG), load_control_for_morphology(TG)
 
 
 @contextlib.contextmanager
@@ -74,7 +69,7 @@ def test_matches_cpu_rollout(design):
 
     with final_data() as last:
         expected = tuple(cpu_rollout(scene, CpuDesign((a0, a, b, omega), strokeplane=sp_params), "euler",
-                                     periods=periods, warmup=warmup, phase_lag=lag, aero_substep=4))
+                                     morph=morph, periods=periods, warmup=warmup, phase_lag=lag, aero_substep=4))
     expected_state = state(last["data"])
 
     model = mujoco.MjModel.from_xml_path(str(scene))

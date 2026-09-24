@@ -10,7 +10,6 @@ import mujoco
 import numpy as np
 
 from morphology.wing_geometry import load_wing_geometry
-from runtime.morphology_runtime import load_design_morphology
 
 
 def _ry(theta: float) -> np.ndarray:
@@ -241,14 +240,12 @@ class WingAeroState:
 class AeroBladeRuntime:
     """Blade-element aero on both plate wings; call :meth:`apply` once per step, before mj_step.
 
-    ``morph`` supplies the blade count and the wing mesh; without it the design at
-    ``MORPHOLOGY_PATH`` does. Forces are recomputed every ``substep`` steps
-    (default ``DEFAULT_AERO_SUBSTEP``) and re-applied from the cache in between.
+    ``morph`` supplies the blade count and the wing mesh. Forces are recomputed every
+    ``substep`` steps (default ``DEFAULT_AERO_SUBSTEP``) and re-applied from the cache
+    in between.
     """
 
-    def __init__(self, model, morph=None, *, substep=None):
-        if morph is None:
-            morph = load_design_morphology()
+    def __init__(self, model, morph, *, substep=None):
         self.num_blades = int(morph.wing.aero.blades)
         self.substep = max(1, int(DEFAULT_AERO_SUBSTEP if substep is None else substep))
         self.geometry = load_wing_geometry(morph)
