@@ -24,16 +24,16 @@ from pathlib import Path
 AIRFRAME_BODY = "airframe"
 AIRFRAME_FREEJOINT = "airframe_freejoint"
 
-# The pillars were ground anchors (0.1 kg each) — irrelevant when welded, absurd
-# for a flapping micro-robot once it must fly. Lighten them so the airframe (a
-# few tens of grams) actually reacts to aero and impacts.
-# ponytail: single knob; raise for a more sluggish/stable airframe, lower for a
-# twitchier one. Weight is cancelled at runtime, so this only sets reactivity.
-PILLAR_MASS = 0.01
-PILLAR_INERTIA = "1e-5 1e-5 1e-5 0 0 0"
+# Free-flight mass budget: the free-standing bird weighs 200-250 mN.
+# The pillars are the bench rig's ground posts, not part of the bird, so they fly
+# massless. Each crank disk stands in for its motor + disk; only its mass changes
+# (its COM is on the crank axis and its inertia is kept), so the flapping itself
+# is identical to the bench. 4 x 2.5 g + 12.8 g struts + 0.27 g wings = 23.1 g = 226 mN.
+DISK_MASS = 0.0025
+FLIGHT_WEIGHT_RANGE_N = (0.200, 0.250)
 
 
-def to_airframe(xml: str, *, pillar_mass: float = PILLAR_MASS) -> str:
+def to_airframe(xml: str) -> str:
     """Wrap all world-welded bodies into one free `airframe` body."""
     root = ET.fromstring(xml)
     worldbody = root.find("worldbody")
@@ -53,19 +53,19 @@ def to_airframe(xml: str, *, pillar_mass: float = PILLAR_MASS) -> str:
     ET.SubElement(airframe, "freejoint", name=AIRFRAME_FREEJOINT)
     for body in welded:
         worldbody.remove(body)
-        _lighten_pillar(body, pillar_mass)
         airframe.append(body)
+    for body in airframe.iter("body"):
+        inertial = body.find("inertial")
+        if inertial is None:
+            continue
+        if body.get("name", "").endswith("_pillar"):
+            inertial.attrib.pop("fullinertia", None)  # MuJoCo rejects an all-zero fullinertia
+            inertial.set("mass", "0")
+            inertial.set("diaginertia", "0 0 0")
+        elif body.get("name", "").endswith("_disk"):
+            inertial.set("mass", str(DISK_MASS))
     worldbody.append(airframe)
     return _tostr(root)
-
-
-def _lighten_pillar(body: ET.Element, mass: float) -> None:
-    if not body.get("name", "").endswith("_pillar"):
-        return
-    inertial = body.find("inertial")
-    if inertial is not None:
-        inertial.set("mass", str(mass))
-        inertial.set("fullinertia", PILLAR_INERTIA)
 
 
 def shrink_pillar_visual(xml: str, *, stub: float = 0.05) -> str:
@@ -421,8 +421,10 @@ if __name__ == "__main__":
     assert bid > 0, "airframe body missing"
     jid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, AIRFRAME_FREEJOINT)
     assert jid >= 0 and m.jnt_type[jid] == mujoco.mjtJoint.mjJNT_FREE
-    # Airframe subtree must carry the pillars + fixed struts (i.e. real mass).
-    assert m.body_subtreemass[bid] > 0.01, m.body_subtreemass[bid]
+    # The whole bird (airframe + the tendon-held mobile struts) fits the flight budget.
+    weight = float(m.body_mass.sum()) * 9.81
+    lo, hi = FLIGHT_WEIGHT_RANGE_N
+    assert lo <= weight <= hi, f"free-flight weight {weight * 1e3:.0f} mN outside {lo * 1e3:.0f}-{hi * 1e3:.0f}"
     # Mobile struts still float independently: 3 freejoints total (airframe + L,R).
     n_free = int((m.jnt_type == mujoco.mjtJoint.mjJNT_FREE).sum())
     assert n_free == 3, n_free
