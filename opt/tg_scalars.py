@@ -128,15 +128,3 @@ def substitute(text: str, params: list[Param], updates: dict[str, float]) -> str
                 raise ValueError(f"could not rewrite {p.name} on line {lineno}: {line!r}")
         lines[lineno] = line
     return "".join(lines)
-
-
-def write_variant(src: Path, dst: Path, updates: dict[str, float]) -> Path:
-    """Write `src` to `dst` with `updates` applied.
-
-    `dst` must sit in the same directory as `src`: the `control =` include is
-    resolved relative to the .tg being compiled.
-    """
-    if dst.parent != src.parent:
-        raise ValueError(f"variant must live beside its source ({src.parent}), got {dst.parent}")
-    dst.write_text(substitute(src.read_text(), parse_tg(src), updates))
-    return dst

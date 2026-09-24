@@ -71,7 +71,7 @@ from codesign.genome import Genome, load_control_seed, ricker_atoms, wavelet_dic
 from codesign.metrics import build_rollout  # noqa: E402
 from codesign.rig import motor_tendon_ids, setup, structural_tendon_pairs, symmetrize_wings  # noqa: E402
 from compile_tg import compile_tg  # noqa: E402
-from gui.sims import data_by_phase  # noqa: E402
+from gui.sims import phase_plot, phase_trace  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
 from morphology.wing_geometry import load_wing_geometry  # noqa: E402
 from runtime.aero import DEFAULT_AERO_SUBSTEP, RHO_AIR, AeroBladeRuntime, set_unsteady_aero  # noqa: E402
@@ -219,7 +219,7 @@ def view_fixed(name: str, scene: Path, frames: int) -> None:
 
 
 def gui_trace(name: str, scene: Path, plot_kind: str, periods: float, settle: float):
-    return data_by_phase(tg(name), scene, periods, plot_kind, settle_periods=settle)
+    return phase_plot(phase_trace(tg(name), scene, periods, settle_periods=settle), plot_kind)
 
 
 def eagle_run(name: str, scene: Path, steps: int):

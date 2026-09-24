@@ -45,8 +45,7 @@ class Rig(NamedTuple):
 
 
 def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator: str = "euler",
-          phase_lag: float | None = None, timestep_ms: float | None = None,
-          lock_wings: bool = False) -> Rig:
+          timestep_ms: float | None = None, lock_wings: bool = False) -> Rig:
     """Compile, build a calibrated CPU model/data and the device-side configs.
 
     ``aero_substep`` matches the CPU runtime (4): aero is recomputed every N physics
@@ -70,7 +69,7 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
         symmetrize_wings(model)  # BEFORE MjData/put_model: both wings must be one design
     morph = load_morphology(tg_path)
     require_bird(morph, "hummer", tool="the codesign optimizer")
-    data = rest_state(model, morph, phase_lag)
+    data = rest_state(model, morph)
 
     control = load_control_for_morphology(tg_path)
     drive = rollout.build_drive_config(model, morph, control, ramp_duration=0.0)

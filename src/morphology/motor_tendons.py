@@ -43,6 +43,7 @@ def measure_motor_tendon_ranges(xml: str, morph: Morphology) -> Dict[str, MotorT
             for side, foot in feet]
     tids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, f"{side}_motor_t{foot.station}")
             for side, foot in feet]
+    assert min(tids) >= 0, "motor tendon missing from the probe scene"
     mujoco.mj_forward(model, data)
     rest = data.ten_length[tids]
     samples = []

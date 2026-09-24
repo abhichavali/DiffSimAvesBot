@@ -243,18 +243,6 @@ def phase_plot(trace: dict, plot_kind: str) -> tuple[list[float], dict[str, list
     return x_values, series, plot_kind, xlabel, PLOT_YLABELS[plot_kind], colors
 
 
-def data_by_phase(
-    tg_path: Path,
-    scene_path: Path,
-    periods: float,
-    plot_kind: str,
-    control_path: Path | None = None,
-    settle_periods: float = SETTLE_PERIODS,
-) -> tuple[list[float], dict[str, list[float]], str, str, str, dict[str, str]]:
-    """One phase plot straight from a fresh rollout (the GUI caches phase_trace instead)."""
-    return phase_plot(phase_trace(tg_path, scene_path, periods, control_path, settle_periods), plot_kind)
-
-
 def tendon_tension(model: mujoco.MjModel, data: mujoco.MjData, tid: int, rest_length: float) -> float:
     tension = (
         float(model.tendon_stiffness[tid]) * (float(data.ten_length[tid]) - rest_length)
