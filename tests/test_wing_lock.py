@@ -22,6 +22,7 @@ import mujoco
 import numpy as np
 
 from codesign.rig import ROOT, WINGTIP_SITES, lr_tendon_pairs, setup
+from runtime.sim import PlateWingSim
 
 TG = ROOT / "designs" / "hummer" / "hover-soft-it009p" / "shoulder.tg"
 SCENE = ROOT / "scene.xml"
@@ -35,19 +36,8 @@ def tendon_pairs(model):
 
 def roll(model, control, cycles=CYCLES):
     """Drive the shared crank command with aero+pitch live; return per-wing traces."""
-    from runtime.aero import AeroBladeRuntime
-    from runtime.crank import sync_crank_disks_at_rest
-    from runtime.realtime import get_actuator_id
-    from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
-    from runtime.morphology_runtime import resolve_morphology_path
-    from morphology.tg_parser import load_morphology
-
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data, load_morphology(resolve_morphology_path()).motors.crank_phase_lag_rad)
-    aero = AeroBladeRuntime(model, substep=4)
-    pitch = WingPitchLimiter(model, data)
-    aids = [get_actuator_id(model, n) for n in ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")]
+    sim = PlateWingSim(model, aero_substep=4)
+    data, aids = sim.data, sim.crank_ids
     tips = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, s) for s in WINGTIP_SITES]
     a0, a, b = control.a0, np.asarray(control.a), np.asarray(control.b)
     harm = np.arange(1, len(a) + 1)
@@ -55,15 +45,8 @@ def roll(model, control, cycles=CYCLES):
 
     tip_tr, tau_tr = [], []
     for _ in range(int(cycles * (math.tau / omega) / model.opt.timestep)):
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
         phase = omega * data.time
-        cmd = a0 * (1.0 + float(np.sum(a * np.cos(harm * phase) + b * np.sin(harm * phase))) / a0)
-        for aid in aids:
-            data.ctrl[aid] = cmd
-        mujoco.mj_step(model, data)
+        sim.step(a0 * (1.0 + float(np.sum(a * np.cos(harm * phase) + b * np.sin(harm * phase))) / a0))
         tip_tr.append(data.site_xpos[tips].copy())            # (2, xyz) = [L, R]
         tau_tr.append(np.abs(data.actuator_force[aids]).copy())  # [Lt1, Lt4, Rt1, Rt4]
     return np.asarray(tip_tr), np.asarray(tau_tr)

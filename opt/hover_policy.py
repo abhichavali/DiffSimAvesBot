@@ -48,11 +48,10 @@ import flying  # noqa: E402
 from codesign.rig import compile_lock  # noqa: E402
 from compile_tg import compile_tg  # noqa: E402
 from morphology.tg_parser import load_morphology  # noqa: E402
-from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
 from runtime.hover_control import (N_CTRL, N_FEAT, HoverCfg, hover_features,  # noqa: E402
                                    level_stroke_plane, pd_init_theta, policy_commands)
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
-from runtime.wing_pitch import calibrate_wing_pitch_at_rest  # noqa: E402
+from runtime.sim import PlateWingSim, rest_state  # noqa: E402
 from runtime.mjx import aero_runtime, rollout as mroll, wing_pitch as mwp  # noqa: E402
 
 # --------------------------------------------------------------------------- #
@@ -75,9 +74,7 @@ def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_sub
     model.opt.iterations = 1  # one solver iteration: no while_loop, so reverse mode can trace it
     level_stroke_plane(model)  # pure vertical stroke -> hover in place, no fwd thrust
 
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data, morph.motors.crank_phase_lag_rad)
+    data = rest_state(model, morph)
 
     jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, flying.AIRFRAME_FREEJOINT)
     cfg = HoverCfg(a0=float(mroll.build_drive_config(model).a0), f_max=0.0, tau_max=0.0,
@@ -87,9 +84,6 @@ def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_sub
 
 def measure_mean_lift(tg_path: Path, scene_bench: Path, *, ncyc=6) -> float:
     """Mean grounded-bench aero lift over ncyc flap cycles (pins the body)."""
-    from runtime.aero import AeroBladeRuntime
-    from runtime.wing_pitch import WingPitchLimiter
-    from runtime.realtime import get_actuator_id
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_bench)
     compile_tg(tg_path, scene_bench)
@@ -97,22 +91,11 @@ def measure_mean_lift(tg_path: Path, scene_bench: Path, *, ncyc=6) -> float:
     m = mujoco.MjModel.from_xml_path(str(scene_bench))
     m.opt.integrator = 0
     level_stroke_plane(m)  # match the leveled config the free model flies with
-    d = mujoco.MjData(m)
-    calibrate_wing_pitch_at_rest(m, d)
-    sync_crank_disks_at_rest(m, d, morph.motors.crank_phase_lag_rad)
+    sim = PlateWingSim(m, morph)
     drive = mroll.build_drive_config(m)
     a0, omega = float(drive.a0), float(drive.omega)
-    aero = AeroBladeRuntime(m); pitch = WingPitchLimiter(m, d)
-    aids = [get_actuator_id(m, nm) for nm in ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")]
     spc = int((2 * math.pi / omega) / m.opt.timestep)
-    lifts = []
-    for _ in range(ncyc * spc):
-        d.qfrc_applied[:] = 0.0; d.ctrl[:] = 0.0
-        aero.apply(m, d); pitch.apply(m, d)
-        for aid in aids:
-            if aid >= 0: d.ctrl[aid] = a0
-        lifts.append(sum(float(np.sum([f[2] for f in (w.cached_forces or [])])) for w in aero.wings))
-        mujoco.mj_step(m, d)
+    lifts = [sim.step(a0) for _ in range(ncyc * spc)]
     return float(np.mean(lifts[spc:]))  # drop first-cycle transient
 
 

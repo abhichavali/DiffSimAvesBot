@@ -19,15 +19,12 @@ import mujoco.mjx as mjx
 import numpy as np
 
 from codesign.rig import INTEGRATORS, set_unsteady_aero, setup
-from runtime.aero import AeroBladeRuntime
 from runtime.control_signal import eval_control, load_control_for_morphology
-from runtime.crank import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime as maero
 from runtime.mjx import rollout as mroll
 from runtime.mjx import wing_pitch as mwing
 from runtime.morphology_runtime import DESIGNS_DIR, load_design_morphology
-from runtime.realtime import get_actuator_id
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
+from runtime.sim import PlateWingSim
 
 
 def norm(x) -> float:
@@ -39,26 +36,21 @@ def diff_norm(a, b) -> float:
 
 
 def make_cpu(model, tg: Path, substep: int):
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data, load_design_morphology().motors.crank_phase_lag_rad)
-    aero = AeroBladeRuntime(model, substep=substep)
-    pitch = WingPitchLimiter(model, data)
+    sim = PlateWingSim(model, aero_substep=substep)
+    data = sim.data
     control = load_control_for_morphology(tg)
     motor_dir = load_design_morphology().motors.motor_direction
-    aids = [get_actuator_id(model, name) for name in ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")]
 
     def pre_forces():
+        """PlateWingSim.apply's order, with the aero and pitch terms read out separately."""
         data.qfrc_applied[:] = 0.0
         data.ctrl[:] = 0.0
-        aero.apply(model, data)
+        sim.aero.apply(model, data)
         aero_q = data.qfrc_applied.copy()
-        pitch.apply(model, data)
+        sim.pitch.apply(model, data)
         pitch_q = data.qfrc_applied.copy() - aero_q
         ctrl = motor_dir * eval_control(control, data.time)
-        for aid in aids:
-            if aid >= 0:
-                data.ctrl[aid] = ctrl
+        data.ctrl[sim.crank_ids] = ctrl
         return ctrl, aero_q, pitch_q, data.qfrc_applied.copy()
 
     return data, pre_forces
