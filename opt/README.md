@@ -82,7 +82,8 @@ R = wL*PhiL(soft-min lift) - wtau*Ptau(soft-max tau_hat) - wK*Ckin(amp band) - w
   `tau_hat`.
 - **Curriculum**: `tau_max` 300 -> 250 -> 200 -> 150 -> 100 mNm, clamped at `--tau-min`,
   `--iters-per-stage` each. `--single-stage` runs one stage at the baseline `tau_hat` and
-  selects on objective (+ `--score-swing` x swing) inside the amplitude band.
+  selects on objective (+ `--score-swing` x swing, converted to the objective's units
+  as swing / baseline `tau_hat` x baseline objective) inside the amplitude band.
 - `--w-lc` defaults to 0 (the cross-cycle variance gradient does not help); `C_lc`,
   `C_valid` and the rest of `Metrics` are logged either way.
 

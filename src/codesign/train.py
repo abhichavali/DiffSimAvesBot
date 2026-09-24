@@ -266,7 +266,9 @@ def run(cfg) -> None:
     def score_of(metric, swing, Lbar):
         if not cfg.single_stage:
             return metric
-        s = metric + cfg.score_swing * swing
+        # swing [Nm] in the objective's units: its fraction of the baseline peak, x obj0
+        # (a factor of exactly 1 for torque).
+        s = metric + cfg.score_swing * swing * (obj0 / max(m0.tau_hat, 1e-12))
         if cfg.lift_torque_tradeoff:  # lift drop -> objective-equivalent at N:1
             drop = max(0.0, float(lift_ref) - Lbar) / (abs(float(lift_ref)) + 1e-9)
             gain = max(0.0, Lbar - float(lift_ref)) / (abs(float(lift_ref)) + 1e-9)

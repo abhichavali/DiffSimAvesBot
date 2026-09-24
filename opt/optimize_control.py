@@ -122,7 +122,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "(default: --sample-periods)")
     p.add_argument("--score-swing", type=float, default=1.0,
                    help="weight of the swing term in candidate SELECTION scores (loss keeps "
-                        "--w-swing). Set 0 to rank promotions purely on certified worst-case "
+                        "--w-swing); swing is converted to the objective's units as "
+                        "swing / baseline tau_hat x baseline objective. Set 0 to rank promotions purely on certified worst-case "
                         "peak torque -- the right KPI for a current-limited motor")
     p.add_argument("--w-drift", type=float, default=0.0,
                    help="weight on the per-cycle peak-torque drift penalty in the LOSS "
