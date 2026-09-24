@@ -135,9 +135,8 @@ CPU path is unchanged and is the reference the port is validated against.
   keys are silently accepted; the R fixed strut keeps the L site quats; the
   `attach_along_edge` default is 1.2 in one place and 0.0 in another.
 - Wingtip site `*_aero_blade_04` is hard-coded (GUI, demos), wrong when `blades != 4`.
-- GUI: the angular-velocity plot's xlim leaves it blank; tension uses the range max
-  instead of the spring length; Cmd-U recaptures A and B; the plot-cache key ignores
-  physics code; Stop does not stop a diff-sim chain; `run_gui`'s `RunConfig.loss` is never
-  read; a leaked `mkdtemp`.
+- GUI: tension uses the range max instead of the spring length; the plot-cache key
+  ignores physics code; Stop does not stop a diff-sim chain; `run_gui`'s `RunConfig.loss`
+  is never read; a leaked `mkdtemp`.
 - `run_fixed_frequency` and `run_mjx_fixed_frequency` have different defaults (above).
 - `opt/hover_policy.py` writes an absolute `tg` and no `pd_gains` into `hover_meta.json`.

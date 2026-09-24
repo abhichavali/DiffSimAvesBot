@@ -713,9 +713,8 @@ class DesignPane:
         elif selected == str(self.impulse_tab):
             self.impulse_reset()
         elif selected == str(self.wing_path_tab):
-            slots = list(self.wing_paths) or ["A"]
-            for slot in slots:
-                self.capture_wing_path(slot)
+            # A is the reference: refresh only B (or A if nothing is captured yet).
+            self.capture_wing_path("B" if "B" in self.wing_paths else "A")
         else:
             # Viewer/Settings (where fresh tabs usually sit) have no graphs of
             # their own: jump to phase plots so Cmd+U always visibly does something.
@@ -790,8 +789,6 @@ class DesignPane:
             vmax = max((max(values) for values in series.values() if values), default=0.0)
             ax.set_ylim(0.0, max(35.0, math.ceil(vmax / 5.0) * 5.0))
             ax.yaxis.set_major_locator(MultipleLocator(5.0))
-            if title == "Angular velocity vs time":
-                ax.set_xlim(50.0, 75.0)
         ax.grid(True, alpha=0.3)
         if lines and not colors:
             ax.legend()
