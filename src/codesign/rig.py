@@ -24,9 +24,8 @@ from compile_tg import compile_tg
 from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control_for_morphology
-from runtime.crank import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime, rollout, wing_pitch
-from runtime.wing_pitch import calibrate_wing_pitch_at_rest
+from runtime.sim import rest_state
 
 ROOT = Path(__file__).resolve().parents[2]
 INTEGRATORS = {"euler": 0, "rk4": 1, "implicit": 2, "implicitfast": 3}
@@ -93,12 +92,9 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
         model.opt.timestep = timestep_ms * 1e-3
     if lock_wings:
         symmetrize_wings(model)  # BEFORE MjData/put_model: both wings must be one design
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
     morph = load_morphology(tg_path)
     require_bird(morph, *PLATE_BIRDS, tool="the codesign optimizer")
-    lag = morph.motors.crank_phase_lag_rad if phase_lag is None else phase_lag
-    sync_crank_disks_at_rest(model, data, lag)
+    data = rest_state(model, morph, phase_lag)
 
     control = load_control_for_morphology(tg_path)
     drive = rollout.build_drive_config(model, ramp_duration=0.0)
