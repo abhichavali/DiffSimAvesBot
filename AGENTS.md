@@ -190,7 +190,11 @@ Keep this list and `opt/README.md` "Known issues" in sync.
   the code is imported once, so editing physics with the GUI open and pressing Cmd-U
   stores old-code results under the new key. Restart the GUI after physics edits, or
   `rm -r .gui_plot_cache`.
-- Morphology: the R fixed strut keeps the L site quats (cosmetic).
+- Morphology: the R fixed strut keeps the L site quats (cosmetic). The motor-tendon
+  ranges are swept on the compile probe's post-sag pose, so they are L/R asymmetric
+  (seed `L_motor_t1` [34.88, 80.01] vs `R_motor_t1` [34.33, 78.66] mm) and `R_motor_t4`'s
+  lower limit (52.99 mm) sits above its qpos0 length (52.30 mm): every rest settle starts
+  with that limit active (5 tendon-limit rows at qpos0).
 - GUI: `run_gui`'s `RunConfig.loss` is never read; the design inspector leaks one
   `mkdtemp` scene dir per tab.
 - `opt/hover_policy.py` writes no `pd_gains` into `hover_meta.json` (descriptive; nothing
