@@ -5,12 +5,13 @@ neutral wing pitch, crank sync); ``PlateWingSim`` adds the blade-element aero an
 the pitch limiter and advances one physics step at a time:
 
     [caller: stroke-plane body_quat / mocap writes, command from data.time]
-    qfrc_applied = 0, ctrl = 0, aero.apply, pitch.apply, [wrench],
+    qfrc_applied = 0, ctrl = 0, aero.apply, pitch.apply,
     ctrl[cranks] = command, lift readout, mj_step
 
-Float accumulation into ``qfrc_applied`` is order-sensitive, so aero -> pitch ->
-wrench is fixed. ``body_quat`` and mocap writes are read only by ``mj_step`` and
-the command depends only on ``data.time``, so callers make them before ``step``.
+Float accumulation into ``qfrc_applied`` is order-sensitive, so aero -> pitch is
+fixed; nothing else writes it. ``body_quat`` and mocap writes are read only by
+``mj_step`` and the command depends only on ``data.time``, so callers make them
+before ``step``.
 Loops that need to own ``mj_step`` (a viewer's pacing hook) call ``apply``.
 
 The model is the caller's: set its integrator, timestep and tendon arrays before
@@ -53,25 +54,22 @@ class PlateWingSim:
         ids = (mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in CRANK_ACTUATORS)
         self.crank_ids = [i for i in ids if i >= 0]
 
-    def apply(self, ctrl, wrench=None) -> float:
+    def apply(self, ctrl) -> float:
         """Everything before ``mj_step``: forces into qfrc_applied, ``ctrl`` onto the cranks.
 
         ``ctrl`` is one velocity command for every crank, or one per entry of
-        ``crank_ids``. ``wrench(model, data)`` adds external forces after the aero
-        and pitch terms. Returns the aero lift (N) applied this step.
+        ``crank_ids``. Returns the aero lift (N) applied this step.
         """
         model, data = self.model, self.data
         data.qfrc_applied[:] = 0.0
         data.ctrl[:] = 0.0
         self.aero.apply(model, data)
         self.pitch.apply(model, data)
-        if wrench is not None:
-            wrench(model, data)
         data.ctrl[self.crank_ids] = ctrl
         return self.aero.lift()
 
-    def step(self, ctrl, wrench=None) -> float:
+    def step(self, ctrl) -> float:
         """``apply`` then ``mj_step``; returns the lift applied over the step."""
-        lift = self.apply(ctrl, wrench)
+        lift = self.apply(ctrl)
         mujoco.mj_step(self.model, self.data)
         return lift

@@ -5,8 +5,7 @@ physics_step() is the step every MJX rollout shares. It mirrors the canonical CP
 dead-zone pitch torque (:mod:`runtime.mjx.wing_pitch`) and the blade-element aero
 force (:mod:`runtime.mjx.aero_runtime`), then ``mjx.step``. PlateWingSim adds aero
 before pitch; with just those two terms on a zeroed ``qfrc_applied`` the order is
-exact either way (a + p == p + a), but a third term such as a body wrench must come
-after both, as PlateWingSim and opt/hover_policy add it.
+exact either way (a + p == p + a).
 
 codesign.metrics runs physics_step under a learned command, run_mjx_fixed_frequency
 under its own scan (step drive, lift recording). simulate() runs it over the design's
