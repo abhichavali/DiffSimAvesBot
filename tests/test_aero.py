@@ -3,16 +3,19 @@ which edge leads, so mirroring the chordwise flow (vz -> -vz) mirrors the force,
 the CoP to its mirror point about mid-chord, and moves the rotational lift's 3/4-chord
 point to 1/4 chord from the leading edge. The strip geometry is the compiled wing mesh's."""
 
+import jax
 import jax.numpy as jnp
 import mujoco
+import mujoco.mjx as mjx
 import numpy as np
 import pytest
 
 from morphology.compile import ROOT, compile_file
 from morphology.tg_parser import load_morphology
 from morphology.wing_geometry import _section_values, load_wing_geometry
-from runtime.aero import _SIDE_SIGNS, AERO_PARAMS, RHO_AIR, aerodynamics
+from runtime.aero import _SIDE_SIGNS, AERO_PARAMS, RHO_AIR, AeroBladeRuntime, aerodynamics
 from runtime.mjx.aero import aero_wing
+from runtime.mjx.aero_runtime import aero_wrench, build_aero_config, init_aero_state
 
 CHORD, LENGTH, DT = 0.05, 0.2, 5e-4
 X_ROT, ROOT_OFFSET = 0.2, 0.007  # hinge 0.2 chord behind the leading edge; wing starts 7 mm out
@@ -112,3 +115,29 @@ def test_rotational_drag_is_the_chordwise_integral(side):
         f, t = strip(side, np.zeros(3), (0.0, w, 0.0))
         assert f[0] == pytest.approx(_SIDE_SIGNS[side][0] * k0 * np.sum(u * np.abs(u)), rel=1e-5)
         assert t[1] == pytest.approx(-k0 * np.sum(u**2 * np.abs(u)), rel=1e-5)
+
+
+def test_aero_reads_the_pose_it_moved_to():
+    """Straight out of mj_step the kinematics still hold the pre-step pose; the aero must
+    see the stepped pose, i.e. act as if mj_forward had run (CPU and MJX)."""
+    tg = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
+    morph = load_morphology(tg)
+    model = mujoco.MjModel.from_xml_string(compile_file(tg))
+    stepped = mujoco.MjData(model)
+    stepped.qvel[:] = 30.0 * np.sin(np.arange(model.nv) + 1.0)
+    mujoco.mj_step(model, stepped)
+    forwarded = mujoco.MjData(model)
+    forwarded.qpos[:], forwarded.qvel[:] = stepped.qpos, stepped.qvel
+    mujoco.mj_forward(model, forwarded)
+
+    mx, cfg = mjx.put_model(model), build_aero_config(model, morph)
+    f = jax.jit(lambda d: aero_wrench(mx, d, cfg, init_aero_state(cfg))[0])
+    a, b = (np.asarray(f(mjx.put_data(model, d))) for d in (stepped, forwarded))
+    np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-6 * np.abs(b).max())
+
+    def cpu(data):  # after the MJX half: the CPU runtime refreshes ``data`` in place
+        data.qfrc_applied[:] = 0.0
+        AeroBladeRuntime(model, morph, substep=1).apply(model, data)
+        return data.qfrc_applied.copy()
+
+    np.testing.assert_array_equal(cpu(stepped), cpu(forwarded))

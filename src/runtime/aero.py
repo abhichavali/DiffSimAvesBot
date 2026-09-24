@@ -285,6 +285,11 @@ class AeroBladeRuntime:
         self._jacr = np.zeros((3, model.nv))
 
     def apply(self, model, data) -> None:
+        # After mj_step the kinematics (site_xpos/xmat, cdof, subtree_com) still sit at
+        # the pre-step pose while qpos/qvel have moved on; bring them up to qpos so the
+        # aero frames, Jacobians and points match the qvel it reads.
+        mujoco.mj_kinematics(model, data)
+        mujoco.mj_comPos(model, data)
         recompute = (self._step_counter % self.substep) == 0
         for wing in self.wings:
             if recompute or wing.cached_forces is None:

@@ -172,7 +172,11 @@ def aero_wrench(m, d, cfg: AeroConfig, state: AeroState):
     ``net_force_world`` is the (3,) world-frame aerodynamic force summed over both
     wings — its z-component is the instantaneous aerodynamic **lift**. ``alpha_max``
     is the max folded AoA and ``speed_mean`` the mean relative strip speed.
+
+    Like the CPU runtime it first brings the kinematics up to ``d.qpos`` (after
+    ``mjx.step`` they still hold the pre-step pose); the refreshed data stays local.
     """
+    d = mjx.com_pos(m, mjx.kinematics(m, d))
     qfrc = jnp.zeros_like(d.qvel)
     net_force_world = jnp.zeros(3)
     omegas: list[jax.Array] = []
