@@ -17,110 +17,49 @@ stabilizing wrench on the airframe -- attitude torque (3) + vertical thrust trim
 to the flap lift, the solver runs at iterations=1, and the stabilizer is a
 virtual body wrench -- all fine for a viewer demo, none physical.
 
+The controller itself (features, wrench, PD init) is runtime.hover_control; this
+file is the model build and the BPTT trainer. The trainer does not work (gradients
+explode through the unstable rollout, docs/flight_demos.org): the shipped policy in
+designs/hummer/hover/hover_policy/ is a sweep-tuned PD.
+
     .venv/bin/python opt/hover_policy.py --tg designs/hummer/hover/shoulder.tg \
         --iters 300 --out opt/runs_hover
-    python opt/hover_policy.py --selfcheck     # CPU mapping/parity smoke test
 """
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import os
 import sys
 import time
-from typing import NamedTuple
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-for _p in (ROOT, ROOT / "src", ROOT / "opt"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+sys.path.insert(0, str(ROOT / "src"))
 
-import jax
-import jax.numpy as jnp
-import mujoco
-import mujoco.mjx as mjx
-import numpy as np
+import jax  # noqa: E402
+import jax.numpy as jnp  # noqa: E402
+import mujoco  # noqa: E402
+import mujoco.mjx as mjx  # noqa: E402
+import numpy as np  # noqa: E402
 
-import flying
-from compile_tg import compile_tg
-from morphology.tg_parser import load_morphology
-from runtime.crank import sync_crank_disks_at_rest
-from runtime.disk_orientation import DiskOrientation
-from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.wing_pitch import calibrate_wing_pitch_at_rest
-from runtime.mjx import aero_runtime, rollout as mroll, wing_pitch as mwp
-
-N_FEAT = 12
-N_CTRL = 6  # [Fx, Fy, Fz, tau_x, tau_y, tau_z] airframe stabilizing wrench (world force, body torque)
-
-# Normalize feature groups to ~O(1) so the feedback gains the controller needs are
-# also ~O(1) and reachable from K=0 in a few hundred adam steps. Without this,
-# holding a 5 cm position error needs a gain ~4 (meters are tiny) that grows only
-# ~lr/iter -> position feedback stays untrained. Order: pos, linvel, att, angvel.
-FEATURE_SCALE = np.array([20.0, 20.0, 20.0, 10.0, 10.0, 10.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0])
-
-
-def level_stroke_plane(model) -> None:
-    """Flatten the crank-disk mounts (tilt=pitch=0) so the flap is a pure vertical
-    stroke with no built-in forward thrust -- hovering in place is then a matter of
-    attitude + altitude hold, not fighting the design's 20-deg thrust. Mutates
-    model.body_quat in place; call before put_model / calibration."""
-    DiskOrientation(model).set(0.0, 0.0)
-
-
-class HoverCfg(NamedTuple):
-    """Static wiring shared by trainer (jnp) and viewer (np)."""
-    a0: float
-    f_max: float     # N   (per-axis force bound)
-    tau_max: float   # Nm  (per-axis torque bound)
-    qadr: int        # airframe freejoint qpos address
-    dofadr: int      # airframe freejoint dof address
-
-
-def hover_features(qpos, qvel, cfg: HoverCfg, com0, xp):
-    """[pos_err(3), linvel(3), att_err(3), angvel(3)] for the airframe freejoint."""
-    q, v = cfg.qadr, cfg.dofadr
-    pos = qpos[q : q + 3]
-    quat = qpos[q + 3 : q + 7]                     # wxyz
-    lin = qvel[v : v + 3]
-    ang = qvel[v + 3 : v + 6]
-    att = 2.0 * xp.sign(quat[0]) * quat[1:4]       # small-angle rotation vector vs upright
-    return xp.concatenate([pos - com0, lin, att, ang]) * FEATURE_SCALE
-
-
-def policy_commands(K, b, feats, cfg: HoverCfg, xp):
-    """feats -> (force[3], tau[3], u[6]).  Bounded wrench, tanh-saturated."""
-    u = K @ feats + b
-    force = cfg.f_max * xp.tanh(u[:3])
-    tau = cfg.tau_max * xp.tanh(u[3:6])
-    return force, tau, u
-
-
-def pd_init_theta(cfg: HoverCfg, *, kp_pos=3.0, kd_pos=1.2, kp_att=0.05, kd_att=0.012):
-    """A physically-sized stabilizing PD as the policy starting point (diagonal K):
-    position/velocity -> force, attitude/rate -> torque. Training a stabilizer via
-    BPTT from K=0 explodes (the plant tumbles -> exponential gradients); starting
-    from a controller that already keeps trajectories bounded fixes that. Gains are
-    expressed in the SCALED-feature / tanh convention so u stays in the linear range.
-    """
-    K = np.zeros((N_CTRL, N_FEAT))
-    for i in range(3):  # force axes: -kp*pos_i - kd*vel_i
-        K[i, i]     = -kp_pos / (cfg.f_max * FEATURE_SCALE[i])
-        K[i, 3 + i] = -kd_pos / (cfg.f_max * FEATURE_SCALE[3 + i])
-    for i in range(3):  # torque axes: -kp*att_i - kd*angvel_i
-        K[3 + i, 6 + i] = -kp_att / (cfg.tau_max * FEATURE_SCALE[6 + i])
-        K[3 + i, 9 + i] = -kd_att / (cfg.tau_max * FEATURE_SCALE[9 + i])
-    return np.concatenate([K.reshape(-1), np.zeros(N_CTRL)])
-
+import flying  # noqa: E402
+from codesign.rig import compile_lock  # noqa: E402
+from compile_tg import compile_tg  # noqa: E402
+from morphology.tg_parser import load_morphology  # noqa: E402
+from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
+from runtime.hover_control import (N_CTRL, N_FEAT, HoverCfg, hover_features,  # noqa: E402
+                                   level_stroke_plane, pd_init_theta, policy_commands)
+from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
+from runtime.wing_pitch import calibrate_wing_pitch_at_rest  # noqa: E402
+from runtime.mjx import aero_runtime, rollout as mroll, wing_pitch as mwp  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # model build (free-flying it009p, gravity matched to lift)
 # --------------------------------------------------------------------------- #
 def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_substep):
-    with open(ROOT / "opt" / ".compile.lock", "w") as _lk:
-        import fcntl, os
-        fcntl.flock(_lk, fcntl.LOCK_EX)
+    with compile_lock():
         os.environ["MORPHOLOGY_PATH"] = str(tg_path)
         os.environ["MUJOCO_XML_PATH"] = str(scene_out)
         tmp = scene_out.with_suffix(".bench.xml")
@@ -133,7 +72,7 @@ def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_sub
     if dt_ms is not None:
         model.opt.timestep = dt_ms * 1e-3
     model.opt.gravity[2] = -gravity
-    model.opt.iterations = 1  # reverse-mode differentiable (rollout.set_reverse_mode_solver)
+    model.opt.iterations = 1  # one solver iteration: no while_loop, so reverse mode can trace it
     level_stroke_plane(model)  # pure vertical stroke -> hover in place, no fwd thrust
 
     data = mujoco.MjData(model)
@@ -151,7 +90,6 @@ def measure_mean_lift(tg_path: Path, scene_bench: Path, *, ncyc=6) -> float:
     from runtime.aero import AeroBladeRuntime
     from runtime.wing_pitch import WingPitchLimiter
     from runtime.realtime import get_actuator_id
-    import os
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_bench)
     compile_tg(tg_path, scene_bench)
@@ -210,7 +148,7 @@ def make_loss(mx, dx0, drive, pitch_cfg, aero_cfg, cfg: HoverCfg, *,
             wrench = jnp.zeros_like(dx.qvel).at[dof : dof + 3].add(force).at[dof + 3 : dof + 6].add(tau)
             dx = dx.replace(qfrc_applied=dx.qfrc_applied + q + wrench)
             dx = mjx.step(mx, dx)
-            carry = mroll._match_dtypes((dx, ns, ema), carry0)
+            carry = mroll.match_dtypes((dx, ns, ema), carry0)
             # Score the NET drift (ema of every channel): the flap bob averages out,
             # so the floor -> 0 for a true hover and the gradient targets station-keeping
             # (raw per-step velocity would swamp the loss with the irreducible bob).
@@ -300,11 +238,7 @@ def main():
     ap.add_argument("--w-u", type=float, default=0.01)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--log-every", type=int, default=5)
-    ap.add_argument("--selfcheck", action="store_true")
     args = ap.parse_args()
-
-    if args.selfcheck:
-        return selfcheck()
 
     args.out.mkdir(parents=True, exist_ok=True)
     scene = args.out / "hover_scene.xml"
@@ -324,7 +258,7 @@ def main():
     cfg = cfg0._replace(f_max=args.f_max, tau_max=args.tau_max)
 
     drive = mroll.build_drive_config(model)
-    pitch_cfg = mwp.config_from_runtime(model, centers=mroll._pitch_centers(model, data))
+    pitch_cfg = mwp.config_from_runtime(model, centers=mroll.pitch_centers(model, data))
     aero_cfg = aero_runtime.build_aero_config(model, substep=args.aero_substep)
     mx = mjx.put_model(model)
     dx0 = mjx.put_data(model, data)
@@ -365,20 +299,6 @@ def main():
     adam(loss, theta0, iters=args.iters, lr=args.lr, log_every=args.log_every,
          out_dir=args.out, save_fn=save_fn, grad_clip=args.grad_clip)
     print(f"[hover] done -> {args.out}", flush=True)
-
-
-def selfcheck():
-    """np==jnp parity of the wrench mapping + bound sanity."""
-    cfg = HoverCfg(a0=65.0, f_max=0.15, tau_max=0.02, qadr=0, dofadr=0)
-    K = np.arange(N_CTRL * N_FEAT).reshape(N_CTRL, N_FEAT) * 0.01
-    b = np.arange(N_CTRL) * 0.1
-    feats = np.linspace(-0.5, 0.5, N_FEAT)
-    fn, tn, un = policy_commands(K, b, feats, cfg, np)
-    fj, tj, uj = policy_commands(jnp.asarray(K), jnp.asarray(b), jnp.asarray(feats), cfg, jnp)
-    assert np.allclose(fn, np.array(fj), atol=1e-6), "force np/jnp mismatch"
-    assert np.allclose(tn, np.array(tj), atol=1e-6), "tau np/jnp mismatch"
-    assert np.all(np.abs(fn) <= cfg.f_max + 1e-9) and np.all(np.abs(tn) <= cfg.tau_max + 1e-9), "bounds violated"
-    print("hover_policy selfcheck OK: 6-DOF wrench np/jnp parity + bounds")
 
 
 if __name__ == "__main__":

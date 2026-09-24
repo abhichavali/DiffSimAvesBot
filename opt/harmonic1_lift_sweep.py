@@ -18,10 +18,11 @@ from multiprocessing import Pool
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-for p in (ROOT, ROOT / "src", ROOT / "opt"):
-    sys.path.insert(0, str(p))
+sys.path.insert(0, str(ROOT / "src"))
 
-from optimize_control import cpu_validate_design, set_unsteady_aero  # noqa: E402
+from codesign.cpu_check import CpuDesign, cpu_rollout  # noqa: E402
+from codesign.rig import set_unsteady_aero, setup  # noqa: E402
+from morphology.tg_parser import load_morphology  # noqa: E402
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
 
 
@@ -29,12 +30,10 @@ def run(task):
     set_unsteady_aero(False)  # doctrine: quasi-steady lift only (added-mass FD is itself dt-dependent)
     scene, a0, omega, lag, integ, dt, d, phi, warmup, periods = task
     ph = math.radians(phi)
-    L, T, P, pc = cpu_validate_design(
-        scene, (a0, [d * math.cos(ph)], [d * math.sin(ph)], omega), None, integ,
-        warmup=warmup, periods=periods, phase_lag=lag, timestep_ms=dt, aero_substep=1,
-        cycle_stats=True)
-    return dict(integ=integ, dt=dt, d=d, phi=phi, lift_mN=L * 1e3, peak_mNm=T * 1e3,
-                power_W=P, drift_mNm=(pc[-1] - pc[0]) * 1e3)
+    r = cpu_rollout(scene, CpuDesign((a0, [d * math.cos(ph)], [d * math.sin(ph)], omega)), integ,
+                    warmup=warmup, periods=periods, phase_lag=lag, timestep_ms=dt, aero_substep=1)
+    return dict(integ=integ, dt=dt, d=d, phi=phi, lift_mN=r.lift * 1e3, peak_mNm=r.peak * 1e3,
+                power_W=r.power, drift_mNm=(r.cycle_peaks[-1] - r.cycle_peaks[0]) * 1e3)
 
 
 def summarize(rows, cells):
@@ -75,8 +74,6 @@ def main():
     done = [json.loads(s) for s in args.out.read_text().splitlines()] if args.out.exists() else []
 
     if not args.summary_only:
-        from optimize_control import setup
-        from morphology.tg_parser import load_morphology
         scene = ROOT / "opt" / "scene_h1_sweep.xml"
         _, _, _, control, drive, *_ = setup(args.tg, scene)  # compiles the scene once
         a0, omega = float(drive.a0), float(control.omega)

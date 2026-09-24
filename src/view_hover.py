@@ -23,13 +23,9 @@ import argparse
 import json
 import math
 import os
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-for _p in (ROOT, ROOT / "src", ROOT / "opt"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 import mujoco
 import mujoco.viewer
@@ -41,10 +37,10 @@ from morphology.tg_parser import load_morphology
 from runtime.aero import AeroBladeRuntime
 from runtime.crank import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
+from runtime.hover_control import HoverCfg, hover_features, level_stroke_plane, policy_commands
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
 from runtime.realtime import RealtimeSync, get_actuator_id
 from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
-from hover_policy import HoverCfg, hover_features, policy_commands, level_stroke_plane
 
 ACT = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
 MODES = ("hover", "vector", "multimodal", "flying", "collision")

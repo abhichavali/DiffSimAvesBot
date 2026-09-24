@@ -21,7 +21,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from opt.optimize_control import ROOT, WINGTIP_SITES, setup
+from codesign.rig import ROOT, WINGTIP_SITES, lr_tendon_pairs, setup
 
 TG = ROOT / "designs" / "hummer" / "hover-soft-it009p" / "shoulder.tg"
 SCENE = ROOT / "scene.xml"
@@ -30,12 +30,7 @@ CYCLES = 3.0
 
 def tendon_pairs(model):
     """{suffix: (l_id, r_id)} for the mirrored structural/motor tendons."""
-    seen: dict[str, dict[str, int]] = {}
-    for i in range(model.ntendon):
-        n = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, i)
-        if n and n[:2] in ("L_", "R_"):
-            seen.setdefault(n[2:], {})[n[0]] = i
-    return {k: (v["L"], v["R"]) for k, v in seen.items() if "L" in v and "R" in v}
+    return {k: (v["L"], v["R"]) for k, v in lr_tendon_pairs(model).items() if "L" in v and "R" in v}
 
 
 def roll(model, control, cycles=CYCLES):
@@ -43,12 +38,11 @@ def roll(model, control, cycles=CYCLES):
     from runtime.aero import AeroBladeRuntime
     from runtime.crank import sync_crank_disks_at_rest
     from runtime.realtime import get_actuator_id
-    from runtime.wing_pitch import WingPitchLimiter
+    from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
     from runtime.morphology_runtime import resolve_morphology_path
     from morphology.tg_parser import load_morphology
 
     data = mujoco.MjData(model)
-    from opt.optimize_control import calibrate_wing_pitch_at_rest
     calibrate_wing_pitch_at_rest(model, data)
     sync_crank_disks_at_rest(model, data, load_morphology(resolve_morphology_path()).motors.crank_phase_lag_rad)
     aero = AeroBladeRuntime(model, substep=4)

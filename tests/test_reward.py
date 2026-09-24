@@ -1,4 +1,4 @@
-"""Self-check for the demo reward (run: uv run pytest -q tests/test_reward.py -s).
+"""Self-check for the co-design reward (run: uv run pytest -q tests/test_reward.py -s).
 
 Verifies the reward shape:
   1. Stroke amplitude is STRICTLY banded around the baseline (+/-amp_band_pct):
@@ -7,13 +7,13 @@ Verifies the reward shape:
      free (no cap), and right at the floor a soft-hinge penalty remains (so the
      constraint is soft and gradients flow, not a hard wall).
   3. In lift/torque tradeoff mode, a 5% lift gain can pay for a 1% torque rise.
-make_loss returns jacfwd(loss, has_aux); aux[9] = -R = the scalar loss -- a
-constant stub metrics ignores theta, so
-the gradient is irrelevant, only the loss value is checked.
+make_loss returns jacfwd(loss, has_aux); aux.loss = -R. The stub metrics ignore
+theta, so the gradient is irrelevant: only the loss value is checked.
 """
 import jax.numpy as jnp
 
-from opt.optimize_control import make_loss, recorded_peak
+from codesign.loss import OBJ_METRIC, make_loss, variant_set
+from codesign.metrics import Metrics, recorded_peak
 
 A_TARGET = 0.020        # 20 mm baseline stroke
 FLOOR = 0.300           # 300 mN lift floor (no cap by default)
@@ -21,30 +21,23 @@ FLOOR = 0.300           # 300 mN lift floor (no cap by default)
 
 def loss_for(*, Lbar, A_stroke, lift_cap=None, swing=0.0, w_swing=0.0,
              tau_hat=0.0, tau_max=0.300, lift0=None, tradeoff=None,
-             P_sup=0.0, objective="torque", obj_norm=None, L0=None, tau_guard=0.0,
+             P_sup=0.0, objective="torque", obj_norm=None, tau_guard=0.0,
              overlap=0.0, tau_rms=0.0, power_crest=0.0, lift_ripple=0.0):
-    """Scalar loss for a design with the given lift / amplitude / torque-swing
-    (other metrics neutral). metrics() = (Lbar, tau_hat, A_stroke, S, C_lc,
-    P_inactive, C_overlap, swing, P_supplied, C_valid, alpha_pk, k_eff,
-    conv_err, tau_peak, tau_drift) -- make_loss unpacks all 15, so this stub
-    has to track build_rollout's tuple exactly."""
+    """Scalar loss for a design with the given metrics (every other metric 0)."""
     def metrics(theta):
-        zeros = [jnp.asarray(0.0)] * 18
-        out = list(zeros)
-        out[0], out[1], out[2] = jnp.asarray(Lbar), jnp.asarray(tau_hat), jnp.asarray(A_stroke)
-        out[7] = jnp.asarray(swing)
-        out[8] = jnp.asarray(P_sup)
-        out[6] = jnp.asarray(overlap)
-        out[15], out[16], out[17] = (jnp.asarray(tau_rms), jnp.asarray(power_crest),
-                                     jnp.asarray(lift_ripple))
-        return tuple(out)
-    grad_fn = make_loss(metrics, lift_floor=FLOOR, lift_cap=lift_cap, lift_smooth=0.015,
-                        lift_above_weight=0.25, A_target=A_TARGET, tau_max=None,
+        m = Metrics(*[jnp.asarray(0.0)] * len(Metrics._fields))
+        return m._replace(Lbar=jnp.asarray(Lbar), tau_hat=jnp.asarray(tau_hat),
+                          A_stroke=jnp.asarray(A_stroke), swing=jnp.asarray(swing),
+                          P_supplied=jnp.asarray(P_sup), C_overlap=jnp.asarray(overlap),
+                          tau_rms=jnp.asarray(tau_rms), power_crest=jnp.asarray(power_crest),
+                          lift_ripple=jnp.asarray(lift_ripple))
+    grad_fn = make_loss(variant_set(metrics), lift_floor=FLOOR, lift_cap=lift_cap,
+                        lift_smooth=0.015, A_target=A_TARGET,
                         weights=(1.0, 1.0, 1.0, 0.0), w_lc=0.0, w_power=0.0, w_overlap=0.0,
                         w_swing=w_swing, lift0=lift0, tradeoff=tradeoff,
-                        objective=objective, obj_norm=obj_norm, L0=L0, tau_guard=tau_guard)
+                        objective=objective, obj_norm=obj_norm, tau_guard=tau_guard)
     _, aux = grad_fn(jnp.zeros(1), tau_max, 300.0)
-    return float(aux[9])
+    return float(aux.loss)
 
 
 def test_reward_shape():
@@ -91,7 +84,7 @@ def test_reward_shape():
     P_BASE, L_BASE = 0.500, 0.400        # 500 mW at 400 mN = 1.25 W/N baseline
     def energy(P, L, tau_hat=0.0):
         return loss_for(Lbar=L, A_stroke=A_TARGET, P_sup=P, tau_hat=tau_hat, tau_max=0.300,
-                        objective="energy", obj_norm=(P_BASE / L_BASE,), L0=L_BASE)
+                        objective="energy", obj_norm=(P_BASE / L_BASE,))
     base = energy(P_BASE, L_BASE)
     assert abs(base - 1.0) < 0.02, f"baseline must normalize to ~1 objective unit, got {base}"
     # 1. Fewer watts at the same lift wins; more watts loses. (The point of the run.)
@@ -114,7 +107,7 @@ def test_reward_shape():
     # 4. Torque is a guard, not a target: free under the ceiling, priced above it.
     guarded = loss_for(Lbar=L_BASE, A_stroke=A_TARGET, P_sup=P_BASE, tau_hat=0.400,
                        tau_max=0.300, objective="energy", obj_norm=(P_BASE / L_BASE,),
-                       L0=L_BASE, tau_guard=4.0)
+                       tau_guard=4.0)
     assert abs(energy(P_BASE, L_BASE, tau_hat=0.290) - base) < 1e-6, "torque under the ceiling is free"
     assert guarded > base + 0.1, f"torque over the ceiling must be guarded: {guarded} !> {base}"
 
@@ -122,7 +115,7 @@ def test_reward_shape():
     SW0 = 0.030          # 30 mNm baseline torque swing
     def swing_obj(sw, Lbar=L_BASE):
         return loss_for(Lbar=Lbar, A_stroke=A_TARGET, swing=sw, tau_max=0.300,
-                        objective="swing", obj_norm=(SW0,), L0=L_BASE)
+                        objective="swing", obj_norm=(SW0,))
     sw_base = swing_obj(SW0)
     assert abs(sw_base - 1.0) < 0.02, f"swing baseline must normalize to ~1, got {sw_base}"
     assert swing_obj(0.8 * SW0) < sw_base - 1e-3, "less torque swing must win"
@@ -134,11 +127,10 @@ def test_reward_shape():
     # --- every screen-derived objective: normalized to 1, monotone in ITS metric ---
     # The whole point of the generic path is that a candidate is trained on exactly
     # the quantity it is later scored on, so one loop covers all of them.
-    from opt.optimize_control import OBJ_METRIC_IDX
     BASE = {"power": 0.500, "swing": 0.030, "overlap": 0.820, "tau_rms": 0.110,
             "power_crest": 1.024, "lift_ripple": 0.777}
     for obj, b0 in BASE.items():
-        kw = dict(Lbar=L_BASE, A_stroke=A_TARGET, objective=obj, obj_norm=(b0,), L0=L_BASE)
+        kw = dict(Lbar=L_BASE, A_stroke=A_TARGET, objective=obj, obj_norm=(b0,))
         arg = {"power": "P_sup", "swing": "swing"}.get(obj, obj)
         o_at = loss_for(**kw, **{arg: b0})
         better = loss_for(**kw, **{arg: 0.8 * b0})
@@ -146,10 +138,10 @@ def test_reward_shape():
         assert abs(o_at - 1.0) < 0.02, f"{obj}: baseline must score ~1, got {o_at}"
         assert better < o_at - 1e-3, f"{obj}: less must win ({better} !< {o_at})"
         assert worse > o_at + 1e-3, f"{obj}: more must lose ({worse} !> {o_at})"
-        assert obj in OBJ_METRIC_IDX, f"{obj} missing from OBJ_METRIC_IDX"
+        assert obj in OBJ_METRIC, f"{obj} missing from OBJ_METRIC"
     # Composite: 50/50 of swing and tau_rms, so improving EITHER half improves it.
     comp = dict(Lbar=L_BASE, A_stroke=A_TARGET, objective="swing_rms",
-                obj_norm=(0.030, 0.110), L0=L_BASE)
+                obj_norm=(0.030, 0.110))
     c_at = loss_for(**comp, swing=0.030, tau_rms=0.110)
     assert abs(c_at - 1.0) < 0.02, f"composite baseline must score ~1, got {c_at}"
     assert loss_for(**comp, swing=0.024, tau_rms=0.110) < c_at - 1e-3, "composite: swing half"
