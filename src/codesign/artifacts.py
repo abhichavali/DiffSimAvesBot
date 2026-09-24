@@ -17,6 +17,8 @@ A design dir (a run's --out, and each checkpoints/itNNN, stage_*, cpu_best, robu
 The .tg format only carries a GLOBAL tendon default, so per-tendon tuning cannot be baked
 back into a .tg: reconstruct_design() applies the JSON to the compiled model instead.
 It does not yet read strokeplane_optimized.json or wavelet theta_best files.
+strokeplane_optimized.json is decoded by runtime.disk_orientation.StrokePlaneSignal
+(GUI, cpu_check), inline in view_fixed_frequency, and in JAX by codesign.metrics.
 """
 
 from __future__ import annotations

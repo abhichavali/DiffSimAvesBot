@@ -86,6 +86,8 @@ def main() -> None:
 
     def step_forces(_model, _data) -> None:
         if learned_sp is not None:
+            # runtime.disk_orientation.StrokePlaneSignal's decode, as a Python sum():
+            # its numpy dot differs by 1 ULP, which the viewer golden would catch.
             do, qadr, coef, t0, p0, mx_ = learned_sp
             th = float(data.qpos[qadr])
             basis = [1.0, math.cos(th), math.sin(th), math.cos(2.0 * th), math.sin(2.0 * th)]

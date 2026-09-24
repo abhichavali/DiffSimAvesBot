@@ -17,7 +17,7 @@ import numpy as np
 
 from codesign.genome import Genome, ricker_atoms
 from codesign.rig import INTEGRATORS
-from runtime.disk_orientation import DiskOrientation
+from runtime.disk_orientation import StrokePlaneSignal
 from runtime.sim import PlateWingSim
 
 
@@ -59,22 +59,11 @@ def cpu_rollout(scene_path, design: CpuDesign, integrator, *, morph, periods=3.0
     sim = PlateWingSim(model, morph, phase_lag=phase_lag, aero_substep=aero_substep,
                        pitch_params=design.pitch)
     data, aids = sim.data, sim.crank_ids
-    disk_orient = None
-    if design.strokeplane is not None:  # the signal the MJX rollout applied
-        sp_coef, sp_tilt0, sp_pitch0, sp_max = design.strokeplane
-        sp_coef = np.asarray(sp_coef, dtype=float)
-        disk_orient = DiskOrientation(model)
-        sp_qadr = int(model.jnt_qposadr[
-            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "L_t1_disk_hinge")])
+    sp = StrokePlaneSignal(model, *design.strokeplane) if design.strokeplane is not None else None
 
     def step():
-        if disk_orient is not None:
-            th = float(data.qpos[sp_qadr])
-            basis = np.array([1.0, math.cos(th), math.sin(th),
-                              math.cos(2.0 * th), math.sin(2.0 * th)])
-            disk_orient.set(
-                sp_tilt0 + sp_max * math.tanh(float(sp_coef[:5] @ basis) / sp_max),
-                sp_pitch0 + sp_max * math.tanh(float(sp_coef[5:] @ basis) / sp_max))
+        if sp is not None:  # the signal the MJX rollout applied
+            sp.apply(data)
         phase = omega * data.time
         if wavelet is not None:
             mod = float(np.sum(a * ricker_atoms(phase, wl_centers, wl_sigmas, np)))

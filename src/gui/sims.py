@@ -24,7 +24,7 @@ from morphology.emit_mjcf import STRUCTURAL_TENDON_COLORS
 from morphology.model import require_bird
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import drive_command, load_control, load_control_for_morphology
-from runtime.disk_orientation import DiskOrientation
+from runtime.disk_orientation import StrokePlaneSignal
 from runtime.sim import PlateWingSim
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -99,27 +99,6 @@ def prepare_scene(tg_path: Path, scene_path: Path, *, color_structural_tendons: 
     return scene_path
 
 
-class StrokePlaneSignal:
-    """The learned disk-mount (tilt, pitch) over crank phase that optimize_control
-    --tune-strokeplane saves beside a design as strokeplane_optimized.json."""
-
-    def __init__(self, model: mujoco.MjModel, spec: dict) -> None:
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, spec["phase_ref_joint"])
-        self.orient = DiskOrientation(model)
-        self.qadr = int(model.jnt_qposadr[jid])
-        self.coef = np.asarray(spec["tilt_coeffs"] + spec["pitch_coeffs"], dtype=float)
-        self.tilt0 = float(spec["tilt0_rad"])
-        self.pitch0 = float(spec["pitch0_rad"])
-        self.max_delta = float(spec["max_delta_rad"])
-
-    def angles(self, data: mujoco.MjData) -> tuple[float, float]:
-        th = float(data.qpos[self.qadr])
-        basis = np.array([1.0, math.cos(th), math.sin(th), math.cos(2.0 * th), math.sin(2.0 * th)])
-        mx = self.max_delta
-        return (self.tilt0 + mx * math.tanh(float(self.coef[:5] @ basis) / mx),
-                self.pitch0 + mx * math.tanh(float(self.coef[5:] @ basis) / mx))
-
-
 def settled_drive(tg_path: Path, scene_path: Path, control_path: Path | None, settle_periods: float,
                   *, strokeplane: bool = False):
     """Compile, rest and settle a design on the ramped crank drive: the CPU loop behind every plot.
@@ -137,11 +116,11 @@ def settled_drive(tg_path: Path, scene_path: Path, control_path: Path | None, se
 
     control = load_control(control_path) if control_path else load_control_for_morphology(tg_path)
     sp_file = tg_path.parent / "strokeplane_optimized.json"
-    sp = StrokePlaneSignal(model, json.loads(sp_file.read_text())) if strokeplane and sp_file.exists() else None
+    sp = StrokePlaneSignal.from_json(model, json.loads(sp_file.read_text())) if strokeplane and sp_file.exists() else None
 
     def step() -> None:
         if sp is not None:
-            sp.orient.set(*sp.angles(data))
+            sp.apply(data)
         sim.step(drive_command(control, morph.motors.motor_direction, data.time, drive_start,
                                settle_periods * control.period))
 
