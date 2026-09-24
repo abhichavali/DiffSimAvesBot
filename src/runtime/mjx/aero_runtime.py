@@ -159,15 +159,8 @@ def _wing_qfrc(m, d, cfg: AeroConfig, wing_idx: int, side: str, state: AeroState
         dt=cfg.dt,
     )
     alpha, speed = aero_wing_diagnostics(
-        omega_local,
-        jnp.zeros(3),
-        vel_local,
-        omega_dot,
-        prev_vel,
-        chords=cfg.chords,
-        length=cfg.length,
-        num_blade=cfg.num_blade,
-        dt=cfg.dt,
+        omega_local, jnp.zeros(3), vel_local,
+        chords=cfg.chords, length=cfg.length, num_blade=cfg.num_blade,
     )
 
     # Rotate strip wrenches root-frame -> world: row i is rot @ f_i  ==  f @ rot.T.
