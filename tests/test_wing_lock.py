@@ -1,5 +1,5 @@
 """Self-check for --lock-wings (run: uv run pytest -q tests/test_wing_lock.py -s,
-or on another design: uv run python -m tests.test_wing_lock design.tg).
+or on another design: PYTHONPATH=src uv run python -m tests.test_wing_lock design.tg).
 
 One command drives all four crank motors, so the CONTROL signal was always shared.
 The morphology was not: `structural_tendon_pairs(individual=True)` gives each of the
