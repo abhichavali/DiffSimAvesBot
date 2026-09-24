@@ -151,12 +151,13 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
     genes = genome.split(np.asarray(g), None)
     a0 = float(rig.drive.a0) * math.exp(float(genes.control[0]))
     a_out = a0 * genes.control[1:1 + K]; b_out = a0 * genes.control[1 + K:]
+    omega = info["omega"] * genes.clock_factor()  # the harmonic clock the MJX rollout drove
     (out_dir / "tendon_optimized.json").write_text(json.dumps(
         {"pairs": tendon_pairs_json(rig.model, rig.tendons, genes.stiff, genes.pre)}, indent=2))
     if genome.motor:
         (out_dir / "motor_tendon_optimized.json").write_text(json.dumps(
             motor_json(rig.tendons, rig.motor_ids, genes.motor), indent=2))
-    control = fourier_control_tg(load_morphology(Path(tg_src)).bird, K, info["omega"] / math.tau,
+    control = fourier_control_tg(load_morphology(Path(tg_src)).bird, K, omega / math.tau,
                                  a0, a_out, b_out)
     (out_dir / "control.tg").write_text(control)
     (out_dir / "control_optimized.tg").write_text(control)
@@ -174,7 +175,7 @@ def materialize(g, info, out_dir, tg_src, geom_names=()):
     (out_dir / "shoulder.tg").write_text(repoint_control(src_text))
     (out_dir / "theta_best.json").write_text(json.dumps(
         {"a0": float(a0), "a": [float(x) for x in a_out], "b": [float(x) for x in b_out],
-         "omega": float(info["omega"]), "frequency_hz": float(info["omega"] / math.tau)}, indent=2))
+         "omega": float(omega), "frequency_hz": float(omega / math.tau)}, indent=2))
     (out_dir / "codesign_seed.json").write_text(json.dumps({"genome": [float(x) for x in g]}, indent=2))
 
 

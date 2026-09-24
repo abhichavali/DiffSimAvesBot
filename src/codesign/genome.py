@@ -5,7 +5,7 @@ theta concatenates the active gene groups in this fixed order:
   control (2K+1)  a0_log, a_1..a_K, b_1..b_K. a0 is a log-factor of the design's a0; a_n/b_n
                   are modulation DEPTHS (fractions of a0): cmd = a0*(1 + sum a_n cos + b_n sin).
                   With wavelet=True the 2K coefficients are Ricker atom amplitudes instead.
-  f_log (1)       log factor on the harmonic clock frequency
+  f_log (1)       log factor on the harmonic clock frequency (which a0_log also scales)
   stiff (n)       per structural tendon log stiffness factor (n = 24, or 12 mirrored pairs)
   pre (n)         per structural tendon log rest-length (pretension) factor
   pitch (4)       log factors on the up/down pitch deadband and up/down pitch stiffness
@@ -37,6 +37,11 @@ class Genes(NamedTuple):
     pitch: Any
     motor: Any
     sp: Any
+
+    def clock_factor(self, exp=math.exp):
+        """exp(f_log + a0_log): the harmonic clock over the design frequency. The clock is
+        crank-locked: a0 (control[0]) is the crank speed, so the modulation rides it."""
+        return exp(self.f_log + self.control[0])
 
 
 class Genome(NamedTuple):

@@ -1,7 +1,12 @@
 """The packed-theta layout: group order, sizes, and how a theta splits and seeds."""
+import math
+from types import SimpleNamespace
+
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
+from codesign.cpu_check import to_cpu
 from codesign.genome import Genome, initial_theta
 
 FULL = Genome(K=2, n_tend=3, control=True, frequency=True, tendons=True, pitch=True, motor=True,
@@ -36,3 +41,12 @@ def test_initial_theta_is_seed_then_unit_factors():
     assert theta.shape == (FULL.size,)
     assert np.asarray(theta[:5]).tolist() == np.asarray(seed).tolist()
     assert not np.asarray(theta[5:]).any()
+
+
+def test_cpu_decode_rides_the_crank_locked_clock():
+    """to_cpu's harmonic clock is the MJX rollout's omega*exp(f_log + a0_log)."""
+    rig = SimpleNamespace(drive=SimpleNamespace(a0=65.0), tendons=(None, None, [], []))
+    genome = Genome(K=1, n_tend=0, control=True, frequency=True)
+    design = to_cpu(genome, np.array([0.1, 0.0, 0.0, 0.2]), None, rig, 65.0)
+    assert design.ctrl[0] == pytest.approx(65.0 * math.exp(0.1))
+    assert design.ctrl[3] == pytest.approx(65.0 * math.exp(0.3))

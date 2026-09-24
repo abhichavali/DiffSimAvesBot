@@ -95,7 +95,7 @@ def write_design(out_dir: Path, design: dict, log, *, genome: Genome, control_se
     base_freq, motor_dir = rig.control.fundamental_frequency_hz, morph.motors.motor_direction
     a0 = float(rig.drive.a0) * math.exp(ctrl[0])  # a0 log-factor -> absolute (actuator frame)
     a_out, b_out = a0 * ctrl[1 : 1 + K], a0 * ctrl[1 + K :]  # depth -> absolute a_n
-    freq_hz = base_freq * math.exp(float(g.f_log)) if genome.frequency else base_freq
+    freq_hz = base_freq * g.clock_factor()  # the harmonic clock the MJX rollout drove
     stats = {"motor_direction": motor_dir, "Lbar": design["Lbar"], "tau_hat": design["tau"]}
     if (genome.control or genome.frequency) and genome.wavelet:
         # Wavelet coeffs are dimensionless atom depths; theta_full.json is the warm start,

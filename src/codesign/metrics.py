@@ -134,9 +134,7 @@ def build_rollout(rig, genome: Genome, omega, *, warmup_steps, sample_steps, ste
         a0 = base_a0 * jnp.exp(ctrl[0])
         a, b = ctrl[1 : 1 + K], ctrl[1 + K :]
         wl_coeff = ctrl[1:]  # wavelet mode: all 2K coeffs are atom amplitudes
-        # Crank-LOCKED harmonic clock: a0 (=ctrl[0]) is the crank velocity command, so it
-        # IS the flap frequency; the modulation rides the same clock.
-        omega_eff = omega * jnp.exp(g.f_log + ctrl[0])
+        omega_eff = omega * g.clock_factor(jnp.exp)
         mx_eff = perturbed_model(mx, g) if (genome.tendons or genome.motor) else mx
         pc = pitch
         if genome.pitch:  # deadband + stiffness as log-factors of the design base

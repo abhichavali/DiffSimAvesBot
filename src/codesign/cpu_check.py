@@ -86,11 +86,8 @@ def cpu_rollout(scene_path, design: CpuDesign, integrator, *, morph, periods=3.0
 
 
 def to_cpu(genome: Genome, theta, control_seed, rig, omega, strokeplane=None) -> CpuDesign:
-    """Decode a packed theta into the CpuDesign the MJX rollout of it simulated.
-
-    Harmonics ride omega*exp(f_log) here, not the MJX rollout's crank-locked
-    omega*exp(f_log + a0_log).
-    """
+    """Decode a packed theta into the CpuDesign the MJX rollout of it simulated,
+    harmonics on the same crank-locked clock (Genes.clock_factor)."""
     g = genome.split(np.asarray(theta), np.asarray(control_seed))
     K, ctrl = genome.K, g.control
     a0 = float(rig.drive.a0) * math.exp(ctrl[0])
@@ -116,7 +113,7 @@ def to_cpu(genome: Genome, theta, control_seed, rig, omega, strokeplane=None) ->
                  float(p.downstroke_stiffness) * math.exp(g.pitch[3]))
     if g.sp is not None:
         sp = (g.sp, strokeplane["tilt0"], strokeplane["pitch0"], strokeplane["max_rad"])
-    return CpuDesign((a0, a_dep, b_dep, omega * math.exp(g.f_log)), tendons, pitch, sp)
+    return CpuDesign((a0, a_dep, b_dep, omega * g.clock_factor()), tendons, pitch, sp)
 
 
 def cpu_gate(scene_path, design: CpuDesign, cells, **kw):

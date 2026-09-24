@@ -58580,8 +58580,8 @@
     "  [stage 39165 mNm] best tau=39008.3 mNm swing=6012.3 mNm L=513.1 mN -> <out>/stage_39165mNm",
     "",
     "best design: tau=39008.3 mNm  swing=6012.3 mNm  L=513.1 mN  (from 39164.7 mNm / 6036.7 mNm baseline)  ->  <out>",
-    "[cpumjx_best] lift=507.5 mN  peak_torque=207.9 mNm  power=27751 mW",
-    "[cpumjx_best] lift=493.1 mN  peak_torque=220.0 mNm  power=28885 mW"
+    "[cpumjx_best] lift=507.5 mN  peak_torque=207.9 mNm  power=27750 mW",
+    "[cpumjx_best] lift=493.1 mN  peak_torque=220.0 mNm  power=28884 mW"
    ],
    "files": [
     "checkpoints/it000/control.tg",
@@ -58722,8 +58722,8 @@
     "b": [
      0.12574826180934906
     ],
-    "frequency_hz": 10.017,
-    "omega": 62.93866722201791,
+    "frequency_hz": 9.996986017373407,
+    "omega": 62.81291566044036,
     "motor_direction": 1.0,
     "Lbar": 0.5130513906478882,
     "tau_hat": 39.0082893371582
@@ -58892,14 +58892,14 @@
      },
      "cpu": {
       "euler": {
-       "mean_lift_N": 0.5075101804808213,
-       "peak_torque_Nm": 0.2079129329041578,
-       "supplied_power_W": 27.750836993825008
+       "mean_lift_N": 0.5075097357711623,
+       "peak_torque_Nm": 0.20791048623889452,
+       "supplied_power_W": 27.750097311474335
       },
       "implicitfast": {
-       "mean_lift_N": 0.4930887064338672,
-       "peak_torque_Nm": 0.2199795102822648,
-       "supplied_power_W": 28.885143207374032
+       "mean_lift_N": 0.49308805826444413,
+       "peak_torque_Nm": 0.21997410076659918,
+       "supplied_power_W": 28.883633778741167
       }
      }
     }
@@ -58907,7 +58907,7 @@
    "control.tg": [
     "bird = hummer",
     "harmonics = 1",
-    "fundamental_frequency = 10.017 Hz",
+    "fundamental_frequency = 9.99699 Hz",
     "a0 = 62.8741",
     "a_1 = -0.125748",
     "b_1 = 0.125748"

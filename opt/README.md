@@ -54,7 +54,8 @@ theta packs the active groups in this fixed order (`codesign.genome.Genome`):
 ```
 
 a0 and every tendon/pitch/motor gene are log-factors of the design base (seeded 0 = 1x).
-The command is `u(t) = a0 * (1 + sum a_n cos(n w t) + b_n sin(n w t))`: inside theta
+The command is `u(t) = a0 * (1 + sum a_n cos(n w t) + b_n sin(n w t))` on the crank-locked
+clock `w = omega*exp(f_log + a0_log)`, which `theta_best.json` and `control.tg` record: inside theta
 a_n/b_n are modulation DEPTHS; `theta_best.json` stores them ABSOLUTE (x a0). With
 `--wavelet` the 2K coefficients are dyadic Ricker atom amplitudes instead.
 `--init-codesign` reads a genome BY POSITION as `[control][tendons 2n][motor 2]...[sp 10
@@ -151,8 +152,9 @@ worst case this way (section 12's 174.7 came from the campaign's own scripts).
 
 ## Known issues (kept as-is for now; each fix changes outputs)
 
-- The MJX rollout drives harmonics on the crank-locked clock `omega*exp(f_log + a0_log)`;
-  the CPU gate, `theta_best.json`/`control.tg` and `design_io` use `omega*exp(f_log)`.
+- MJX sizes its warmup/sample windows by the design period, not the crank-locked one
+  (step counts are static, a0_log is not), so once a0 moves its window is not whole flap
+  cycles while the CPU gate's is: at a0_log = 0.05, mean power reads 1.5% apart.
 - `--lock-wings` runs export only the `L_` tendons, and `design_io` leaves the R side at
   the unsymmetrized `.tg` values.
 - `--init-codesign` slices by position, so a `theta_full.json` from a `--tune-pitch` or
