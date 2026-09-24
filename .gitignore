@@ -22,6 +22,7 @@ opt/codesign_seeds*/
 opt/.compile.lock
 opt/gui_runs/
 _ea_genome.tg
+_recon_scene.xml
 out/
 *.log
 .claude/settings.local.json

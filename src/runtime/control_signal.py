@@ -34,15 +34,19 @@ class FourierControl:
         return 1.0 / self.fundamental_frequency_hz
 
 
+def control_file_path(tg_path: Path, morph) -> Path:
+    """The control file ``morph`` (parsed from ``tg_path``) names, resolved next to the .tg."""
+    path = Path(morph.motors.control_file)
+    return path if path.is_absolute() else tg_path.parent / path
+
+
 def load_control_for_morphology(tg_path: Path) -> FourierControl:
     morph = load_morphology(tg_path)
-    control_path = Path(morph.motors.control_file)
-    if not control_path.is_absolute():
-        control_path = tg_path.parent / control_path
-    control = load_control(control_path)
+    path = control_file_path(tg_path, morph)
+    control = load_control(path)
     if control.bird != morph.bird:
         raise ValueError(
-            f"{tg_path} is tagged bird = {morph.bird} but its control {control_path} is tagged bird = {control.bird}"
+            f"{tg_path} is tagged bird = {morph.bird} but its control {path} is tagged bird = {control.bird}"
         )
     return control
 

@@ -36,6 +36,7 @@ from codesign.cpu_check import CpuDesign, CpuResult, cpu_rollout
 from codesign.genome import Genome, wavelet_dictionary
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
+from runtime.control_signal import control_file_path, load_control_for_morphology
 
 
 def repoint_control(tg_text: str) -> str:
@@ -112,7 +113,7 @@ def write_design(out_dir: Path, design: dict, log, *, genome: Genome, control_se
         best = {"a0": float(a0), "a": [float(x) for x in a_out], "b": [float(x) for x in b_out]}
     else:
         control_text = None
-        (out_dir / "control.tg").write_text(_control_source(tg, morph).read_text())
+        (out_dir / "control.tg").write_text(control_file_path(tg, morph).read_text())
     if control_text is not None:
         (out_dir / "control.tg").write_text(control_text)
         (out_dir / "control_optimized.tg").write_text(control_text)
@@ -144,11 +145,6 @@ def write_design(out_dir: Path, design: dict, log, *, genome: Genome, control_se
         })
 
 
-def _control_source(tg: Path, morph) -> Path:
-    path = Path(morph.motors.control_file)
-    return path if path.is_absolute() else tg.parent / path
-
-
 class DesignSpec(NamedTuple):
     """A design dir rebuilt for CPU replay."""
     scene_path: Path
@@ -158,17 +154,23 @@ class DesignSpec(NamedTuple):
 
 def reconstruct_design(design_dir) -> DesignSpec:
     """Rebuild a design dir (shoulder.tg + theta_best.json, plus tendon/motor/pitch JSON
-    when present) as the CpuDesign the optimizer validated.
+    when present) as the CpuDesign the optimizer validated. A committed design (no
+    theta_best.json) runs the control.tg its shoulder.tg names.
 
     theta_best stores a/b ABSOLUTE (x a0); the CPU runner wants DEPTHS, so a0 is divided
-    back out. Writes _recon_scene.xml into ``design_dir``.
+    back out. Writes _recon_scene.xml into ``design_dir`` (gitignored).
     """
     design_dir = Path(design_dir)
     tg, scene = design_dir / "shoulder.tg", design_dir / "_recon_scene.xml"
     compile_tg(tg, scene)
-    th = json.loads((design_dir / "theta_best.json").read_text())
-    a0 = th["a0"]
-    ctrl = (a0, np.asarray(th["a"]) / a0, np.asarray(th["b"]) / a0, th["omega"])
+    theta_best = design_dir / "theta_best.json"
+    if theta_best.exists():
+        th = json.loads(theta_best.read_text())
+        a0, a, b, omega = th["a0"], th["a"], th["b"], th["omega"]
+    else:
+        c = load_control_for_morphology(tg)
+        a0, a, b, omega = c.a0, c.a, c.b, c.omega
+    ctrl = (a0, np.asarray(a) / a0, np.asarray(b) / a0, omega)
     return DesignSpec(scene, CpuDesign(ctrl, _tendon_arrays(scene, design_dir),
                                        _pitch_params(design_dir)),
                       load_morphology(tg))
