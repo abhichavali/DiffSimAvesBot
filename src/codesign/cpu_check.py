@@ -17,11 +17,8 @@ import numpy as np
 
 from codesign.genome import Genome, ricker_atoms
 from codesign.rig import INTEGRATORS
-from runtime.aero import AeroBladeRuntime
-from runtime.crank import sync_crank_disks_at_rest
 from runtime.disk_orientation import DiskOrientation
-from runtime.realtime import get_actuator_id
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
+from runtime.sim import PlateWingSim
 
 
 class CpuDesign(NamedTuple):
@@ -58,15 +55,8 @@ def cpu_rollout(scene_path, design: CpuDesign, integrator, *, periods=3.0, warmu
         stiff, lenspring = design.tendons
         model.tendon_stiffness[:] = np.asarray(stiff)
         model.tendon_lengthspring[:] = np.asarray(lenspring)
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data, phase_lag)
-    aero = AeroBladeRuntime(model, substep=aero_substep)
-    pitch = WingPitchLimiter(model, data)
-    if design.pitch is not None:
-        pitch.upstroke_pitch, pitch.downstroke_pitch, pitch.upstroke_stiffness, pitch.downstroke_stiffness = (
-            float(x) for x in design.pitch)
-    aids = [get_actuator_id(model, n) for n in ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")]
+    sim = PlateWingSim(model, phase_lag=phase_lag, aero_substep=aero_substep, pitch_params=design.pitch)
+    data, aids = sim.data, sim.crank_ids
     disk_orient = None
     if design.strokeplane is not None:  # the signal the MJX rollout applied
         sp_coef, sp_tilt0, sp_pitch0, sp_max = design.strokeplane
@@ -83,21 +73,12 @@ def cpu_rollout(scene_path, design: CpuDesign, integrator, *, periods=3.0, warmu
             disk_orient.set(
                 sp_tilt0 + sp_max * math.tanh(float(sp_coef[:5] @ basis) / sp_max),
                 sp_pitch0 + sp_max * math.tanh(float(sp_coef[5:] @ basis) / sp_max))
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
         phase = omega * data.time
         if wavelet is not None:
             mod = float(np.sum(a * ricker_atoms(phase, wl_centers, wl_sigmas, np)))
         else:
             mod = float(np.sum(a * np.cos(harm * phase) + b * np.sin(harm * phase)))
-        cmd = a0 * (1.0 + mod)
-        for aid in aids:
-            if aid >= 0:
-                data.ctrl[aid] = cmd
-        lift = sum(float(np.sum([f[2] for f in (w.cached_forces or [])])) for w in aero.wings)
-        mujoco.mj_step(model, data)
+        lift = sim.step(a0 * (1.0 + mod))
         pm = data.actuator_force[aids] * data.actuator_velocity[aids]
         return (lift, float(np.max(np.abs(data.actuator_force[aids]))),
                 float(np.sum(np.maximum(0.0, pm))))
