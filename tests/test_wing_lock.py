@@ -101,5 +101,42 @@ def test_lock_wings(tg: Path = TG):
           f"peak-torque mismatch {lock_dtau*100:.4f}%")
 
 
+def test_locked_design_dir_replays_the_gate_rig(tmp_path):
+    """A --lock-wings design dir must rebuild the tendon arrays the CPU gate ran: the
+    symmetrized base, both wings tuned (older dirs: L_ names only, mirrored on load)."""
+    import json
+
+    import jax.numpy as jnp
+
+    from codesign.artifacts import reconstruct_design, write_design
+    from codesign.cpu_check import to_cpu
+    from codesign.genome import Genome
+
+    rig = setup(TG, tmp_path / "scene.xml", lock_wings=True)
+    g = Genome(K=1, n_tend=int(np.asarray(rig.tendons[0]).shape[0]), tendons=True, motor=True)
+    theta = np.zeros(g.size, np.float32)
+    for name, v in (("stiff", 0.1), ("pre", 0.02), ("motor", 0.05)):
+        theta[g.slices()[name]] = v
+    ctrl = jnp.zeros(3, jnp.float32)
+    gate = to_cpu(g, theta, ctrl, rig, float(rig.control.omega)).tendons
+    out = tmp_path / "design"
+    write_design(out, {"theta": theta, "Lbar": 0.0, "tau": 0.0}, [], genome=g, control_seed=ctrl,
+                 rig=rig, tg=TG, morph=rig.morph)
+
+    def replay_diff():
+        got = reconstruct_design(out).design.tendons
+        return max(float(np.max(np.abs(np.asarray(a) - b) / np.maximum(np.abs(b), 1e-9)))
+                   for a, b in zip(gate, got))
+
+    assert replay_diff() < 1e-6
+    tf = json.loads((out / "theta_full.json").read_text())
+    tf.pop("lock_wings")  # the older layout
+    (out / "theta_full.json").write_text(json.dumps(tf))
+    tj = json.loads((out / "tendon_optimized.json").read_text())
+    tj["pairs"] = {k: v for k, v in tj["pairs"].items() if k.startswith("L_")}
+    (out / "tendon_optimized.json").write_text(json.dumps(tj))
+    assert replay_diff() < 1e-6
+
+
 if __name__ == "__main__":
     test_lock_wings(Path(sys.argv[1]) if len(sys.argv) > 1 else TG)

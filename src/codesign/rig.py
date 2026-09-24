@@ -46,6 +46,7 @@ class Rig(NamedTuple):
     tendons: tuple  # structural_tendon_pairs(...)
     motor_ids: jnp.ndarray
     morph: object  # the design's Morphology
+    lock_wings: bool = False  # L/R tendons symmetrized and tuned as 12 mirrored pairs
 
 
 def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator: str = "euler",
@@ -84,7 +85,7 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     tip_ids = jnp.asarray(tip_ids, dtype=jnp.int32)
     return Rig(model, mjx.put_model(model), mjx.put_data(model, data), control, drive, pitch,
                aero, tip_ids, structural_tendon_pairs(model, individual=not lock_wings),
-               motor_tendon_ids(model), morph)
+               motor_tendon_ids(model), morph, lock_wings)
 
 
 def variant(rig: Rig, integrator: str, dt: float, aero_substep: int):

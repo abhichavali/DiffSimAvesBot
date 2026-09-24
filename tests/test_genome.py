@@ -45,7 +45,7 @@ def test_initial_theta_is_seed_then_unit_factors():
 
 def test_cpu_decode_rides_the_crank_locked_clock():
     """to_cpu's harmonic clock is the MJX rollout's omega*exp(f_log + a0_log)."""
-    rig = SimpleNamespace(drive=SimpleNamespace(a0=65.0), tendons=(None, None, [], []))
+    rig = SimpleNamespace(drive=SimpleNamespace(a0=65.0), tendons=(None, None, [], []), lock_wings=False)
     genome = Genome(K=1, n_tend=0, control=True, frequency=True)
     design = to_cpu(genome, np.array([0.1, 0.0, 0.0, 0.2]), None, rig, 65.0)
     assert design.ctrl[0] == pytest.approx(65.0 * math.exp(0.1))

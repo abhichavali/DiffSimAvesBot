@@ -5,10 +5,12 @@ A design dir (a run's --out, and each checkpoints/itNNN, stage_*, cpu_best, robu
 
   shoulder.tg                  the source .tg with `control =` repointed at control.tg
   control.tg                   the optimized control (control_optimized.tg: same text)
-  theta_full.json              {"theta": the raw packed theta} -- an --init-codesign seed
+  theta_full.json              {"theta": the raw packed theta, "lock_wings"} -- an
+                               --init-codesign seed
   theta_best.json              a0 and a/b ABSOLUTE (x a0), omega, frequency_hz, ...
   tendon_optimized.json        per structural tendon: absolute stiffness + factors, keyed
-                               by FULL tendon name (only L_ names under --lock-wings)
+                               by FULL tendon name (a --lock-wings dir written before
+                               lock_wings was recorded holds only the L_ names)
   motor_tendon_optimized.json  the shared motor-tendon stiffness + pretension factor
   pitch_optimized.json         the 4 wing-pitch deadband/stiffness values
   strokeplane_optimized.json   the learned crank-disk mount signal
@@ -34,6 +36,7 @@ import numpy as np
 
 from codesign.cpu_check import CpuDesign, CpuResult, cpu_rollout
 from codesign.genome import Genome, wavelet_dictionary
+from codesign.rig import symmetrize_wings
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import control_file_path, load_control_for_morphology
@@ -55,19 +58,19 @@ def fourier_control_tg(bird, K, freq_hz, a0, a, b, motor_dir=1.0) -> str:
 
 
 def tendon_pairs_json(model, tendons, stiff_log, pre_log) -> dict:
-    """tendon_optimized.json "pairs": full tendon name -> absolute stiffness and factors."""
-    l_ids, base_stiff, base_lenspring = (np.asarray(tendons[0]), np.asarray(tendons[2]),
-                                         np.asarray(tendons[3]))
-    names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, int(k)) for k in l_ids]
-    return {
-        names[k]: {
-            "stiffness": float(base_stiff[l_ids[k]] * math.exp(stiff_log[k])),
-            "stiffness_factor": float(math.exp(stiff_log[k])),
-            "pretension_factor": float(math.exp(pre_log[k])),
-            "rest_length": float(base_lenspring[l_ids[k]][0] * math.exp(pre_log[k])),
-        }
-        for k in range(len(l_ids))
-    }
+    """tendon_optimized.json "pairs": full tendon name -> absolute stiffness and factors,
+    for every tuned tendon (both wings under --lock-wings, where gene k drives a pair)."""
+    base_stiff, base_lenspring = np.asarray(tendons[2]), np.asarray(tendons[3])
+    pairs = {}
+    for ids in (np.asarray(tendons[0]), np.asarray(tendons[1])):  # the same ids twice unless locked
+        for k, i in enumerate(ids):
+            pairs[mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, int(i))] = {
+                "stiffness": float(base_stiff[i] * math.exp(stiff_log[k])),
+                "stiffness_factor": float(math.exp(stiff_log[k])),
+                "pretension_factor": float(math.exp(pre_log[k])),
+                "rest_length": float(base_lenspring[i][0] * math.exp(pre_log[k])),
+            }
+    return pairs
 
 
 def motor_json(tendons, motor_ids, motor_log) -> dict:
@@ -88,7 +91,8 @@ def write_design(out_dir: Path, design: dict, log, *, genome: Genome, control_se
     out_dir.mkdir(parents=True, exist_ok=True)
     theta = np.asarray(design["theta"])
     write_json(out_dir / "log.json", log)
-    (out_dir / "theta_full.json").write_text(json.dumps({"theta": [float(x) for x in theta]}))
+    (out_dir / "theta_full.json").write_text(json.dumps({"theta": [float(x) for x in theta],
+                                                         "lock_wings": rig.lock_wings}))
     (out_dir / "shoulder.tg").write_text(repoint_control(tg.read_text()))
     g = genome.split(theta, np.asarray(control_seed))
     K, ctrl = genome.K, g.control
@@ -188,27 +192,37 @@ def validate(design_dir, integrators=("euler", "implicitfast"), *, timestep_ms=0
 
 
 def _tendon_arrays(scene: Path, design_dir: Path):
-    """Full (stiffness, lengthspring) arrays = compiled model + JSON overrides, or None
-    when the design has no tendon tuning."""
-    tj = design_dir / "tendon_optimized.json"
-    if not tj.exists():
+    """Full (stiffness, lengthspring) arrays = compiled model (symmetrized under
+    --lock-wings, as the run's rig was) + JSON overrides, or None when the design has
+    neither tendon tuning nor locked wings."""
+    tj, mj = design_dir / "tendon_optimized.json", design_dir / "motor_tendon_optimized.json"
+    pairs = json.loads(tj.read_text())["pairs"] if tj.exists() else {}
+    tf = design_dir / "theta_full.json"
+    locked = json.loads(tf.read_text()).get("lock_wings") if tf.exists() else None
+    if locked is None:  # written before lock_wings was recorded: a locked run exported only L_
+        locked = bool(pairs) and all(n.startswith("L_") for n in pairs)
+    if not (pairs or mj.exists() or locked):
         return None
     model = mujoco.MjModel.from_xml_path(str(scene))
+    if locked:
+        symmetrize_wings(model)
     stiff = np.array(model.tendon_stiffness, dtype=float)
-    lenspring = np.array(model.tendon_lengthspring, dtype=float)  # (ntendon, 2)
+    base_len = np.array(model.tendon_lengthspring, dtype=float)  # (ntendon, 2)
+    lenspring = base_len.copy()
     name2id = {mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TENDON, i): i
                for i in range(model.ntendon)}
-    for name, p in json.loads(tj.read_text())["pairs"].items():
-        i = name2id[name]                          # KeyError => json stale vs scene
-        stiff[i] = p["stiffness"]                  # absolute N/m
-        lenspring[i, :] *= p["pretension_factor"]  # scale BOTH range cols, like the MJX rollout
-    mj = design_dir / "motor_tendon_optimized.json"
+    for name, p in pairs.items():
+        # a locked gene drives the L/R pair: mirror L-only (older) entries onto R
+        for n in {name, "R_" + name[2:]} if locked and name.startswith("L_") else {name}:
+            i = name2id[n]                                # KeyError => json stale vs scene
+            stiff[i] = p["stiffness"]                     # absolute N/m
+            lenspring[i] = base_len[i] * p["pretension_factor"]  # BOTH range cols, like MJX
     if mj.exists():
         m = json.loads(mj.read_text())
         for name, i in name2id.items():
             if name and "motor" in name:
                 stiff[i] = m["stiffness"]
-                lenspring[i, :] *= m["pretension_factor"]
+                lenspring[i] = base_len[i] * m["pretension_factor"]
     return stiff, lenspring
 
 

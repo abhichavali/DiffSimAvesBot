@@ -94,7 +94,7 @@ def to_cpu(genome: Genome, theta, control_seed, rig, omega, strokeplane=None) ->
     a_dep, b_dep = (ctrl[1:], ctrl[:0]) if genome.wavelet else (ctrl[1 : 1 + K], ctrl[1 + K :])
     base_stiff, base_lenspring = np.asarray(rig.tendons[2]), np.asarray(rig.tendons[3])
     tendons = pitch = sp = None
-    if g.stiff is not None or g.motor is not None:
+    if g.stiff is not None or g.motor is not None or rig.lock_wings:  # locked: the symmetrized base
         bs, bl = base_stiff.copy(), base_lenspring.copy()
         if g.stiff is not None:
             li, ri = np.asarray(rig.tendons[0]), np.asarray(rig.tendons[1])
