@@ -39,11 +39,12 @@ def measure_motor_tendon_ranges(xml: str, morph: Morphology) -> Dict[str, MotorT
     # Each motor tendon runs from the strut to its own disk's pin, so all the
     # disks can turn together without changing each other's tendon lengths.
     feet = [(side, foot) for side in ("L", "R") for foot in morph.motors.feet]
-    qadr = [model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_t{foot.station}_disk_hinge")]
+    jids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_t{foot.station}_disk_hinge")
             for side, foot in feet]
     tids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, f"{side}_motor_t{foot.station}")
             for side, foot in feet]
-    assert min(tids) >= 0, "motor tendon missing from the probe scene"
+    assert min(jids + tids) >= 0, "disk hinge or motor tendon missing from the probe scene"
+    qadr = [model.jnt_qposadr[jid] for jid in jids]
     mujoco.mj_forward(model, data)
     rest = data.ten_length[tids]
     samples = []
