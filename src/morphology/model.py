@@ -3,8 +3,7 @@
 Plain data with SI units (angles in radians unless a field says _deg), plus the
 bird tags that keep plate-wing and bone-wing tools apart. tg_parser builds it;
 the compiler and the runtime read it. A key missing from a .tg takes the
-default here (tg_parser marks the few exceptions). Parsed but read by no code:
-StrutInstance (the `strut F/M` planes) and DiskSpec.outboard.
+default here (tg_parser marks the few exceptions).
 """
 
 from __future__ import annotations
@@ -25,11 +24,6 @@ def require_bird(morph: "Morphology", bird: str, *, tool: str) -> None:
     """Refuse a design the tool was not written for; the .tg's `bird` tag decides."""
     if morph.bird != bird:
         raise ValueError(f"{tool} drives {bird} designs, but {morph.name} is tagged bird = {morph.bird or '(none)'}")
-
-
-class StrutRole(str, Enum):
-    FIXED = "FIXED"
-    MOBILE = "MOBILE"
 
 
 class ArcPlane(str, Enum):
@@ -57,12 +51,6 @@ class StrutArc:
     width: float  # A↔B face gap (m)
     arc_rod: RodSpec
     rung_rod: RodSpec
-
-
-@dataclass
-class StrutInstance:
-    role: StrutRole
-    plane: ArcPlane
 
 
 @dataclass
@@ -131,7 +119,6 @@ class DiskSpec:
     kv: float = 0.25
     ctrlrange: Tuple[float, float] = (-10.0, 10.0)
     solreflimit: Tuple[float, float] = (0.02857142857142857, 1.0)
-    outboard: float = 0.01875  # rim offset from disk center (m)
     # Crank THROW (m) = radius of the tendon pin from the hinge axis. Defaults to
     # the disk radius (pin on the rim). Setting it LARGER than `radius` mounts the
     # pin on a rigid crank ARM extending past the disk, so throw (the dominant
@@ -412,12 +399,6 @@ class Morphology:
     bird: str = ""  # one of BIRDS; required in every .tg
     world: World = field(default_factory=World)
     arc: StrutArc = field(default_factory=StrutArc)
-    mobile: StrutInstance = field(
-        default_factory=lambda: StrutInstance(role=StrutRole.MOBILE, plane=ArcPlane.XZ)
-    )
-    fixed: StrutInstance = field(
-        default_factory=lambda: StrutInstance(role=StrutRole.FIXED, plane=ArcPlane.YZ)
-    )
     arrange: Arrange = field(default_factory=Arrange)
     placement: Placement = field(default_factory=Placement)
     tendons: TendonNet = field(default_factory=TendonNet)

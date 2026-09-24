@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from morphology.model import (
-    ArcPlane,
     Arrange,
     DiskSpec,
     Face,
@@ -34,8 +33,6 @@ from morphology.model import (
     Placement,
     RodSpec,
     StrutArc,
-    StrutInstance,
-    StrutRole,
     TendonDefaults,
     TendonGenerator,
     TendonMaterial,
@@ -188,7 +185,6 @@ class _TgParser:
         self.bird = ""
         self.world: Dict[str, Any] = {}
         self.archetype: Dict[str, Any] = {}
-        self.struts: Dict[str, Dict[str, Any]] = {}
         self.arrange: Dict[str, Any] = {}
         self.placement: Dict[str, Any] = {}
         self.tendon_defaults: Dict[str, Any] = {}
@@ -218,8 +214,8 @@ class _TgParser:
                 self._assignments(self.world)
             elif line.startswith("archetype strut "):
                 self._assignments(self.archetype)
-            elif line.startswith("strut "):
-                self._strut_line(line)
+            elif line.startswith("strut "):  # `strut F = C { role: fixed, plane: YZ }`: informational
+                continue
             elif line.startswith("arrange "):
                 self._assignments(self.arrange)
             elif line == "placement:":
@@ -258,13 +254,6 @@ class _TgParser:
                 m = _ASSIGN_RE.match(line)
                 if m:
                     target[m.group(1)] = _parse_scalar(m.group(2))
-
-    def _strut_line(self, line: str) -> None:
-        # strut F = C { role: fixed, plane: YZ }
-        m = re.match(r"strut\s+(\w+)\s*=\s*(\w+)\s*\{([^}]*)\}", line, re.I)
-        if not m:
-            raise ValueError(f"Invalid strut line: {line}")
-        self.struts[m.group(1).upper()] = _parse_brace_dict("{" + m.group(3) + "}")
 
     def _tendons(self) -> None:
         in_overrides = False
@@ -397,8 +386,6 @@ class _TgParser:
                 arc_rod=RodSpec(radius=float(arc_rod["radius"]), mass=float(arc_rod["mass"])),
                 rung_rod=RodSpec(radius=float(rung_rod["radius"]), mass=float(rung_rod["mass"])),
             ),
-            mobile=StrutInstance(StrutRole.MOBILE, ArcPlane(str(self.struts.get("M", {}).get("plane", "XZ")).upper())),
-            fixed=StrutInstance(StrutRole.FIXED, ArcPlane(str(self.struts.get("F", {}).get("plane", "YZ")).upper())),
             arrange=Arrange(
                 gap=float(self.arrange["gap"]),
                 angle_deg=angle_deg,
@@ -425,7 +412,7 @@ class _TgParser:
                     solreflimit=tuple(float(x) for x in disk.get("solref", DiskSpec.solreflimit)),
                     crank_throw=float(disk["crank_throw"]) if "crank_throw" in disk else None,
                     crank_phase_rad=float(disk.get("crank_phase", DiskSpec.crank_phase_rad)),
-                    **_floats(disk, DiskSpec, "radius kv outboard foot_outset disk_dx disk_dy"),
+                    **_floats(disk, DiskSpec, "radius kv foot_outset disk_dx disk_dy"),
                 ),
                 feet=tuple(
                     MotorFoot(
