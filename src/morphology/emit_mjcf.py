@@ -28,7 +28,7 @@ from morphology.mjcf_parts import (
 )
 from morphology.motor_tendons import MotorTendonRange
 from morphology.tendon_net import anchor_node_name, resolve_material_props
-from morphology.wing_geometry import load_wing_geometry_from_stl, wing_mesh_path
+from morphology.wing_geometry import load_wing_geometry, wing_mesh_pose
 
 MATPLOTLIB_BLUE_RGBA = "0.12156862745098039 0.4666666666666667 0.7058823529411765 1"
 MATPLOTLIB_ORANGE_RGBA = "1.0 0.4980392156862745 0.054901960784313725 1"
@@ -170,15 +170,10 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> None:
     arm = morph.wing.mount_arm * scale
     pitch = morph.wing.pitch
     prefix = shoulder.side
-    mount_z = rod + 0.000096
-    # The pitch-mount arms (T-pose) hook the wing at (±arm, mount_z). World-up is
-    # the body y-axis here (verified numerically: world-up = ∓y), i.e. along the
-    # arm reach — so a pure VERTICAL displacement of the wing is an offset in y,
-    # not z. Pushing the mesh out past the hub (|y| = arm + drop) lowers the wing
-    # in world so the hook rides higher up the wing (toward the top); the arms and
-    # hub stay fixed. Absolute metres (the STL is not world-scaled).
-    wing_attach_drop = 0.035  # +down in world; flip sign to raise the wing
-    mesh_y = (1.0 if prefix == "L" else -1.0) * (arm + wing_attach_drop)
+    # The pitch-mount arms (T-pose) hook the wing at (±arm, mount_z); the mesh pose
+    # (and so the aero strips measured from it) is wing_geometry's.
+    mesh_pos, mesh_quat = wing_mesh_pose(morph, prefix)
+    mount_z = mesh_pos[2]
 
     wing = ET.SubElement(
         parent,
@@ -271,13 +266,12 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> None:
         conaffinity="0",
         group="2",
     )
-    wing_quat = "0.5 -0.5 -0.5 -0.5" if prefix == "L" else "0.5 0.5 -0.5 0.5"
     mesh_attrs = {
         "type": "mesh",
         "mesh": "wing",
         "material": "wing_material",
-        "pos": f"0 {mesh_y} {mount_z}",
-        "quat": wing_quat,
+        "pos": " ".join(str(x) for x in mesh_pos),
+        "quat": " ".join(str(x) for x in mesh_quat),
         # Explicit mass: without it the STL takes MuJoCo's default density
         # (1000 kg/m^3 -> ~17.7 g) and the wing is ~140x over its real
         # 0.13-0.14 g, burying aero pitch torques under inertia.
@@ -288,15 +282,14 @@ def _emit_wing(parent: ET.Element, shoulder: CompiledShoulder, morph) -> None:
     # path (and gives the worst contact gradients for autodiff).
     ET.SubElement(wing, "geom", **{**mesh_attrs, "class": "visual", "group": "2"})
 
-    # Blade strip sites sit on the span (= hinge) axis at the exact radii the
-    # blade-element model assumes for its levers: (i+0.5)/N * STL span,
-    # measured from the root site, unscaled (the mesh is not world-scaled).
+    # Blade strip sites sit on the span (= hinge) axis at the strip centres the
+    # blade-element model uses for its levers: the mesh root plus (i+0.5)/N of the
+    # mesh span, measured from the root site (on the hinge), unscaled.
     num_blades = morph.wing.aero.blades
-    mesh_path = wing_mesh_path(morph.wing.mesh_file, morph.world.meshdir)
-    wing_length = load_wing_geometry_from_stl(mesh_path, num_blades).length
-    blade_span = wing_length / num_blades
+    geometry = load_wing_geometry(morph)
+    blade_span = geometry.length / num_blades
     for blade_index in range(num_blades):
-        pos_z = (blade_index + 0.5) * blade_span
+        pos_z = geometry.root_offset + (blade_index + 0.5) * blade_span
         t = 0.5 if num_blades == 1 else blade_index / (num_blades - 1)
         red = 1.0 - t
         green = 0.25 + 0.5 * (1.0 - abs(2.0 * t - 1.0))

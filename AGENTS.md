@@ -61,7 +61,8 @@ The pipeline is **`designs/<bird>/<name>/{shoulder,control}.tg` → parser → c
   (`.tg` → the `Morphology` dataclasses of `model.py`), `geometry.py` / `tendon_net.py`
   (strut poses, the 12 σ tendons) → `compile.py` (→ `compiled.py`), `motor_tendons.py`
   (crank tendon ranges, measured on a probe scene), `emit_mjcf.py` / `emit_eagle.py` /
-  `mjcf_parts.py` (the XML), `wing_geometry.py` (wing planform from the STL)
+  `mjcf_parts.py` (the XML), `wing_geometry.py` (the wing mesh's pose, and the aero
+  strips measured from the posed mesh)
 - `src/compile_tg.py` — compile CLI (`compile_tg(tg, out)` is what every tool calls)
 - `src/runtime/` — CPU simulation runtime: `sim.py` (`PlateWingSim` / `rest_state`, the
   plate-wing step every CPU loop uses, and the canonical force order), `aero.py`

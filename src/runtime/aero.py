@@ -53,7 +53,7 @@ class AeroParams(NamedTuple):
     Canonical fruit-fly fit; well-behaved at the endpoints but NOT fitted to this
     robot's wing/Reynolds number -- re-fit before trusting magnitudes. The rest are
     the rotational-drag (Crd), added-mass (Cadd2), rotational-circulation (c4) and
-    CoP (ct1, ct2) constants; x_rot is the rotation axis (0 = leading edge).
+    CoP (ct1, ct2) constants.
     """
 
     a: float = 1.92
@@ -69,7 +69,6 @@ class AeroParams(NamedTuple):
     c4: float = 1.0
     ct1: float = 0.82
     ct2: float = 0.05
-    x_rot: float = 0.0
 
 
 AERO_PARAMS = AeroParams()
@@ -89,17 +88,20 @@ _SIDE_SIGNS = {
 
 def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
                  i, dt, Rw, NumBlade, rho, chord, span_cutoffs=None,
-                 vel_h_prev=None, return_cop=False):
+                 vel_h_prev=None, return_cop=False, *, x_rot, root):
     """Blade-strip force + pitching moment in the root-site frame, for one wing.
 
     ``side`` is "L" or "R"; the two wings differ only by the mirror sign set above.
+    The strip is centred ``root + i * Rw`` out along the hinge (the root site's -y)
+    and the hinge sits ``x_rot`` chords behind its leading edge: the wing mesh's
+    ``WingGeometry.root_offset`` / ``.x_rot`` (morphology.wing_geometry).
     """
     try:
         sFik, sLift, sRot, sAddo, sAdd2, sCof = _SIDE_SIGNS[side]
     except KeyError:
         raise ValueError(f"side must be 'L' or 'R', got {side!r}")
 
-    a, b, c, d, e, f, g, h, Crd, Cadd2, c4, ct1, ct2, x_rot = AERO_PARAMS
+    a, b, c, d, e, f, g, h, Crd, Cadd2, c4, ct1, ct2 = AERO_PARAMS
     r_cof_rot = 0 * chord
     r_cof_add = 0 * chord
 
@@ -124,7 +126,7 @@ def aerodynamics(side, omega_w, omega_b, vel_h, omega_w_d,
     # Blade-element analysis
     # --------------------------------------------------------
 
-    rle = -i * Rw
+    rle = -(root + i * Rw)
     strip = (0.0, rle, 0.0)
 
     vle = _cross(omega_w + omega_b, strip) + vel_h
@@ -392,6 +394,8 @@ class AeroBladeRuntime:
                 chord,
                 self.geometry.span_cutoffs,
                 vel_h_prev=velocity_local_prev,
+                x_rot=float(self.geometry.x_rot[blade_index]),
+                root=self.geometry.root_offset,
             )
 
             # force_local / torque_local are in the root-site frame; rotate both

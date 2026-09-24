@@ -53,7 +53,8 @@ def test_phases_hold_the_designed_lag_and_the_pulse_reaches_the_wing(tmp_path):
     assert np.isfinite(w["aoa:L"]).mean() > 0.8  # AoA is undefined only around stroke reversal
     assert 0.0 <= np.nanmax(w["aoa:L"]) <= 90.0
 
-    before = {name: sim.relative_deg(name) for name in sim.motors}
+    sim.advance(4.0 * sim.period)  # let the ramp-up transient die out before the reference cycle
+    before ={name: sim.relative_deg(name) for name in sim.motors}
     torque, duration = 100.0, 20.0
     assert sim.inject(torque, duration, ["L_motor_t1", "bogus"]) == ("L_motor_t1",)
     assert sim.reference is not None and abs(sim.reference["period"] - sim.period) < 0.05 * sim.period

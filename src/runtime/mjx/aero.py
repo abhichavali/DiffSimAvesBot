@@ -16,7 +16,7 @@ Two design choices serve the autodiff goal:
 
 Left vs right wings differ only by the CPU model's ``_SIDE_SIGNS`` mirror flips;
 ``side`` ("L"/"R") selects them at trace time. The geometry inputs
-(``length``/``chords``/``span_cutoffs``) come from the host-side
+(``length``/``root``/``chords``/``x_rot``/``span_cutoffs``) come from the host-side
 ``wing_geometry`` STL parse and are passed in as constants.
 """
 
@@ -62,11 +62,13 @@ def aero_strip(
     vel_h_prev: jax.Array,
     span_fraction: jax.Array,
     chord: jax.Array,
+    x_rot: jax.Array,
     *,
     side: str,
     span_cutoffs: jax.Array,
     params: AeroParams,
     length: float,
+    root: float,
     num_blade: int,
     rho: float = RHO_AIR,
     dt: float,
@@ -75,13 +77,14 @@ def aero_strip(
 
     All vector inputs are length-3 in the root-site frame. ``span_fraction`` is
     the strip's fractional span position (``i`` in the numpy model), ``chord`` its
-    chord. ``dt`` is the finite-difference window (timestep * substep) used for
-    the added-mass acceleration term. Returns ``(force[3], torque[3], alpha,
-    norm_v)``: the last two are the folded angle of attack and the strip speed.
+    chord, ``x_rot`` the hinge's distance behind its leading edge in chords and
+    ``root`` the hinge-to-wing-root distance. ``dt`` is the finite-difference
+    window (timestep * substep) used for the added-mass acceleration term. Returns
+    ``(force[3], torque[3], alpha, norm_v)``: the last two are the folded angle of
+    attack and the strip speed.
     """
     p = params
     sFik, sLift, sRot, sAddo, sAdd2, sCof = _SIDE_SIGNS[side]
-    x_rot = p.x_rot
     Rw = length
     # Active numpy code zeroes both CoP offsets regardless of x_rot.
     r_cof_rot = 0.0
@@ -98,8 +101,8 @@ def aero_strip(
     Fik_lt = sFik * jnp.sum(base * local * jnp.abs(local) * chord / num_blade)
     Tik_lt = -jnp.sum(base * (local**2) * jnp.abs(local) * chord / num_blade)
 
-    # --- Blade-element velocity at the strip leading edge ---
-    rle = -span_fraction * Rw
+    # --- Blade-element velocity at the strip's hinge point ---
+    rle = -(root + span_fraction * Rw)
     lever = jnp.stack([jnp.zeros_like(rle), rle, jnp.zeros_like(rle)])
     vle = jnp.cross(omega_w + omega_b, lever) + vel_h
     vle = vle.at[1].set(0.0)
@@ -190,9 +193,11 @@ def aero_wing(
     *,
     side: str,
     chords: jax.Array,
+    x_rot: jax.Array,
     span_cutoffs: jax.Array,
     params: AeroParams = AeroParams(),
     length: float,
+    root: float,
     num_blade: int,
     rho: float = RHO_AIR,
     dt: float,
@@ -205,7 +210,7 @@ def aero_wing(
     """
     span_fracs = (jnp.arange(num_blade, dtype=chords.dtype) + 0.5) / num_blade
 
-    def strip(span_fraction, chord):
+    def strip(span_fraction, chord, x_rot_j):
         return aero_strip(
             omega_w,
             omega_b,
@@ -214,13 +219,15 @@ def aero_wing(
             vel_h_prev,
             span_fraction,
             chord,
+            x_rot_j,
             side=side,
             span_cutoffs=span_cutoffs,
             params=params,
             length=length,
+            root=root,
             num_blade=num_blade,
             rho=rho,
             dt=dt,
         )
 
-    return jax.vmap(strip)(span_fracs, chords)
+    return jax.vmap(strip)(span_fracs, chords, x_rot)

@@ -1,32 +1,37 @@
 """Flat-plate symmetry of the strip aero, CPU and MJX: a symmetric plate does not care
 which edge leads, so mirroring the chordwise flow (vz -> -vz) mirrors the force, moves
 the CoP to its mirror point about mid-chord, and moves the rotational lift's 3/4-chord
-point from 0.75 to 0.25 chord behind the hinge."""
+point to 1/4 chord from the leading edge. The strip geometry is the compiled wing mesh's."""
 
 import jax.numpy as jnp
+import mujoco
 import numpy as np
 import pytest
 
+from morphology.compile import ROOT, compile_file
+from morphology.tg_parser import load_morphology
+from morphology.wing_geometry import _section_values, load_wing_geometry
 from runtime.aero import RHO_AIR, aerodynamics
 from runtime.mjx.aero import aero_wing
 
 CHORD, LENGTH, DT = 0.05, 0.2, 5e-4
+X_ROT, ROOT_OFFSET = 0.2, 0.007  # hinge 0.2 chord behind the leading edge; wing starts 7 mm out
 MIRROR = np.array([1.0, 1.0, -1.0])
 # A zero span cutoff switches the rotational drag off, so the pitch rate only adds the
 # rotational lift. The strip velocity is v either way (omega_y x the spanwise lever = 0).
 
 
-def cpu_strip(side, v, omega_y=0.0):
+def cpu_strip(side, v, omega=(0.0, 0.0, 0.0)):
     zero = np.zeros(3)
-    return aerodynamics(side, np.array([0.0, omega_y, 0.0]), zero, v, zero, 0.5, DT, LENGTH, 1,
-                        RHO_AIR, CHORD, np.zeros(1))
+    return aerodynamics(side, np.array(omega), zero, v, zero, 0.5, DT, LENGTH, 1,
+                        RHO_AIR, CHORD, np.zeros(1), x_rot=X_ROT, root=ROOT_OFFSET)
 
 
-def mjx_strip(side, v, omega_y=0.0):
+def mjx_strip(side, v, omega=(0.0, 0.0, 0.0)):
     zero, v = jnp.zeros(3), jnp.asarray(v)
-    f, t = aero_wing(jnp.array([0.0, omega_y, 0.0]), zero, v, zero, v, side=side,
-                     chords=jnp.array([CHORD]), span_cutoffs=jnp.zeros(1), length=LENGTH,
-                     num_blade=1, dt=DT)[:2]
+    f, t = aero_wing(jnp.array(omega), zero, v, zero, v, side=side,
+                     chords=jnp.array([CHORD]), x_rot=jnp.array([X_ROT]), span_cutoffs=jnp.zeros(1),
+                     length=LENGTH, root=ROOT_OFFSET, num_blade=1, dt=DT)[:2]
     return np.asarray(f[0], dtype=float), np.asarray(t[0], dtype=float)
 
 
@@ -36,14 +41,44 @@ def mjx_strip(side, v, omega_y=0.0):
 def test_reversed_chordwise_flow_mirrors_the_plate(side, alpha_deg, vx_sign):
     a = np.radians(alpha_deg)
     v = 3.0 * np.array([vx_sign * np.sin(a), 0.0, np.cos(a)])  # vz > 0: the far edge leads on L
+    pitch = (0.0, 5.0, 0.0)
     for strip in (cpu_strip, mjx_strip):
         (fa, ta), (fb, tb) = strip(side, v), strip(side, MIRROR * v)
         np.testing.assert_allclose(fb, MIRROR * fa, rtol=1e-5, atol=1e-9)
-        # tau_y = z_cop * F_x; the plate spans z in [0, chord] on L and [-chord, 0] on R.
-        assert ta[1] / fa[0] + tb[1] / fb[0] == pytest.approx(CHORD if side == "L" else -CHORD, rel=1e-4)
-        rot_a = strip(side, v, 5.0)[0][0] - fa[0]
-        rot_b = strip(side, MIRROR * v, 5.0)[0][0] - fb[0]
+        # tau_y = z_cop * F_x; the plate spans z in [-X_ROT, 1 - X_ROT] chords on L, mirrored on R.
+        mid = (1.0 - 2.0 * X_ROT) * CHORD
+        assert ta[1] / fa[0] + tb[1] / fb[0] == pytest.approx(mid if side == "L" else -mid, rel=1e-4)
+        rot_a = strip(side, v, pitch)[0][0] - fa[0]
+        rot_b = strip(side, MIRROR * v, pitch)[0][0] - fb[0]
         hinge, far = (rot_b, rot_a) if side == "L" else (rot_a, rot_b)
-        assert hinge == pytest.approx(3.0 * far, rel=1e-4)
-    for x, y in zip(mjx_strip(side, v, 5.0), cpu_strip(side, v, 5.0)):
-        np.testing.assert_allclose(x, y, rtol=1e-5, atol=1e-9)
+        assert hinge == pytest.approx((0.75 - X_ROT) / (0.25 - X_ROT) * far, rel=1e-4)
+    # A general rotation puts the root offset in the strip velocity too.
+    for omega in (pitch, (4.0, 5.0, -3.0)):
+        for x, y in zip(mjx_strip(side, v, omega), cpu_strip(side, v, omega)):
+            np.testing.assert_allclose(x, y, rtol=1e-5, atol=1e-9)
+
+
+def test_aero_strips_sit_on_the_compiled_wing_mesh():
+    """Blade sites, chords and hinge offsets match MuJoCo's own posed wing mesh."""
+    tg = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"
+    g = load_wing_geometry(load_morphology(tg))
+    model = mujoco.MjModel.from_xml_string(compile_file(tg))
+    n = len(g.chords)
+    for side, chordwise in (("L", 1.0), ("R", -1.0)):  # hinge-side edge -> far edge is +y on L, -y on R
+        body = model.body(f"{side}_wing").id
+        gid = next(i for i in range(model.ngeom)
+                   if model.geom_bodyid[i] == body and model.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH)
+        mesh = model.geom_dataid[gid]
+        rot = np.zeros(9)
+        mujoco.mju_quat2Mat(rot, model.geom_quat[gid])
+        va, fa = model.mesh_vertadr[mesh], model.mesh_faceadr[mesh]
+        verts = model.mesh_vert[va:va + model.mesh_vertnum[mesh]] @ rot.reshape(3, 3).T + model.geom_pos[gid]
+        tris = verts[model.mesh_face[fa:fa + model.mesh_facenum[mesh]]]
+        assert verts[:, 2].min() == pytest.approx(g.root_offset, abs=1e-6)
+        assert verts[:, 2].max() == pytest.approx(g.root_offset + g.length, abs=1e-6)
+        for j in range(n):
+            z = model.site(f"{side}_wing_aero_blade_{j + 1:02d}").pos[2]
+            assert z == pytest.approx(g.root_offset + (j + 0.5) * g.length / n, abs=1e-9)
+            s = chordwise * _section_values(tris, 2, z, 1)
+            assert s.max() - s.min() == pytest.approx(g.chords[j], abs=1e-6)
+            assert s.min() == pytest.approx(-g.x_rot[j] * g.chords[j], abs=1e-6)

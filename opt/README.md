@@ -147,19 +147,20 @@ uv run python opt/design_io.py opt/runs/cpu_best --integrator euler implicitfast
 
 `design_io.py` also replays a committed design dir on its own `control.tg`; with
 `--periods 24` it runs the certification doctrine of `docs/ROBUST_CODESIGN_METHODOLOGY.md`
-section 12 (see its docstring). The seed `designs/hummer/hover` certifies at 188.2 mNm
-worst case this way, at 270 mN lift (section 12's 174.7 mNm / 358-364 mN came from the
-campaign's own scripts, on the aero that assumed the hinge edge always leads).
+section 12 (see its docstring). The seed `designs/hummer/hover` certifies at 195.0 mNm
+worst case this way, at 185 mN lift (section 12's 174.7 mNm / 358-364 mN came from the
+campaign's own scripts, on an aero that assumed the hinge edge always leads and put the
+hinge on the leading edge of a wing starting at the hinge, not on the drawn wing).
 
 ## Known issues (kept as-is for now; each fix changes outputs)
 
 - `--lift-floor` (and `run_gui`'s `lift_floor`) default to 300 mN, picked when the aero
-  assumed the hinge edge always leads. The seed now makes 270 mN, so the floor binds from
-  the first step; pick a new one before the next run.
+  assumed the hinge edge always leads and sat on the leading edge. The seed now makes
+  185 mN, so the floor binds from the first step; pick a new one before the next run.
 - Between aero recomputes (substep 4) the CPU re-applies the held world wrench through
-  the current Jacobian, MJX holds the generalized force. Now that the aero follows the
-  leading edge this reads ~0.9% lift / 0.7% peak apart on the seed plus two small
-  harmonics at dt 0.13 ms (0.02% / 0.3% at substep 1; 0.05% / 0.4% before).
+  the current Jacobian, MJX holds the generalized force. With the aero on the mesh this
+  reads ~2.9% lift / 0.8% peak apart on the seed plus two small harmonics at dt 0.13 ms
+  (float64 MJX; 0.09% / 0.01% at substep 1, where float32 alone reads 0.3% / 0.9%).
 - MJX sizes its warmup/sample windows by the design period, not the crank-locked one
   (step counts are static, a0_log is not), so once a0 moves its window is not whole flap
   cycles while the CPU gate's is: at a0_log = 0.05, mean power reads 1.5% apart.
