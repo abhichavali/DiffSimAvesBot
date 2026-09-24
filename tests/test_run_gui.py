@@ -3,9 +3,14 @@
 No Tk display needed -- the parsing and command layers are plain functions.
 Run: uv run pytest -q tests/test_run_gui.py
 """
+import queue
+import sys
+import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
-from run_gui import (ROOT, RunConfig, block_of, build_commands, gene_blocks, grouped,
+from run_gui import (ROOT, OptGui, RunConfig, block_of, build_commands, gene_blocks, grouped,
                      parse_tg)
 
 TG = ROOT / "designs" / "hummer" / "hover" / "shoulder.tg"  # the default hummer design; values below are its
@@ -200,3 +205,20 @@ def test_rejects_empty_configs():
         else:
             raise AssertionError(f"expected ValueError for {bad}")
 
+
+
+def test_stop_ends_a_diff_sim_chain(tmp_path):
+    """Stop during seed 1 must not fall through to seed 2 (SIGTERM is not a failed seed)."""
+    cfg = RunConfig(tg=TG, scene=tmp_path / "s.xml", out=tmp_path / "o", run_ga=False, top_n=2)
+    stages = [("diff-sim #1", [sys.executable, "-c", "import time; time.sleep(30)"]),
+              ("diff-sim #2", [sys.executable, "-c", "print('SEED2 RAN')"])]
+    gui = SimpleNamespace(q=queue.Queue(), proc=None, stopping=False, _write=lambda s: None)
+    worker = threading.Thread(target=OptGui._run_stages, args=(gui, cfg, stages))
+    worker.start()
+    while gui.proc is None:
+        time.sleep(0.01)
+    OptGui._stop(gui)
+    worker.join(timeout=10)
+    out = "".join(gui.q.queue)
+    assert not worker.is_alive()
+    assert "SEED2 RAN" not in out and "diff-sim #2 and the stages after it skipped" in out, out

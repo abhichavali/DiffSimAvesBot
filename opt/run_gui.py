@@ -466,6 +466,7 @@ class OptGui(ttk.Frame):
             return
         self._save()
         self.running = True
+        self.stopping = False
         threading.Thread(target=self._worker, args=(cfg, stages), daemon=True).start()
 
     def _worker(self, cfg: RunConfig, stages: list[tuple[str, list[str]]]) -> None:
@@ -477,6 +478,9 @@ class OptGui(ttk.Frame):
 
     def _run_stages(self, cfg: RunConfig, stages: list[tuple[str, list[str]]]) -> None:
         for label, argv in stages:
+            if self.stopping:
+                self.q.put(f"[stop] {label} and the stages after it skipped\n")
+                break
             if label.startswith("diff-sim") and cfg.run_ga:
                 # The GA writes seed_*/ only at the very end, so the argv built before
                 # launch points at best_genome.json. Re-derive now that the GA has run.
@@ -496,7 +500,7 @@ class OptGui(ttk.Frame):
             rc = self.proc.wait()
             self.proc = None
             self.q.put(f"=== {label} exited rc={rc}\n")
-            if rc != 0:
+            if rc != 0 and not self.stopping:
                 if not label.startswith("diff-sim"):
                     self.q.put("[stop] GA failed -- diff-sim stages skipped\n")
                     break
@@ -504,6 +508,7 @@ class OptGui(ttk.Frame):
                 self.q.put(f"[warn] {label} failed -- continuing with the next seed\n")
 
     def _stop(self) -> None:
+        self.stopping = True  # _run_stages starts no further stage
         if self.proc is None:
             self._write("[stop] nothing running")
             return
