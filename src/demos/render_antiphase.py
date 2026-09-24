@@ -29,7 +29,6 @@ import mujoco
 import numpy as np
 
 from common import (
-    ACTUATORS,
     TIP_SITES,
     WING_COLORS,
     crank_gears,
@@ -43,12 +42,9 @@ from common import (
 )
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
-from runtime.aero import AeroBladeRuntime
-from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
-from runtime.crank import sync_crank_disks_at_rest
+from runtime.control_signal import drive_command, load_control_for_morphology
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.realtime import get_actuator_id
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
+from runtime.sim import PlateWingSim
 
 # One waypoint per wingbeat. Step size is the constraint, not the list: the slew
 # happens in half a beat, so a step of d deg costs the right motors an extra
@@ -95,34 +91,21 @@ def setup(tg: Path, scene: Path, phase_deg: float, warmup_periods: float):
     compile_tg(tg, scene, color_structural_tendons=True)
 
     morph = load_morphology(tg)
-    model = mujoco.MjModel.from_xml_path(str(scene))
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
+    sim = PlateWingSim(mujoco.MjModel.from_xml_path(str(scene)), morph)
+    model, data = sim.model, sim.data
     offset_right_cranks(model, data, math.radians(phase_deg))
 
     control = load_control_for_morphology(tg)
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
-    actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]
+    right = np.array([mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)[0] == "R" for i in sim.crank_ids])
     drive_start = data.time
     ramp_seconds = warmup_periods * control.period
     per_phase_rate = ctrl_per_phase_rate(model, morph, control)
 
     def step(phase_rate: float = 0.0) -> None:
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
-        ramp = ramp_factor(data.time, drive_start, ramp_seconds)
-        base = ramp * morph.motors.motor_direction * eval_control(control, data.time)
-        extra = phase_rate * per_phase_rate
-        for name, aid in zip(ACTUATORS, actuator_ids):
-            if aid >= 0:
-                data.ctrl[aid] = base + (extra if name[0] == "R" else 0.0)
-        mujoco.mj_step(model, data)
+        base = drive_command(control, morph.motors.motor_direction, data.time, drive_start, ramp_seconds)
+        sim.step(base + np.where(right, phase_rate * per_phase_rate, 0.0))
 
-    return model, data, control, aero, step
+    return model, data, control, sim.aero, step
 
 
 def flap_trace(tg: Path, scene: Path, phase_deg: float, beats: float, warmup: float):

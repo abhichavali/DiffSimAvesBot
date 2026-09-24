@@ -32,7 +32,6 @@ import mujoco  # noqa: E402
 
 import flying  # noqa: E402
 from common import (  # noqa: E402
-    ACTUATORS,
     airframe_xml,
     attitude_pd,
     ffmpeg_pipe,
@@ -42,17 +41,14 @@ from common import (  # noqa: E402
     smoothstep,
 )
 from morphology.tg_parser import load_morphology  # noqa: E402
-from runtime.aero import AeroBladeRuntime  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
     eval_control,
     load_control_for_morphology,
     ramp_factor,
 )
-from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
 from runtime.disk_orientation import DiskOrientation  # noqa: E402
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
-from runtime.realtime import get_actuator_id  # noqa: E402
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest  # noqa: E402
+from runtime.sim import PlateWingSim  # noqa: E402
 
 # Skin materials, faded together so the whole bird materializes over the joint.
 # (torso ends translucent so the mechanism still shows through at the end).
@@ -118,14 +114,10 @@ def render(args):
     control = load_control_for_morphology(args.tg)
     sched = Schedule(args)
 
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
+    sim = PlateWingSim(model, morph)
+    data = sim.data
     lift_free_bodies(model, data, args.lift)
 
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
-    actuator_ids = [get_actuator_id(model, n) for n in ACTUATORS]
     motor_dir = morph.motors.motor_direction
     ramp_seconds = 2.0 * control.period
     drive_start = data.time
@@ -141,14 +133,8 @@ def render(args):
     dt = float(model.opt.timestep)
     x_ref = [float(data.subtree_com[airframe_bid][0])]
 
-    def force_hook():
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
+    def assist(_m, _d):
         t = data.time - drive_start
-        disk.set(0.0, sched.stroke_pitch(t))
-        aero.apply(model, data)
-        pitch.apply(model, data)
-
         # Flight assist at the airframe COM (no spurious torque): weight cancel +
         # altitude hold about a sinking setpoint, and a soft speed servo forward.
         # ponytail: this is the "artificially controlled" part -- the stroke plane
@@ -176,14 +162,14 @@ def render(args):
         tau = attitude_pd(data, airframe_bid, air_dofadr, sched.lean(t), args.level_kp, args.level_kd)
         mujoco.mj_applyFT(model, data, f, tau, com, airframe_bid, data.qfrc_applied)
 
+    def physics_step():
+        t = data.time - drive_start
+        disk.set(0.0, sched.stroke_pitch(t))
         # Drive: normal flap, then fade to zero. ctrl 0 leaves the velocity servos
         # as pure dampers, so the cranks coast to a stop and the tendon net pulls
         # the wings back out to their extended rest pose.
         env = ramp_factor(data.time, drive_start, ramp_seconds) * sched.drive(t)
-        base = env * motor_dir * eval_control(control, data.time)
-        for aid in actuator_ids:
-            if aid >= 0:
-                data.ctrl[aid] = base
+        sim.step(env * motor_dir * eval_control(control, data.time), assist)
 
     mats = {n: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, n) for n in SKIN_MATS}
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
@@ -205,8 +191,7 @@ def render(args):
           f"({steps_per_frame} steps/frame) -> {mp4}", flush=True)
     for frame in range(n_frames):
         for _ in range(steps_per_frame):
-            force_hook()
-            mujoco.mj_step(model, data)
+            physics_step()
         t = data.time - drive_start
         u = sched.skin_alpha(t)
         for name, full in SKIN_MATS.items():

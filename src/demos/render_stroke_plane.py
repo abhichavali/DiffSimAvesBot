@@ -41,7 +41,6 @@ import mujoco  # noqa: E402
 
 import flying  # noqa: E402
 from common import (  # noqa: E402
-    ACTUATORS,
     TIP_SITES,
     airframe_xml,
     attitude_pd,
@@ -54,18 +53,15 @@ from common import (  # noqa: E402
     smoothstep,
 )
 from morphology.tg_parser import load_morphology  # noqa: E402
-from runtime.aero import AeroBladeRuntime  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
     FourierControl,
     eval_control,
     load_control_for_morphology,
     ramp_factor,
 )
-from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
 from runtime.disk_orientation import DiskOrientation  # noqa: E402
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
-from runtime.realtime import get_actuator_id  # noqa: E402
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest  # noqa: E402
+from runtime.sim import PlateWingSim  # noqa: E402
 
 # (label, stroke-plane tilt deg, stroke-plane pitch deg, drive speed x)
 # Ordered so each step changes ONE thing against the one before it.
@@ -146,14 +142,10 @@ def render(args):
     control = load_control_for_morphology(args.tg)
     seq = Sequence(args)
 
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
+    sim = PlateWingSim(model, morph)
+    data = sim.data
     lift_free_bodies(model, data, args.lift)
 
-    aero = AeroBladeRuntime(model)
-    pitch_limit = WingPitchLimiter(model, data)
-    actuator_ids = [get_actuator_id(model, n) for n in ACTUATORS]
     motor_dir = morph.motors.motor_direction
     drive_start = data.time
     ramp_seconds = 2.0 * control.period
@@ -184,15 +176,7 @@ def render(args):
     trail = {s: deque(maxlen=keep) for s in TIP_SITES}
     step_n = [0]
 
-    def force_hook():
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        t = data.time - drive_start
-        tilt, sp_pitch, speed = seq.at(t)
-        disk.set(tilt, sp_pitch)
-        aero.apply(model, data)
-        pitch_limit.apply(model, data)
-
+    def assist(_m, _d):
         com = np.asarray(data.subtree_com[airframe_bid])
         vz = (float(com[2]) - prev_z[0]) / dt
         prev_z[0] = float(com[2])
@@ -201,25 +185,26 @@ def render(args):
         # under a position servo would hide the entire point of the clip.
         f = np.array([0.0, 0.0,
                       m_total * g + args.z_k * (z0 - float(com[2])) - args.z_c * vz])
-        rot = np.asarray(data.xmat[airframe_bid]).reshape(3, 3)
         tau = attitude_pd(data, airframe_bid, air_dofadr, args.body_lean, args.level_kp, args.level_kd)
         mujoco.mj_applyFT(model, data, f, tau, com, airframe_bid, data.qfrc_applied)
 
+    def physics_step():
+        t = data.time - drive_start
+        tilt, sp_pitch, speed = seq.at(t)
+        disk.set(tilt, sp_pitch)
         # Integrate the drive PHASE rather than scaling time. eval_control(t*speed)
         # teleports the crank the instant speed changes -- a step input onto
         # near-zero-inertia disks. Accumulating phase changes the rate only.
         psi[0] += control.omega * speed * dt
         env = ramp_factor(data.time, drive_start, ramp_seconds)
         base = env * motor_dir * eval_control(control, psi[0] / control.omega)
-        for aid in actuator_ids:
-            if aid >= 0:
-                data.ctrl[aid] = base
-
         step_n[0] += 1
         if step_n[0] % trail_every == 0:
-            rot_t = rot.T
+            com = np.asarray(data.subtree_com[airframe_bid])
+            rot_t = np.asarray(data.xmat[airframe_bid]).reshape(3, 3).T
             for side, sid in tip_ids.items():
                 trail[side].append(rot_t @ (np.asarray(data.site_xpos[sid]) - com))
+        sim.step(base, assist)
 
     renderer = mujoco.Renderer(model, height=args.height, width=args.width,
                                max_geom=args.max_geom)
@@ -244,8 +229,7 @@ def render(args):
           flush=True)
     for frame in range(n_frames):
         for _ in range(steps_per_frame):
-            force_hook()
-            mujoco.mj_step(model, data)
+            physics_step()
         t = data.time - drive_start
         renderer.update_scene(data, camera=cam, scene_option=scn_opt)
         com = np.asarray(data.subtree_com[airframe_bid])

@@ -48,7 +48,6 @@ import mujoco  # noqa: E402
 
 import flying  # noqa: E402
 from common import (  # noqa: E402
-    ACTUATORS,
     TIP_SITES,
     airframe_xml,
     attitude_pd,
@@ -61,17 +60,14 @@ from common import (  # noqa: E402
     smoothstep,
 )
 from morphology.tg_parser import load_morphology  # noqa: E402
-from runtime.aero import AeroBladeRuntime  # noqa: E402
 from runtime.control_signal import (  # noqa: E402
     eval_control,
     load_control_for_morphology,
     ramp_factor,
 )
-from runtime.crank import sync_crank_disks_at_rest  # noqa: E402
 from runtime.disk_orientation import DiskOrientation  # noqa: E402
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG  # noqa: E402
-from runtime.realtime import get_actuator_id  # noqa: E402
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest  # noqa: E402
+from runtime.sim import PlateWingSim  # noqa: E402
 
 # Vertical weight-assist: F = m g (cancel) + k(z0 - z) - c vz. Horizontal and
 # rotational DOFs are untouched, so translation/pitch/roll stay physical while
@@ -684,9 +680,8 @@ def render_config(config, args):
     morph = load_morphology(tg)
     control = load_control_for_morphology(tg)
 
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
+    sim = PlateWingSim(model, morph)
+    data = sim.data
 
     # Lift the whole robot off the floor so it reads as airborne (compiled COM
     # sits ~0.1 m up with the motor pillars dangling to the ground plane). Every
@@ -700,9 +695,6 @@ def render_config(config, args):
     # altitude there is no room between the bird and the floor to put it.
     lift_free_bodies(model, data, args.collision_lift if obstacle else args.lift)
 
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
-    actuator_ids = [get_actuator_id(model, name) for name in ACTUATORS]
     motor_dir = morph.motors.motor_direction
     ramp_seconds = 2.0 * control.period
     drive_start = data.time
@@ -813,40 +805,13 @@ def render_config(config, args):
             slab["gid"] = min(obstacle_gids)
 
     # Cruise feathering, to blend away from and back to through the strike.
-    pitch0_free = (pitch.upstroke_pitch, pitch.downstroke_pitch)
+    pitch0_free = (sim.pitch.upstroke_pitch, sim.pitch.downstroke_pitch)
 
     z_k, z_c = Z_ASSIST[config]
     dt = float(model.opt.timestep)
     steps_per_frame = max(1, round((args.realtime_factor / args.fps) / dt))
 
-    def force_hook():
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        if plan is None:
-            stroke_plane_schedule(config, disk_orient, tilt0, pitch0, data.time, drive_start)
-        else:
-            # The stroke plane is FIXED at the cruise tilt for the whole clip. It
-            # used to carry the fold, and it is why the wings kept flipping over:
-            # swinging the crank mount and waiting for the tendons to drag the
-            # wing round always overshot. The fold is now written straight onto
-            # the wing plates instead — see WingSweep.
-            disk_orient.set(0.0, args.cruise_pitch)
-            sweep.set(data, np.ascontiguousarray(
-                np.asarray(data.xmat[airframe_bid]).reshape(3, 3)[:, 2]),
-                plan.wing_sweep(data.time - plan_start[0]))
-        aero.apply(model, data)
-        if plan is not None and plan.hits:
-            # Feather flat through the glide: the pitch hinge is nearly free, so
-            # the unloaded wings otherwise sit at their full cruise angle of
-            # attack while gliding. Only the free ANGLE is narrowed -- stiffening
-            # the spring as well drove the two wings 105 deg out of step.
-            # Rides the drive envelope so it comes back with the stroke, and so
-            # the SECOND strike gets the same treatment as the first for free.
-            flat = 1.0 - (1.0 - args.glide_feather) * (
-                1.0 - plan.drive(data.time - plan_start[0]))
-            pitch.upstroke_pitch = pitch0_free[0] * flat
-            pitch.downstroke_pitch = pitch0_free[1] * flat
-        pitch.apply(model, data)
+    def assist(_m, _d):
         com = np.asarray(data.subtree_com[airframe_bid])
         com_z = float(com[2])
         vz = (com_z - prev_z[0]) / dt
@@ -950,13 +915,11 @@ def render_config(config, args):
             tau = a * attitude_pd(data, airframe_bid, air_dofadr, args.cruise_lean,
                                   args.level_kp, args.level_kd)
             mujoco.mj_applyFT(model, data, f, tau, com, airframe_bid, data.qfrc_applied)
+
+    def drive_ctrl():
         ramp = ramp_factor(data.time, drive_start, ramp_seconds)
         if plan is None:
-            base = ramp * motor_dir * eval_control(control, data.time)
-            for aid in actuator_ids:
-                if aid >= 0:
-                    data.ctrl[aid] = base
-            return
+            return ramp * motor_dir * eval_control(control, data.time)
         # The strike knocks the motors out: `env` takes the drive AND the
         # drivetrain coupling to zero together, leaving the servos as pure
         # dampers so the cranks coast down into the glide.
@@ -964,19 +927,47 @@ def render_config(config, args):
         base = env * motor_dir * eval_control(control, data.time)
         # Drivetrain coupling: the struck wing drags the other one with it.
         if not phase_ref:
-            phase_ref.extend(float(data.actuator_length[aid]) for aid in actuator_ids)
+            phase_ref.extend(float(data.actuator_length[aid]) for aid in sim.crank_ids)
         progress = [float(data.actuator_length[aid]) - p0
-                    for aid, p0 in zip(actuator_ids, phase_ref)]
-        for aid, brake in zip(actuator_ids, couple_brake(progress, args.drive_couple)):
-            if aid >= 0:
-                data.ctrl[aid] = base + env * brake
+                    for aid, p0 in zip(sim.crank_ids, phase_ref)]
+        ctrl = [base + env * brake for brake in couple_brake(progress, args.drive_couple)]
         step_n[0] += 1
         if trail is not None and step_n[0] % trail_every == 0:
             # Body-local, so it is the path the bird sees, not a smear of where
             # the bird has flown.
+            com = np.asarray(data.subtree_com[airframe_bid])
             rot_t = np.asarray(data.xmat[airframe_bid]).reshape(3, 3).T
             for side, sid in tip_ids.items():
                 trail[side].append(rot_t @ (np.asarray(data.site_xpos[sid]) - com))
+        return ctrl
+
+    def physics_step():
+        if plan is None:
+            stroke_plane_schedule(config, disk_orient, tilt0, pitch0, data.time, drive_start)
+        else:
+            # The stroke plane is FIXED at the cruise tilt for the whole clip. It
+            # used to carry the fold, and it is why the wings kept flipping over:
+            # swinging the crank mount and waiting for the tendons to drag the
+            # wing round always overshot. The fold is now written straight onto
+            # the wing plates instead — see WingSweep.
+            disk_orient.set(0.0, args.cruise_pitch)
+            sweep.set(data, np.ascontiguousarray(
+                np.asarray(data.xmat[airframe_bid]).reshape(3, 3)[:, 2]),
+                plan.wing_sweep(data.time - plan_start[0]))
+        if plan is not None and plan.hits:
+            # Feather flat through the glide: the pitch hinge is nearly free, so
+            # the unloaded wings otherwise sit at their full cruise angle of
+            # attack while gliding. Only the free ANGLE is narrowed -- stiffening
+            # the spring as well drove the two wings 105 deg out of step.
+            # Rides the drive envelope so it comes back with the stroke, and so
+            # the SECOND strike gets the same treatment as the first for free.
+            flat = 1.0 - (1.0 - args.glide_feather) * (
+                1.0 - plan.drive(data.time - plan_start[0]))
+            sim.pitch.upstroke_pitch = pitch0_free[0] * flat
+            sim.pitch.downstroke_pitch = pitch0_free[1] * flat
+        # drive_ctrl reads plan.drive before assist's contact ledger notes a strike;
+        # a strike noted this step leaves plan.drive at exactly 1.0, so the order is moot.
+        sim.step(drive_ctrl(), assist)
 
     if config == "collision":
         # Flap unrecorded for a moment with the poles parked out of the way and
@@ -988,8 +979,7 @@ def render_config(config, args):
         # but the tendon-driven stroke keeps growing for several more, so sampling
         # through the build-up reads the reach low.
         while data.time - drive_start < args.warmup:
-            force_hook()
-            mujoco.mj_step(model, data)
+            physics_step()
             if data.time - drive_start > args.warmup - args.peak_window:
                 cy = float(data.subtree_com[airframe_bid][1])
                 r = max(float(np.abs(plate_span_pts(model, data, g_)[:, 1] - cy).max())
@@ -1031,8 +1021,7 @@ def render_config(config, args):
         # or the stroke-plane tilt changes — and this clip runs a steeper tilt than
         # the pole one does, which moves the peak on its own.
         while data.time - drive_start < args.warmup:
-            force_hook()
-            mujoco.mj_step(model, data)
+            physics_step()
             if data.time - drive_start > args.warmup - args.peak_window:
                 cz = float(data.subtree_com[airframe_bid][2])
                 peak[0] = max(peak[0], max(plate_top(model, data, g_)
@@ -1094,8 +1083,7 @@ def render_config(config, args):
           f"({steps_per_frame} steps/frame, rt={args.realtime_factor}) -> {mp4}", flush=True)
     for frame in range(n_frames):
         for _ in range(steps_per_frame):
-            force_hook()
-            mujoco.mj_step(model, data)
+            physics_step()
         if fade_frames and body_mat >= 0:
             f = min(1.0, frame / fade_frames)
             model.mat_rgba[body_mat][3] = 1.0 + (flying.BODY_ALPHA - 1.0) * f
@@ -1122,7 +1110,7 @@ def render_config(config, args):
             # that the arrows COLLAPSE when the drive dies and swell back as it
             # spools, and at the multimodal scale they are longer than the bird
             # and hide it.
-            draw_aero_arrows(renderer.scene, aero,
+            draw_aero_arrows(renderer.scene, sim.aero,
                              args.force_scale * (args.collision_arrow if obstacle else 1.0))
         if trail is not None:
             draw_trail(renderer.scene, trail,

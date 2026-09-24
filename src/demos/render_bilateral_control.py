@@ -36,7 +36,6 @@ import mujoco
 import numpy as np
 
 from common import (
-    ACTUATORS,
     TIP_SITES,
     WING_COLORS,
     captioner,
@@ -51,12 +50,9 @@ from common import (
 )
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
-from runtime.aero import AeroBladeRuntime
-from runtime.control_signal import eval_control, load_control_for_morphology, ramp_factor
-from runtime.crank import sync_crank_disks_at_rest
+from runtime.control_signal import drive_command, load_control_for_morphology
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.realtime import get_actuator_id
-from runtime.wing_pitch import WingPitchLimiter, calibrate_wing_pitch_at_rest
+from runtime.sim import PlateWingSim
 
 # label, group, plane pitch L/R (deg), plane tilt L/R (deg), stroke weight L/R, L-R phase (deg)
 # Mild throughout -- these are trim inputs, not the 180 deg party trick. Each row
@@ -170,16 +166,12 @@ def setup(tg: Path, scene: Path, warmup_periods: float):
     compile_tg(tg, scene, color_structural_tendons=True)
 
     morph = load_morphology(tg)
-    model = mujoco.MjModel.from_xml_path(str(scene))
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
+    sim = PlateWingSim(mujoco.MjModel.from_xml_path(str(scene)), morph)
+    model, data = sim.model, sim.data
 
     control = load_control_for_morphology(tg)
-    aero = AeroBladeRuntime(model)
-    pitch = WingPitchLimiter(model, data)
     gears = crank_gears(model)
-    actuator_ids = {n: get_actuator_id(model, n) for n in ACTUATORS}
+    sides = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)[0] for i in sim.crank_ids]
 
     disks = SideDisks(model, morph.motors.disk.tilt_rad, morph.motors.disk.pitch_rad)
     # Round-trip: at zero offset the compiled body_quat must come back exactly,
@@ -202,26 +194,19 @@ def setup(tg: Path, scene: Path, warmup_periods: float):
         for side in ("L", "R"):
             disks.set(side, math.radians(knobs.get(f"tilt_{side}", 0.0)),
                       math.radians(knobs.get(f"pitch_{side}", 0.0)))
-        data.qfrc_applied[:] = 0.0
-        data.ctrl[:] = 0.0
-        aero.apply(model, data)
-        pitch.apply(model, data)
-        ramp = ramp_factor(data.time, drive_start, ramp_seconds)
-        base = ramp * morph.motors.motor_direction * eval_control(control, data.time)
+        base = drive_command(control, morph.motors.motor_direction, data.time, drive_start, ramp_seconds)
         extra = phase_rate * per_phase_rate
-        for name, aid in actuator_ids.items():
-            if aid < 0:
-                continue
-            side = name[0]
+        ctrl = []
+        for side in sides:
             # Within-wing variation: speed the crank up around mid-downstroke and
             # slow it on the upstroke. cos has zero mean over a revolution, so the
             # beat frequency is unchanged -- only the shape of the beat moves.
             w = knobs.get(f"weight_{side}", 0.0)
             shape = 1.0 + w * math.cos(crank_angle(side) - theta_down) if w else 1.0
-            data.ctrl[aid] = base * shape + (extra if side == "R" else 0.0)
-        mujoco.mj_step(model, data)
+            ctrl.append(base * shape + (extra if side == "R" else 0.0))
+        sim.step(ctrl)
 
-    return model, data, control, aero, gears, step
+    return model, data, control, sim.aero, gears, step
 
 
 def downstroke_phase(model, data, step, control, beats=2.0) -> float:

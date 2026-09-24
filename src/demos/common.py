@@ -20,9 +20,7 @@ import numpy as np
 import flying
 from compile_tg import compile_tg
 from runtime.control_signal import eval_control
-from runtime.realtime import get_actuator_id
-
-ACTUATORS = ("L_motor_t1", "L_motor_t4", "R_motor_t1", "R_motor_t4")
+from runtime.crank import CRANK_ACTUATORS
 
 # Nose points +x, wings span +-y, so forward is +x and a positive rotation about
 # +y is nose-down (the forward lean of cruising flight).
@@ -100,10 +98,10 @@ def crank_gears(model):
     wrong everywhere else.
     """
     gears = {}
-    for name in ACTUATORS:
+    for name in CRANK_ACTUATORS:
         side, station = name.split("_")[0], name.split("_")[2]
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_{station}_disk_hinge")
-        aid = get_actuator_id(model, name)
+        aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
         if jid >= 0 and aid >= 0:
             gears[(side, station)] = (jid, float(np.sign(model.actuator_gear[aid][0])))
     return gears
