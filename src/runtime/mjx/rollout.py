@@ -111,9 +111,6 @@ def match_dtypes(tree, ref_tree):
     )
 
 
-_pitch_centers = pitch_centers  # TEMP re-export: remove after integration (src/run_mjx_fixed_frequency.py)
-
-
 def physics_step(mx, dx, ctrl, pitch_cfg: WingPitchConfig, aero_qfrc: Callable):
     """One step in the CPU runtime's force order; returns ``(data, aux)``.
 

@@ -25,10 +25,9 @@ from morphology.model import PLATE_BIRDS, require_bird
 from morphology.tg_parser import load_morphology
 from run_fixed_frequency import print_lift_stats
 from runtime.control_signal import load_control_for_morphology
-from runtime.crank import sync_crank_disks_at_rest
 from runtime.mjx import aero_runtime, rollout, wing_pitch
 from runtime.morphology_runtime import DEFAULT_HUMMER_TG
-from runtime.wing_pitch import calibrate_wing_pitch_at_rest
+from runtime.sim import rest_state
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -37,12 +36,11 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
     os.environ["MORPHOLOGY_PATH"] = str(tg_path)
     os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     compile_tg(tg_path, scene_path)
-    require_bird(load_morphology(tg_path), *PLATE_BIRDS, tool="run_mjx_fixed_frequency")
+    morph = load_morphology(tg_path)
+    require_bird(morph, *PLATE_BIRDS, tool="run_mjx_fixed_frequency")
 
     model = mujoco.MjModel.from_xml_path(str(scene_path))
-    data = mujoco.MjData(model)
-    calibrate_wing_pitch_at_rest(model, data)
-    sync_crank_disks_at_rest(model, data)
+    data = rest_state(model, morph)
 
     control = load_control_for_morphology(tg_path)
     period = control.period
@@ -52,18 +50,18 @@ def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) 
     mx = mjx.put_model(model)
     dx = mjx.put_data(model, data)
     drive = rollout.build_drive_config(model, ramp_duration=0.0)
-    pitch = wing_pitch.config_from_runtime(model, centers=rollout._pitch_centers(model, data))
+    pitch = wing_pitch.config_from_runtime(model, centers=rollout.pitch_centers(model, data))
     aero = aero_runtime.build_aero_config(model)
 
     def step(carry, record):
         d, state = carry
-        ctrl = rollout.drive_ctrl(d.ctrl, d.time, drive)
-        d = d.replace(ctrl=ctrl, qfrc_applied=jnp.zeros_like(d.qfrc_applied))
-        d = wing_pitch.apply(d, pitch)
-        qfrc, net_force_world, state = aero_runtime.aero_wrench(mx, d, aero, state)
-        d = d.replace(qfrc_applied=d.qfrc_applied + qfrc)
-        d = mjx.step(mx, d)
-        return (d, state), jnp.where(record, net_force_world[2], 0.0)
+
+        def aero_qfrc(dd):
+            qfrc, net_force_world, new_state = aero_runtime.aero_wrench(mx, dd, aero, state)
+            return qfrc, (net_force_world[2], new_state)
+
+        d, (lift, state) = rollout.physics_step(mx, d, rollout.drive_ctrl(d.ctrl, d.time, drive), pitch, aero_qfrc)
+        return (d, state), jnp.where(record, lift, 0.0)
 
     def scan(carry):
         records = jnp.concatenate([jnp.zeros(warmup_steps, dtype=bool), jnp.ones(sample_steps, dtype=bool)])
