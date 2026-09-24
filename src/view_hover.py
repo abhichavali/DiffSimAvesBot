@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,8 +107,6 @@ def collision_obstacle(t, period, park, hit):
 def build_scene(args, meta):
     tg = ROOT / meta["tg"]  # repo-relative (or absolute)
     scene = args.run / "hover_scene.xml"
-    os.environ["MORPHOLOGY_PATH"] = str(tg)
-    os.environ["MUJOCO_XML_PATH"] = str(scene)
     compile_tg(tg, scene.with_suffix(".bench.xml"), color_structural_tendons=True)
     xml = flying.to_airframe(scene.with_suffix(".bench.xml").read_text())
     if not args.keep_pillars:

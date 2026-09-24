@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import time
 from pathlib import Path
 
@@ -59,8 +58,6 @@ def _tension_cables(model, morph, args) -> None:
 
 
 def build(args):
-    os.environ["MORPHOLOGY_PATH"] = str(args.tg)
-    os.environ["MUJOCO_XML_PATH"] = str(args.scene)
     compile_tg(args.tg, args.scene)
     morph = load_morphology(args.tg)
     require_bird(morph, "eagle", tool="view_eagle")

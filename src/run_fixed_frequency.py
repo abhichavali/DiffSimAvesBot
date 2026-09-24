@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 from pathlib import Path
 
 import mujoco
@@ -29,8 +28,6 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def lift_trace(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float):
     """The CPU drive loop: (control, per-step summed lift in N over the sampled periods)."""
-    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
-    os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     compile_tg(tg_path, scene_path)
 
     morph = load_morphology(tg_path)

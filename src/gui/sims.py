@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import pickle
 from pathlib import Path
 
@@ -89,11 +88,9 @@ def coupled_control_path(tg_path: Path) -> Path:
 
 
 def prepare_scene(tg_path: Path, scene_path: Path, *, color_structural_tendons: bool = False) -> Path:
-    """Point the runtime at this design (env + cache clear) and compile only when the .tg changed."""
+    """Compile the design to ``scene_path``, only when the .tg changed."""
     tg_path = tg_path.resolve()
     scene_path = scene_path.resolve()
-    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
-    os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     stamp_file = scene_path.with_suffix(scene_path.suffix + (".color.stamp" if color_structural_tendons else ".stamp"))
     stamp_text = f"{tg_path}\n{tg_path.stat().st_mtime_ns}\n{int(color_structural_tendons)}\n"
     if not scene_path.exists() or not stamp_file.exists() or stamp_file.read_text() != stamp_text:

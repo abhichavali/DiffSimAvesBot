@@ -10,7 +10,6 @@ CPU drive loop.
 from __future__ import annotations
 
 import math
-import os
 import subprocess
 from pathlib import Path
 
@@ -48,8 +47,6 @@ def smoothstep(x: float) -> float:
 # --------------------------------------------------------------------------- #
 def airframe_xml(tg, scene) -> str:
     """Compile the design and cut it free: the MJCF of the whole robot as one free airframe."""
-    os.environ["MORPHOLOGY_PATH"] = str(tg)
-    os.environ["MUJOCO_XML_PATH"] = str(scene)
     # Colored structural tendons read as the tensegrity joint — vivid both bare
     # and revealed through the fading skin.
     compile_tg(tg, scene, color_structural_tendons=True)

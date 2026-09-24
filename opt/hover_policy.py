@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import sys
 import time
 from pathlib import Path
@@ -60,8 +59,6 @@ from runtime.mjx import aero_runtime, rollout as mroll, wing_pitch as mwp  # noq
 # --------------------------------------------------------------------------- #
 def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_substep):
     with compile_lock():
-        os.environ["MORPHOLOGY_PATH"] = str(tg_path)
-        os.environ["MUJOCO_XML_PATH"] = str(scene_out)
         tmp = scene_out.with_suffix(".bench.xml")
         compile_tg(tg_path, tmp)
         xml = flying.to_airframe(tmp.read_text())
@@ -86,8 +83,6 @@ def build_free_model(tg_path: Path, scene_out: Path, *, dt_ms, gravity, aero_sub
 
 def measure_mean_lift(tg_path: Path, scene_bench: Path, *, ncyc=6) -> float:
     """Mean grounded-bench aero lift over ncyc flap cycles (pins the body)."""
-    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
-    os.environ["MUJOCO_XML_PATH"] = str(scene_bench)
     compile_tg(tg_path, scene_bench)
     morph = load_morphology(tg_path)
     m = mujoco.MjModel.from_xml_path(str(scene_bench))

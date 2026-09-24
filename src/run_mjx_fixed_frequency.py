@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 from pathlib import Path
 
 import jax
@@ -33,8 +32,6 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def run(tg_path: Path, scene_path: Path, periods: float, warmup_periods: float) -> None:
-    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
-    os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     compile_tg(tg_path, scene_path)
     morph = load_morphology(tg_path)
     require_bird(morph, *PLATE_BIRDS, tool="run_mjx_fixed_frequency")

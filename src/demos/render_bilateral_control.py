@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import sys
 from collections import deque
 from pathlib import Path
@@ -161,8 +160,6 @@ class SideDisks:
 
 def setup(tg: Path, scene: Path, warmup_periods: float):
     """Compile and wire the rig; return the pieces plus a knob-driven step()."""
-    os.environ["MORPHOLOGY_PATH"] = str(tg)
-    os.environ["MUJOCO_XML_PATH"] = str(scene)
     compile_tg(tg, scene, color_structural_tendons=True)
 
     morph = load_morphology(tg)

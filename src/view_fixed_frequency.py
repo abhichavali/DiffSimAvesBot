@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import time
 from pathlib import Path
 
@@ -49,8 +48,6 @@ def main() -> None:
     parser.add_argument("--stroke-plane-hz", type=float, default=0.25, help="Demo sweep frequency (Hz)")
     args = parser.parse_args()
 
-    os.environ["MORPHOLOGY_PATH"] = str(args.tg)
-    os.environ["MUJOCO_XML_PATH"] = str(args.scene)
     compile_tg(args.tg, args.scene, color_structural_tendons=args.color)
 
     morph = load_morphology(args.tg)

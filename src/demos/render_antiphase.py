@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import sys
 from collections import deque
 from pathlib import Path
@@ -86,8 +85,6 @@ def phase_schedule(phases_deg, dwell_beats, ramp_beats, period):
 
 def setup(tg: Path, scene: Path, phase_deg: float, warmup_periods: float):
     """Compile, place the cranks phase_deg apart, return the pieces to run it."""
-    os.environ["MORPHOLOGY_PATH"] = str(tg)
-    os.environ["MUJOCO_XML_PATH"] = str(scene)
     compile_tg(tg, scene, color_structural_tendons=True)
 
     morph = load_morphology(tg)

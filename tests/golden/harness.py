@@ -41,7 +41,6 @@ for _p in (ROOT, ROOT / "src"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
-os.environ.pop("MUJOCO_WING_MESH_PATH", None)  # would override every design's wing mesh
 
 # logical design name -> current .tg path. Move a design: change its path here only.
 PATHS = {
@@ -687,7 +686,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--quick", action="store_true", help="skip the full tier (JAX-compile-heavy items)")
     ap.add_argument("-k", dest="pattern", default="", help="only items whose name contains PATTERN")
     args = ap.parse_args(argv)
-    os.chdir(ROOT)  # the repo's tools resolve some paths (wing mesh fallbacks) against cwd
     base = json.loads(BASELINE.read_text()) if BASELINE.exists() else {"meta": {}, "items": {}}
     meta = {"mujoco": mujoco.__version__, "jax": jax.__version__, "numpy": np.__version__}
     if args.mode == "check" and base["meta"] != meta:

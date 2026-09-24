@@ -646,7 +646,6 @@ def test_divergence_raises_instead_of_hanging(tmp_path):
     tg.write_text(
         EAGLE_TG.read_text()
         .replace("timestep   = 0.13 ms", "timestep   = 0.40 ms")
-        .replace("meshdir    = assets", f"meshdir    = {ROOT / 'assets'}")
         .replace("control = control.tg", f"control = {ROOT / 'designs' / 'eagle' / 'control.tg'}")
     )
     scene = tmp_path / "toobig.xml"

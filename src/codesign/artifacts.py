@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -35,8 +34,6 @@ from codesign.cpu_check import CpuDesign, CpuResult, cpu_rollout
 from codesign.genome import Genome, wavelet_dictionary
 from compile_tg import compile_tg
 from morphology.tg_parser import load_morphology
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def repoint_control(tg_text: str) -> str:
@@ -162,10 +159,11 @@ def reconstruct_design(design_dir) -> DesignSpec:
     when present) as the CpuDesign the optimizer validated.
 
     theta_best stores a/b ABSOLUTE (x a0); the CPU runner wants DEPTHS, so a0 is divided
-    back out. Writes _recon_shoulder.tg and _recon_scene.xml into ``design_dir``.
+    back out. Writes _recon_scene.xml into ``design_dir``.
     """
     design_dir = Path(design_dir)
-    tg, scene = _compiled_scene(design_dir)
+    tg, scene = design_dir / "shoulder.tg", design_dir / "_recon_scene.xml"
+    compile_tg(tg, scene)
     th = json.loads((design_dir / "theta_best.json").read_text())
     a0 = th["a0"]
     ctrl = (a0, np.asarray(th["a"]) / a0, np.asarray(th["b"]) / a0, th["omega"])
@@ -183,23 +181,6 @@ def validate(design_dir, integrators=("euler", "implicitfast"), *, timestep_ms=0
                                periods=periods, phase_lag=spec.morph.motors.crank_phase_lag_rad,
                                timestep_ms=timestep_ms)
             for integ in integrators}
-
-
-def _compiled_scene(design_dir: Path):
-    """Compile the design's shoulder.tg to a scene, repointing meshdir + MORPHOLOGY_PATH.
-
-    A checkpoint's shoulder.tg has a relative `meshdir = assets` (resolved next to the
-    .tg, absent in a checkpoint) and the CPU aero loads wing geometry from the canonical
-    MORPHOLOGY_PATH. Both are pinned to this design here.
-    """
-    src = re.sub(r"(meshdir\s*=\s*)assets\b", rf"\g<1>{ROOT / 'assets'}",
-                 (design_dir / "shoulder.tg").read_text())
-    tg = design_dir / "_recon_shoulder.tg"
-    tg.write_text(src)
-    os.environ["MORPHOLOGY_PATH"] = str(tg.resolve())
-    scene = design_dir / "_recon_scene.xml"
-    compile_tg(tg, scene)
-    return tg, scene
 
 
 def _tendon_arrays(scene: Path, design_dir: Path):

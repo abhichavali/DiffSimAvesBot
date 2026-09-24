@@ -11,7 +11,6 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import math
-import os
 from pathlib import Path
 from typing import NamedTuple
 
@@ -83,8 +82,6 @@ def setup(tg_path: Path, scene_path: Path, *, aero_substep: int = 4, integrator:
     agree per step (implicitfast diverges between the two solvers, so designs
     optimized under it overfit MJX and fail CPU validation).
     """
-    os.environ["MORPHOLOGY_PATH"] = str(tg_path)
-    os.environ["MUJOCO_XML_PATH"] = str(scene_path)
     with compile_lock():
         compile_tg(tg_path, scene_path)
         model = mujoco.MjModel.from_xml_path(str(scene_path))
