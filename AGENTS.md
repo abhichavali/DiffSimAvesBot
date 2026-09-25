@@ -24,6 +24,10 @@ its branch merges). Decently sized = anything a new agent would otherwise get wr
 - it changes behavior, a default, a flag, or a design's numbers;
 - it finds a gotcha, a known bug, or a result that overturns an earlier claim.
 
+A result, decision or negative result (something tried that failed) gets its own
+`docs/findings/` file (template: `docs/findings/README.md`). A finding that gets
+overturned is not deleted: set its `status: superseded` and `superseded_by:`.
+
 Update the one place that owns the fact (link to it elsewhere, don't copy it):
 
 | doc | owns |
@@ -33,6 +37,7 @@ Update the one place that owns the fact (link to it elsewhere, don't copy it):
 | `.claude/skills/*/SKILL.md` | step-by-step workflows (see Skills) |
 | `designs/README.md` | one row per design: what it is, lineage, certified numbers, which tools default to it |
 | `opt/README.md` | optimizer genome, reward, flags, outputs; Known issues (synced with Known bugs here) |
+| `docs/findings/` | one dated file per finding, decision or negative result, with a status (current / re-check / superseded) |
 | `docs/flight_demos.org` | the free airframe, free-flight status and findings, the renders |
 | `README.md` | the human quickstart |
 | `docs/history/` | frozen campaign logs: never update them, never cite their numbers as current |
@@ -54,6 +59,10 @@ any other agent should read the matching one before starting that kind of task.
 | `golden-harness` | check / capture rules, ADAPTER and `PATHS`, what a recapture commit says |
 | `add-or-edit-design` | `.tg` dialect, strict parser, bird tags, overrides, flight-control keys, tool defaults |
 
+`.claude/agents/librarian.md` is a read-only lookup subagent over all of the above plus
+`docs/findings/` and git history: ask it instead of reading long docs into your own
+context (any agent that can spawn subagents can use its prompt).
+
 ## Layout
 
 | path | purpose | start at |
@@ -71,7 +80,7 @@ any other agent should read the matching one before starting that kind of task.
 | `src/demos/` | headless MP4 renders | `render_*.py` (`--self-check` asserts without rendering) |
 | `plot_fixed_frequency_gui.py`, `src/gui/` | Tk design inspector and its simulations | |
 | `tests/`, `tests/golden/` | pytest suite; golden behavior harness | `tests/golden/harness.py` docstring |
-| `docs/` | `flight_demos.org` (free airframe, free-flight status and findings, renders); `history/` (frozen campaign logs, pre-2026-09 numbers) | |
+| `docs/` | `findings/` (dated findings, decisions, negative results); `flight_demos.org` (free airframe, free-flight status and findings, renders); `history/` (frozen campaign logs, pre-2026-09 numbers) | |
 | `assets/wing.stl` | the wing mesh the aero strips are measured from | |
 
 Names that mislead:
