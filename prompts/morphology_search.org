@@ -1,0 +1,28 @@
+* AI Prompts for Morphology Search
+
+
+** Prompt 1: Evaluate Hover Policy with noise
+Try to minimize the number of non-imu inputs required to the policy and see if you're still able to receive good results.
+
+Then, try introducing noise into the imu inputs and see if the method can still recover a good policy, even with realistic noise levels on IMU readings.
+** Prompt 2: Find Optimal Closed Loop Policy
+For a given hummingbird design, find the optimal closed loop policy which can guide the hummingbird in:
+- Hover
+- Forward Flight
+- Reverse Flight
+- Go Up
+- Go Down
+
+Ideally, this policy should be derived on the GPU using some efficient mechanism. Performance should be evaluated based on a random combination of actions and the birds response to it should follow. The process of learning this policy and evaluating it shouldn't take more than 10 minutes.
+
+Again, try to minimize the number of inputs to the IMU and see if you can develop a closed loop policy that works even with realistic amounts of sensor noise.
+** Prompt 3: Morphology Surrogate
+I want to now search the design space to find a nearly global optimal hummingbird design using the following framework. In theory, the design space exploration loop is simple. Starting from a good seed, we have a GA outer loop which generates roughly 100 candidate morphologies. 90 of those or so are pruned by a surrogate, and 10 of them or so are evaluated using some kind of exploration/exploitation basis. Meaning, that initially the designs are evaluated to try and improve the confidence of the surrogate; initial populations will be mostly active learning designs such to give the model more confidence in its predictions. Then, as the surrogate becomes more and more confident of its abilities to predict a given models flight potential, it will do more exploitation ig, with the occasional exploration to learn stuff.
+
+You will run an active learning approach on the design space, and try to design a GNN based surrogate which is able to roughly predict how well a given design is going to fly (reward should be aimed towards minimizing peak torque, while still achieving good flight speeds).
+
+Ideally, I want an accompanying web interface that allows me to control and monitor the search process. I should see be able to see the kinds of morphologies which are surviving, tune the search to a custom reward etc.
+
+All this should be done in parallel on the 5090 GPU on vast.ai.
+
+** TODO Prompt 4: Domain Randomization
