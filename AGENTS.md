@@ -232,6 +232,10 @@ for CPU/numpy, within `JAX_RTOL` for JAX/MJX. The harness docstring is the contr
   `_recon_scene.xml` inside the design dir with no lock. Two `design_io` processes on the
   same design dir (e.g. the two certification commands) race on that file: run them one
   after the other, or on a copy of the dir. Likewise pass distinct `--scene` paths.
+- **Golden harness off the capture platform**: the CPU items compare exactly, so on Linux x86
+  (Python 3.13, mujoco 3.10.0, jax 0.10.2) the quick tier already fails 23 of 32 items at a clean
+  checkout (model/rest/cpu/drive/aero). There, compare `check --quick` output before and after a change
+  (it must be identical) instead of expecting all-PASS.
 - **JIT cost**: every MJX entry point pays an XLA compile first (a few seconds for
   `run_mjx_fixed_frequency`, ~10-20 s per golden full-tier item on a laptop CPU, minutes
   for a tri-integrator / rotating-batch optimizer setup); a new shape, integrator, dt or
