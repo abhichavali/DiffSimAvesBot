@@ -60,6 +60,11 @@ Scene helpers (pure XML surgery): ~shrink_pillar_visual~ (cosmetic),
 - The trimmed open loop is unstable (per-wingbeat |eig| ~1.08; lost after ~40-50
   wingbeats); an LQR on the one-wingbeat linear model, distilled to an MLP, hovers.
 - BPTT through MJX still diverges past one wingbeat; one-wingbeat ~jacfwd~ is accurate.
+- Sensors (~hover.sensors~, ~hover.reduced~; findings ~2026-09-26-hover-minimal-inputs~ and
+  ~2026-09-26-hover-imu-noise~): with mocap position plus the IMU, an LQG on ~pos,att,w~
+  designed with the datasheet noise needs no velocity and hovers level (drift ~15 mm, all
+  pushes, also with 5 ms mocap latency). Without position the bird holds attitude but walks
+  0.3-0.75 m in 14 s, sinks, and hovers tilted by the accelerometer bias (~1.4 deg at 20 mg).
 
 * What was learned about free hover (July 2026, pre-2026-09 aero)
 

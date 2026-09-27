@@ -12,9 +12,10 @@ simulation (library: `src/codesign/`), plus the free-flight hover tools (library
 | `design_io.py` | Replay or certify a design dir (optimizer output or committed `designs/`) on MuJoCo CPU (`codesign.artifacts.validate`) |
 | `tg_scalars.py` | `.tg` scalar flatten/substitute for the GUI and geometry genes |
 | `diag_mjx_cpu_parity.py` | Per-step MJX<->CPU diff (aero, pitch, applied force, state): run after touching either aero |
-| `verify_hover.py` | Fly a flight control `.tg` on CPU with and without pushes (`--open-loop`, `--lqr`, `--dt-ms`) |
-| `push_sweep.py` | Largest push a flight control recovers from, per push direction |
-| `distill_hover.py` | LQR gain (`python -m hover.lqr`) -> the closed-loop MLP `.npz` |
+| `verify_hover.py` | Fly a flight control `.tg` on CPU with and without pushes (`--open-loop`, `--lqr`, `--dt-ms` (several), sensor/observation flags of `hover.evaluate`, `--json`) |
+| `push_sweep.py` | Largest push a flight control recovers from, per push direction (same flags; `--json`) |
+| `hover_mc.py` | Noise Monte Carlo of a hover policy: seeds x dt x noise scale x push scenario over all cores (CPU), `--json` |
+| `distill_hover.py` | LQR gain (`python -m hover.lqr`) -> the closed-loop MLP `.npz`; `--ctrl` distills a `hover.reduced` controller onto its own inputs (`--noise-aug`) |
 | `train_hover.py` | MJX BPTT of the hover MLP. Kept as a negative result: it diverges past one wingbeat |
 
 `src/codesign/`: `rig.py` (compile + settle a `.tg`, integrator/dt variants, tendon

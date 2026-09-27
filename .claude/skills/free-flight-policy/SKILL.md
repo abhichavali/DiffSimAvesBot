@@ -20,8 +20,8 @@ flown only by its four crank motors: **no force of any kind acts on it after rel
 - **dt snapping** (`load_bird`): dt is adjusted so one wingbeat is an integer number of
   steps (901 at ~0.13 ms), so the per-wingbeat strobe always samples the same phase.
 - **Strobed state** (12, once per wingbeat, relative to the release orbit): COM position,
-  attitude rotation vector, COM velocity, world angular velocity. Simulator ground truth:
-  no sensor model.
+  attitude rotation vector, COM velocity, world angular velocity. Simulator ground truth,
+  unless a sensor model is attached (see "Sensors").
 - **Launch cradle** (`release`): a PID on the one-wingbeat *average* pose holds the bird
   while the flapping settles, then is removed. Its mean wrench at release is the trim
   error (what the open loop fails to supply).
@@ -69,6 +69,65 @@ uv run python opt/verify_hover.py --tg $T --control $D/control.tg               
   `control.tg`): 120 wingbeats, tilt <= 0.4 deg, recovers 0.8 m/s and 4 rad/s pushes.
 - Promote: copy `control.tg`, `mlp_closed_loop.npz`, `lqr.npz` into the design dir,
   update the `designs/README.md` row and the header comment of `control.tg`.
+
+## Sensors and reduced observations (`hover.sensors`, `hover.reduced`)
+
+What a real bird could feed the policy instead of the simulator's true state. Channels (18, each a
+deviation from the release orbit, read at the strobe): `pos` (mocap COM), `att` (on-board attitude
+filter), `vel` (mocap/flow), `w` (world rate = R_est gyro), `gyro` (body rate), `acc` (body specific
+force, mean over the last wingbeat). Subsets: groups, `state` / `imu` / `all`, per-axis `pos_z`,
+`att_xy`. Non-IMU = `pos`, `vel`. Noise defaults are datasheet numbers (BMI088 gyro/accel, lab mocap;
+sources in the `SensorNoise` docstring), all scaled by `--noise-scale`; `0` = noise-free.
+
+```bash
+PYTHONPATH=src uv run python -m hover.lqr --out $D/lqr.npz          # also saves the sensor model (C_now, C_prev, J)
+PYTHONPATH=src uv run python -m hover.reduced --lqr $D/lqr.npz --report "state; pos,att,w; att,w; imu"
+PYTHONPATH=src uv run python -m hover.reduced --lqr $D/lqr.npz --obs pos,att,w --mode lqg --noise-scale 1 --out $D/ctl.npz
+uv run python opt/verify_hover.py --ctrl $D/ctl.npz --noise-scale 1 --pos-latency-ms 5 --seed 0 --dt-ms 0.10 0.13 0.16 --json v.json
+uv run python opt/verify_hover.py --lqr $D/lqr.npz --obs pos,att,w --mode sof --noise-scale 1   # designed on the fly
+uv run python opt/push_sweep.py --ctrl $D/ctl.npz --noise-scale 1 --json p.json
+uv run python opt/distill_hover.py --ctrl $D/ctl.npz --noise-aug 1 --out $D/ctl_mlp.npz        # fly with --ctrl
+uv run python opt/hover_mc.py --lqr $D/lqr.npz --obs att,w --noise-scales 0 1 2 --seeds 8 --json mc.json
+uv run python opt/hover_mc.py --ctrl $D/ctl.npz --noise-scales 1 --pos-latency-ms 5 --seeds 16 --dt-ms 0.10 0.13 0.16 --scenarios none verify --json mc.json
+```
+
+**Deriving a reduced-input, noise-aware policy** (what Prompt 1 settled on; findings
+`2026-09-26-hover-minimal-inputs`, `2026-09-26-hover-imu-noise`):
+1. Fresh `hover.lqr` (the committed `lqr.npz` has no sensor model).
+2. Pick the subset: position tracked -> `pos,att,w` LQG; no position -> `att,w` SOF (6 inputs) or the raw
+   `gyro,acc` LQG (no attitude filter). Design with `--noise-scale 1` (V = the flight's noise), not 0.
+3. Distill with `--ctrl ... --noise-aug 1` if an MLP is wanted (an LQG MLP keeps its Kalman filter).
+4. Verify at dt 0.10/0.13/0.16, with `--noise-scale 1` (+ `--pos-latency-ms 5` for mocap), `push_sweep`,
+   and `hover_mc` over 16 seeds. Gate tilt on the NO-PUSH flights (< 2 deg), and fly a position-free
+   policy for 240-480 wingbeats (`--beats`): it walks and sinks, and the `gyro,acc` ones spiral after ~14 s.
+   Seeds are shared across dt/scenario in `hover_mc`: the rate rests on the number of seeds, not flights.
+
+- `sof` = static output feedback (gradient on the LQR cost, may report `ok: false`: no static gain
+  stabilizes that subset); `lqg` = Kalman filter on the per-wingbeat model + LQR; the observer state is
+  carried across wingbeats (`LinearController.reset()` per flight). Without a position channel the design
+  drops the position states (pure integrators, unobservable): the bird then holds attitude and velocity
+  but drifts (`att,w` at noise 1: 120 wingbeats, ~0.3 m drift). Which subsets hover (noise-free): finding
+  `2026-09-26-hover-minimal-inputs` (with position tracked: LQG `pos,att,w`, no velocity needed; without:
+  `att,w`, walking ~18 mm/s and sinking). `--dead-reckon` (lqg) adds integral action on the predicted
+  position; it helps little (see the finding).
+- Design any LQG that reads `acc` with `--noise-scale 1` (or more): at noise 0 (V at the floor, also what
+  `verify_hover --lqr --obs ... --mode lqg` uses without `--noise-scale`) it tumbles after pushes, because
+  the simulated IMU feels each instantaneous `kick` as an impulse the identified model lacks (Known bugs;
+  finding `2026-09-26-hover-acc-reads-push-impulse`).
+- Under datasheet noise (finding `2026-09-26-hover-imu-noise`), the LQG `pos,att,w` designed with
+  `--noise-scale 1` passes everything at 1x (also with 5 ms mocap latency, and over 240 wingbeats) and
+  crashes from 10x. Controllers designed at noise 0 still fly, but hover at the attitude filter's
+  accel-bias tilt (~1-2 deg). IMU-only: `att,w` SOF needs a calibrated accel (5 mg) or `--noise-aug 1`
+  distillation to stay level; the `gyro,acc` LQG / its MLP is level for ~14 s only. The accel bias is
+  the term that breaks things. What did not help: `2026-09-26-hover-noise-tuning-dead-ends`.
+- A reading is only as good as its model: check `hover.reduced --report` (observable states, LQG
+  posterior std) before blaming the controller; pass `--att-mode truth` to separate filter error from
+  control error, `--noise-scale 0 --att-mode truth` reproduces the true-state flight bit for bit.
+- The attitude filter is calibrated on the orbit (the IMU's beat-mean specific force is ~5 deg off the
+  mean up: lever arm under the flapping wobble); the accel bias still tilts it ~1 deg (20 mg). Yaw drifts
+  with the residual gyro bias (no magnetometer).
+- Monte Carlo runs on CPU (`hover_mc.py`, one flight per core, ~25 core-s per 120 wingbeats), not MJX:
+  the sensor model and observers are CPU-only and the MJX closed loop has no free-flight parity check.
 
 ## Watch it
 

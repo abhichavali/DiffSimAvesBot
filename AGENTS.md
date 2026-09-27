@@ -74,8 +74,8 @@ context (any agent that can spawn subagents can use its prompt).
 | `src/runtime/` | CPU runtime (the reference) | `sim.py` (`PlateWingSim`, `rest_state`: the canonical step and force order); `aero.py` (blade-element aero, the one home of aero coefficients and `set_unsteady_aero`); `control_signal.py`, `crank.py`, `wing_pitch.py`, `disk_orientation.py`, `eagle_*.py`, `wing_cables.py`, `realtime.py` |
 | `src/runtime/mjx/` | JAX/MJX port (jit/vmap, differentiable) | `aero.py`, `aero_runtime.py` (`aero_wrench`), `rollout.py` (`physics_step`, `build_drive_config`, `simulate`) |
 | `src/codesign/` | co-design library | `rig`, `genome`, `metrics` (`build_rollout`), `loss`, `train`, `cpu_check`, `artifacts` (design dirs: write + read back) |
-| `src/hover/` | free-flight hover of the standalone bird | `launch` (phase-locked drive, launch cradle, strobed state, `fly`), `policy` (flight control `.tg` + MLP load/write), `trim` / `lqr` (CLIs), `env` (MJX closed loop); the `free-flight-policy` skill |
-| `opt/` | co-design and free-flight CLIs | `optimize_control.py`, `evolve_codesign.py`, `design_io.py` (CPU replay/certify), `run_gui.py`, `diag_mjx_cpu_parity.py`; hover: `verify_hover.py`, `push_sweep.py`, `distill_hover.py`, `train_hover.py`; see `opt/README.md` |
+| `src/hover/` | free-flight hover of the standalone bird | `launch` (phase-locked drive, launch cradle, strobed state, `fly`), `policy` (flight control `.tg` + MLP load/write), `trim` / `lqr` (CLIs), `sensors` (IMU + mocap sensor model), `reduced` (SOF / LQG on a channel subset; CLI), `evaluate` (policy/sensor flags shared by the opt tools), `env` (MJX closed loop); the `free-flight-policy` skill |
+| `opt/` | co-design and free-flight CLIs | `optimize_control.py`, `evolve_codesign.py`, `design_io.py` (CPU replay/certify), `run_gui.py`, `diag_mjx_cpu_parity.py`; hover: `verify_hover.py`, `push_sweep.py`, `hover_mc.py`, `distill_hover.py`, `train_hover.py`; see `opt/README.md` |
 | `src/*.py` | runners and viewers | `run_fixed_frequency.py`, `run_mjx_fixed_frequency.py`, `view_fixed_frequency.py`, `view_eagle.py`, `view_free_hover.py` (free flight under a flight control); `flying.py` (bench scene -> free-flying airframe) |
 | `src/demos/` | headless MP4 renders | `render_*.py` (`--self-check` asserts without rendering) |
 | `plot_fixed_frequency_gui.py`, `src/gui/` | Tk design inspector and its simulations | |
@@ -194,6 +194,14 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
   (P = push, O = toggle closed loop). The GUI's Viewer tab launches it for a flight control.
   `opt/train_hover.py` (MJX BPTT) is kept as a negative result: gradients through more than one
   wingbeat of this model diverged, from scratch and from the LQR start.
+- **Sensors** (`hover.sensors`, `hover.reduced`): `fly(..., sensor=Sensors(...))` feeds the policy an
+  18-channel reading (pos att vel w gyro acc; IMU noise + bias at the IMU rate, an on-board attitude filter,
+  mocap noise/latency) instead of the true state; `hover.reduced` designs SOF / LQG controllers on any
+  channel subset from the sensor model `hover.lqr` now saves in `lqr.npz`. Without sensor flags every tool
+  flies the true state exactly as before. Workflow: the `free-flight-policy` skill, "Sensors".
+  Result (datasheet noise): with mocap position, an LQG on `pos,att,w` designed with `--noise-scale 1`
+  needs no velocity and hovers level; IMU-only holds attitude but walks, sinks and tilts with the accel
+  bias (findings `2026-09-26-hover-minimal-inputs`, `2026-09-26-hover-imu-noise`).
 - **Any change to the free bird or its physics invalidates its policy**: re-derive it
   (trim -> LQR -> distill -> verify, ~3 min on a laptop) with the `free-flight-policy` skill.
 
@@ -282,3 +290,8 @@ Keep this list and `opt/README.md` "Known issues" in sync.
   `mkdtemp` scene dir per tab.
 - Free flight: the free-flight renders (`render_configs`, `render_flight_phases`,
   `render_stroke_plane`) drive the plain control, not the hover policy, so the bird falls.
+  `view_free_hover.py` and the GUI treat any `closed_loop` npz as a state MLP, so a `hover.reduced`
+  controller (SOF / LQG, or its MLP) flies correctly only in `verify_hover`, `push_sweep`, `hover_mc`.
+  `hover.launch.fly` applies a push (`kick`) without telling the sensor, so the simulated accelerometer
+  reads the push as a one-sample impulse the identified model (`hover.lqr.one_beat_obs`) lacks; acc-reading
+  LQGs designed at noise 0 tumble on it (finding `2026-09-26-hover-acc-reads-push-impulse`).

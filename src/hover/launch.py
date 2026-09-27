@@ -12,6 +12,7 @@ kind acts after release.
 
 State (strobed at the start of every wingbeat): COM position (3), attitude rotation vector vs the release
 attitude (3), COM velocity (3), angular velocity in world (3) - relative to the orbit's own release state.
+The policy reads it directly, or through a sensor model (``fly(..., sensor=hover.sensors.Sensors(...))``).
 """
 
 from __future__ import annotations
@@ -109,11 +110,14 @@ class Drive:
         self.phi += self.bird.omega * math.exp(self.g) * dt
         return lift
 
-    def beat(self):
-        """Advance exactly one wingbeat (integer steps by construction of dt)."""
+    def beat(self, on_step=None):
+        """Advance exactly one wingbeat (integer steps by construction of dt); ``on_step(data)`` after each step
+        (the sensor model's hook: hover.sensors.Sensors.step)."""
         n = round(2 * math.pi / (self.bird.omega * math.exp(self.g)) / self.bird.model.opt.timestep)
         for _ in range(n):
             self.step()
+            if on_step is not None:
+                on_step(self.sim.data)
 
 
 def strobe(bird: Bird, d, com_ref, q_ref):
@@ -165,11 +169,18 @@ def release(bird: Bird, theta, attitude, K, *, n_cradle=12, n_avg=6, k_phi=K_PHI
     return Released(sim, drive, com_ref, q_ref, strobe(bird, d, com_ref, q_ref), np.mean(acc, 0))
 
 
-def fly(bird: Bird, rel: Released, theta, n_beats, *, policy=None, kicks=None):
-    """Fly from a released state (copied, so ``rel`` is reusable). ``policy(s) -> correction to theta``
-    once per wingbeat. Returns the strobed deviation states (n_beats+1, 12)."""
+def fly(bird: Bird, rel: Released, theta, n_beats, *, policy=None, kicks=None, sensor=None):
+    """Fly from a released state (copied, so ``rel`` is reusable). ``policy(obs) -> correction to theta``
+    once per wingbeat; ``obs`` = the true strobed state (12) or, with ``sensor`` (hover.sensors.Sensors), its
+    channel vector y (18; the sensor keeps every reading in ``sensor.log``). A policy with a ``reset()``
+    (an observer) is reset first. Returns the TRUE strobed deviation states (n_beats+1, 12)."""
     sim = copy.deepcopy(rel.sim); drive = copy.copy(rel.drive); drive.sim = sim; drive.L_des = rel.drive.L_des.copy()
     m, d = sim.model, sim.data
+    if policy is not None and hasattr(policy, "reset"):
+        policy.reset()
+    if sensor is not None:
+        sensor.start(bird, rel, sim, theta)
+    on_step = sensor.step if sensor is not None else None
     out = []
     for n in range(n_beats):
         if kicks and n in kicks:
@@ -179,9 +190,12 @@ def fly(bird: Bird, rel: Released, theta, n_beats, *, policy=None, kicks=None):
         out.append(s)
         if not np.isfinite(s).all() or np.linalg.norm(s[3:5]) > math.radians(60):
             break
-        drive.set_theta(np.asarray(theta) + (policy(s) if policy is not None else 0.0))
-        drive.beat()
+        obs = s if sensor is None else sensor.read(d, s)
+        drive.set_theta(np.asarray(theta) + (policy(obs) if policy is not None else 0.0))
+        drive.beat(on_step)
     else:
         mujoco.mj_forward(m, d)
         out.append(strobe(bird, d, rel.com_ref, rel.q_ref) - rel.x_orbit)
+        if sensor is not None:
+            sensor.read(d, out[-1])
     return np.array(out)
