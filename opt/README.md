@@ -17,6 +17,7 @@ simulation (library: `src/codesign/`), plus the free-flight hover tools (library
 | `hover_mc.py` | Noise Monte Carlo of a hover policy: seeds x dt x noise scale x push scenario over all cores (CPU), `--json` |
 | `distill_hover.py` | LQR gain (`python -m hover.lqr`) -> the closed-loop MLP `.npz`; `--ctrl` distills a `hover.reduced` controller onto its own inputs (`--noise-aug`) |
 | `train_hover.py` | MJX BPTT of the hover MLP. Kept as a negative result: it diverges past one wingbeat |
+| `hover_gpu.py` | The hover tools on a GPU (MJX, vmapped flights): `parity` (vs CPU), `trim`, `linearize`, `verify`, `sweep`, `mc`, `derive` (the whole loop), `bench`; module docstring for commands |
 
 `src/codesign/`: `rig.py` (compile + settle a `.tg`, integrator/dt variants, tendon
 pairs), `genome.py` (the packed theta), `metrics.py` (theta -> `Metrics` rollout),

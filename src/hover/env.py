@@ -6,6 +6,12 @@ drive. Once per wingbeat the MLP reads the strobed deviation state (hover.launch
 orbit's own release state) and outputs bounded corrections to the 24 harmonic depths (the crank speed,
 hence the wingbeat length, stays fixed so every strobe lands at the same drive phase). Nothing but physics
 acts on the bird after release.
+
+Kept for opt/train_hover.py (BPTT, a negative result). It is NOT CPU-exact: use hover.mjx_flight for flights that
+must match hover.launch.fly (docs/findings/2026-09-26-mjx-free-flight-parity.md lists what differs here:
+iterations=1 set on the shared CPU model, a float32 drive phase and encoder target summed over the whole flight,
+a fresh aero hold at release, no forward refresh at the strobe, pushes only at release). The gravity=0 in
+``make`` is not a bug: it only brackets ``rest_state`` (the pitch dead-zone centers, as release() computes them).
 """
 
 from __future__ import annotations
