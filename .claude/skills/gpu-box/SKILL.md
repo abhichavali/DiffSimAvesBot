@@ -61,12 +61,15 @@ box "cd $R && export LD_LIBRARY_PATH=\$(find \$PWD/.venv/lib/python3.*/site-pack
 ## Launch, monitor, fetch
 
 ```bash
-box "cd $R && export LD_LIBRARY_PATH=... && nohup sh -c '.venv/bin/python <script> <flags> \
-  > run_NAME.log 2>&1; echo \$? > run_NAME.done' >/dev/null 2>&1 &"
+box "cd $R && export LD_LIBRARY_PATH=... && setsid nohup sh -c '.venv/bin/python <script> <flags> \
+  > run_NAME.log 2>&1; echo \$? > run_NAME.done' >/dev/null 2>&1 < /dev/null &"
 box "tail -5 $R/run_NAME.log; cat $R/run_NAME.done 2>/dev/null; nvidia-smi --query-gpu=utilization.gpu --format=csv"
 box "tar czf - -C $R opt/runs_NAME" | tar xzf -                 # fetch (opt/runs*/ is gitignored)
 ```
 
+- **Every job runs detached** with the recipe above, even a "quick" one: never run work in a
+  foreground ssh call. Closing the local agent session, or a dropped connection, must not end
+  it. Only short status/fetch commands go in foreground ssh calls.
 - `.done` holds the exit code. stdout is block-buffered and XLA compiles take minutes
   (30-50 min for a rotating-batch optimizer): a silent log is not a hang. Check `ps` and
   `nvidia-smi`.

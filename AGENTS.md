@@ -240,6 +240,9 @@ for CPU/numpy, within `JAX_RTOL` for JAX/MJX. The harness docstring is the contr
   there): run `.venv/bin/python ...` (or `uv run --no-sync`), never plain `uv run`: it
   re-syncs and drops the CUDA jax. `pkill -f '[o]ptimize_control'`, not
   `pkill -f optimize_control` (that kills your own ssh session).
+  **Always run jobs on the box detached** (`setsid nohup sh -c '... > run_X.log 2>&1; echo $? > run_X.done'`,
+  the skill's launch recipe), never in a foreground ssh call: closing the local agent session or
+  dropping the ssh connection must not end them. Poll with short ssh calls and fetch results as you go.
 - **Reverse-mode autodiff**: `jax.jacfwd` works as-is; `jax.grad` cannot trace MJX's
   solver `while_loop` unless `model.opt.iterations == 1`.
   Geometry (radius / attach / offsets) is compiled host-side and is not differentiable.
