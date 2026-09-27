@@ -74,8 +74,8 @@ context (any agent that can spawn subagents can use its prompt).
 | `src/runtime/` | CPU runtime (the reference) | `sim.py` (`PlateWingSim`, `rest_state`: the canonical step and force order); `aero.py` (blade-element aero, the one home of aero coefficients and `set_unsteady_aero`); `control_signal.py`, `crank.py`, `wing_pitch.py`, `disk_orientation.py`, `eagle_*.py`, `wing_cables.py`, `realtime.py` |
 | `src/runtime/mjx/` | JAX/MJX port (jit/vmap, differentiable) | `aero.py`, `aero_runtime.py` (`aero_wrench`), `rollout.py` (`physics_step`, `build_drive_config`, `simulate`) |
 | `src/codesign/` | co-design library | `rig`, `genome`, `metrics` (`build_rollout`), `loss`, `train`, `cpu_check`, `artifacts` (design dirs: write + read back) |
-| `src/hover/` | free-flight hover of the standalone bird | `launch` (phase-locked drive, launch cradle, strobed state, `fly`), `policy` (flight control `.tg` + MLP load/write), `trim` / `lqr` (CLIs), `env` (MJX closed loop); the `free-flight-policy` skill |
-| `opt/` | co-design and free-flight CLIs | `optimize_control.py`, `evolve_codesign.py`, `design_io.py` (CPU replay/certify), `run_gui.py`, `diag_mjx_cpu_parity.py`; hover: `verify_hover.py`, `push_sweep.py`, `distill_hover.py`, `train_hover.py`; see `opt/README.md` |
+| `src/hover/` | free-flight hover of the standalone bird | `launch` (phase-locked drive, launch cradle, strobed state, `fly`), `policy` (flight control `.tg` + MLP load/write), `trim` / `lqr` (CLIs); device (MJX, GPU) port: `mjx_flight` (released flight, batched; CPU-exact in x64), `mjx_sensors` (sensor model + observers), `mjx_cradle` (cradle + trim); `env` (old MJX loop for BPTT, not CPU-exact); the `free-flight-policy` skill |
+| `opt/` | co-design and free-flight CLIs | `optimize_control.py`, `evolve_codesign.py`, `design_io.py` (CPU replay/certify), `run_gui.py`, `diag_mjx_cpu_parity.py`; hover: `hover_gpu.py` (the GPU path: parity / trim / linearize / verify / sweep / mc / derive / bench), `verify_hover.py`, `push_sweep.py`, `distill_hover.py`, `train_hover.py`; see `opt/README.md` |
 | `src/*.py` | runners and viewers | `run_fixed_frequency.py`, `run_mjx_fixed_frequency.py`, `view_fixed_frequency.py`, `view_eagle.py`, `view_free_hover.py` (free flight under a flight control); `flying.py` (bench scene -> free-flying airframe) |
 | `src/demos/` | headless MP4 renders | `render_*.py` (`--self-check` asserts without rendering) |
 | `plot_fixed_frequency_gui.py`, `src/gui/` | Tk design inspector and its simulations | |
@@ -108,6 +108,7 @@ uv run python opt/design_io.py designs/hummer/hover --integrator euler   # CPU r
 uv run python plot_fixed_frequency_gui.py         # design inspector (Tk)
 uv run python opt/optimize_control.py --help       # gradient co-design; see opt/README.md
 uv run python opt/verify_hover.py                  # free-standing bird: fly its hover policy on CPU, with pushes
+.venv/bin/python opt/hover_gpu.py derive --out D --dt-ms 0.10 0.13 0.16   # the same loop batched on a GPU box
 uv run pytest -q                                   # unit tests + the golden quick tier (~50 s)
 uv run python -m tests.golden check [--quick]      # behavior check (see below)
 ```
@@ -194,8 +195,15 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
   (P = push, O = toggle closed loop). The GUI's Viewer tab launches it for a flight control.
   `opt/train_hover.py` (MJX BPTT) is kept as a negative result: gradients through more than one
   wingbeat of this model diverged, from scratch and from the LQR start.
+- **GPU first, CPU as the reference**: `opt/hover_gpu.py` runs trim, linearize + LQR, distill, verify, push
+  sweep and sensor-noise Monte Carlo as vmapped MJX flights (`hover.mjx_flight` / `mjx_sensors` / `mjx_cradle`).
+  They are the CPU code step for step: in x64 they match `hover.launch` to ~1e-11; the float32 GPU default
+  keeps every verify / sweep verdict and stays within a few % of a push (`mjx-free-flight-parity` finding).
+  Device knobs that matter: never `iterations=1` (it walks the trim: 5-8x the error), line search 8 is enough,
+  contacts off (the free bird has none). Confirm a promoted policy once with the CPU `opt/verify_hover.py`.
 - **Any change to the free bird or its physics invalidates its policy**: re-derive it
-  (trim -> LQR -> distill -> verify, ~3 min on a laptop) with the `free-flight-policy` skill.
+  (trim -> LQR -> distill -> verify, ~3 min on a laptop, or `opt/hover_gpu.py derive --trim` on a GPU) with the
+  `free-flight-policy` skill.
 
 ## Behavior contract: the golden harness
 

@@ -39,6 +39,28 @@ tilt), `phase_lock = 20` (1/s), `closed_loop = <file>.npz` (relative to the `.tg
 open loop). `a0` must equal `2 pi fundamental_frequency` (checked on load). Read/write
 with `load_flight_policy` / `write_flight_control`, never by hand-editing numbers.
 
+## On the GPU (primary): `opt/hover_gpu.py`
+
+Everything below also runs as batched MJX flights on a GPU box (`gpu-box` skill: `.venv/bin/python`, the
+CUDA `LD_LIBRARY_PATH`, jobs detached). The device code (`hover.mjx_flight`, `mjx_sensors`, `mjx_cradle`) is
+the CPU loop step for step (x64: equal to ~1e-11); float32 on the GPU keeps the verdicts and is within a few %
+of a push (`mjx-free-flight-parity` finding). The CPU tools stay the reference: confirm a policy you promote
+with `opt/verify_hover.py` once.
+
+```bash
+P=".venv/bin/python opt/hover_gpu.py"
+$P derive --out $D --dt-ms 0.10 0.13 0.16 --trim --cpu-check  # trim -> linearize+LQR -> distill -> verify + sweep
+$P mc --lqr $D/lqr.npz --obs pos,att,w --noise-scales 1 3 --seeds 500   # sensor-noise Monte Carlo, 1000s of flights
+$P parity --lqr $D/lqr.npz --cpu-ref ref.npz                  # after touching hover.launch / runtime / mjx code
+```
+
+- Device knobs: keep the model's solver iterations (`--iterations 1` is 3x faster but walks the trim: pos
+  drift 30-80 mm vs 9-21 mm on CPU); `--ls-iterations 8` (default) matches the model's 50; contacts are off
+  (the free bird never touches itself; `--contact` restores them).
+- Any change to `hover.launch` (drive, strobe, cradle, kicks), `hover.sensors` or `hover.reduced` must be
+  mirrored in the device port: `uv run pytest -q tests/test_hover_mjx.py` (x64, CPU) must stay at ~1e-9.
+- The release (cradle settle) runs on CPU, ~10 s per (design, dt); the trim runs the cradle on the device.
+
 ## Re-derive the policy (after ANY change to the bird or its physics)
 
 A policy is only valid for the exact bird and trim it was derived on: the MLP acts on the
