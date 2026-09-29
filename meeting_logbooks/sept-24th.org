@@ -1,0 +1,136 @@
+* September 24th Log
+
+** Simulation Bugs Found and Fixed
+
+The refactor reorganized the repo (designs in ~designs/<bird>/<name>/~, one agent guide in ~AGENTS.md~,
+project skills). More importantly it added a *golden harness* that records every output the repo produces.
+A pure cleanup has to reproduce those outputs exactly, so any number that moved pointed at a real change.
+That is how most of these bugs surfaced.
+
+*** Harmonic Clock Bug: Why Harmonics overfit dt
+- Forgot to reset ~data.time~ after the 2000-step wing-pitch settle, so each harmonic started with a phase
+  offset of k * omega * 2000 * dt. That offset depends on dt.
+- Same on MJX. A harmonic tuned at dt 0.06 was being played back at a different phase than dt 0.03, which
+  is exactly what looked like harmonics being specific to one discretization.
+- Related: CPU replay ran the harmonics on a slightly different clock from the MJX optimizer whenever the
+  crank speed was tuned.
+- *Fix:* reset the clock after the settle, use one shared clock definition, stamp new artifacts with their
+  clock, and add a flag (~design_io --pre-clock-fix-dt~) to rotate old ones.
+- *Takeaway:* harmonic designs now give the same result across dt. The earlier conclusion that harmonics
+  don't transfer is withdrawn.
+
+*** Aero Bugs
+The blade-element aero overpredicted lift by ≈75%. Several coding mistakes all pushed the same way:
+- *Lift sign errors.* Lift direction, center of pressure and rotational lift all assumed the hinge edge
+  always leads. The far edge leads for ≈40-50% of the stroke, and during that part lift pointed the wrong way.
+- *Aero doesn't match the wing mesh.* The aero put the hinge on the leading edge and started the strips at
+  the hinge; the real mesh has its leading edge 17 mm ahead of the hinge and its root 6.7 mm out. The aero
+  now takes its geometry from the mesh.
+- *Rotational terms were wrong.* Rotational lift was scaled by the strip's radius instead of its width;
+  rotational drag was a crude sum that never sampled the leading edge.
+- *Result:* the seed design's lift dropped from ≈362 mN to ≈187-210 mN, and its certified peak torque rose
+  from 174 to 193 mNm. The co-designed designs still beat the seed by ≈12%, so co-design still pays; the
+  absolute numbers were wrong. Every lift or torque figure from before Sept 24 is stale.
+- *New behavior revealed:* the passive wing pitch is *bistable*. It settles into a ≈190 mN or a ≈210 mN
+  mode depending on dt and integrator, so designs must be compared per mode.
+
+*** CPU and MJX simulators didn't do the same thing
+MJX is only useful if it matches the CPU reference. Both did not do the same thing:
+- The CPU computed aero on the previous step's wing pose.
+- Between aero updates (every 4 steps), the CPU re-applied the old force at the wing's new position, while
+  MJX held it fixed.
+- The two runner scripts defaulted to different designs and updated aero at different rates.
+- The MJX gradients had a NaN at zero wing velocity.
+They now agree almost completely: ≈0.02% on lift and peak torque.
+
+*** The optimizer measured and replayed the wrong things
+- The evolutionary search ranked designs with a smooth estimate of peak torque that runs 20-30% low and
+  reordered half of them. It now ranks on the exact per-cycle peak.
+- A lift-steadiness penalty was measured over the wrong period, which quietly stopped the search from
+  changing crank speed.
+- Several replay and warm-start paths rebuilt a different design from the one that was trained (wing-locked
+  runs, seed files decoded by position, the GUI's GA -> Adam hand-off).
+- A timestep check could pass without testing anything, and training stages overwrote each other's
+  checkpoints.
+- *Takeaway:* what the optimizer reports now matches what CPU replay shows.
+
+*** Silent input errors and GUI issues
+- *.tg parser:* a typo'd key silently fell back to its default (~timstep~ -> 0.375 ms). Angle units were
+  guessed, so ~pitch: 2 deg~ became 2 radians. Unknown keys now raise, and units come from the literal.
+- *GUI:* one plot was always blank; tendon tension was measured from the wrong rest length; the learned
+  stroke plane applied in only one tab; the plot cache could serve stale results; Stop didn't stop a run;
+  the Viewer tab couldn't launch.
+
+*** Left unfixed on purpose
+Listed in ~AGENTS.md~ "Known bugs", because each fix changes recorded outputs: e.g. the 300 mN
+~--lift-floor~ default is now unreachable, and the motor-tendon ranges are L/R asymmetric.
+
+
+** Free-flight hover of the standalone bird
+
+Goal: stable hover of the free-standing bird at real gravity, with nothing holding it up except its own
+flapping.
+
+*** 1) Making the bird physically honest
+- Pillars don't count as weight; each crank disk is 2.5 g. The bird is 23 g = 226 mN.
+- Fake forces to simulate hover removed (the stabilizing body wrench, the render assists), reduced gravity
+  removed.
+- Hover-friendly physical properties: level stroke plane, lighter tendon damping and no pitch armature, so
+  the passive pitch is periodic.
+- Body inertia spread out (same mass). Without it the body recoiled against every wingbeat and lost all its
+  lift: -15 mN free vs 239 mN held.
+- Key finding: The bird must hover pitched ≈21 degrees.
+
+*** 2) The foundation: drive, state, launch
+- *Controls:* a crank speed plus 3 Fourier harmonics per crank for all four cranks (25 numbers). Different
+  waveforms on left/right and front/back cranks produce roll, pitch and yaw moments. That is the only way
+  the bird can steer.
+- *Phase-locked cranks:* the plain speed servo let the crank phases drift apart by a fraction of a degree
+  per wingbeat, which slowly changed the wing motion and pushed the bird out of trim. Locking each crank to
+  its commanded angle (like an encoder) fixed it. Before the lock, candidates that looked stable still fell.
+- *Once-per-wingbeat state:* the policies see 12 numbers once per wingbeat: position, attitude, velocity,
+  rotation rate. The timestep is set so a wingbeat is a whole number of steps, so the state is always
+  sampled at the same point in the stroke.
+- *Launch cradle:* releasing from rest while the wings spin up tumbles the bird. A cradle holds only its
+  /average/ pose while the flapping settles, then lets go, so at release the bird is already on its natural
+  flapping cycle.
+
+*** 3) Open Loop Policy
+- *Trim:* whatever the cradle is still pushing when it lets go is exactly what the open loop fails to
+  supply. A Newton solver adjusts the harmonics and tilt until the cradle carries nothing. Result: 8.54 Hz,
+  harmonic depths of ≈7% at most.
+- *Trimmed is not stable:* flown with no feedback, the bird tips over after 40-50 wingbeats (≈5 s). The
+  linear model explains it: a small error grows ≈7.6% per wingbeat. This is a property of flappers, not a
+  bad waveform; open loop cannot hold hover.
+- *Search:* CMA-ES (evolutionary, no gradients) explored only waveform changes that keep the bird trimmed,
+  scoring how long and how level it flies. Best: ≈49 wingbeats vs 38-47 for the trim across timesteps. A
+  real but small gain, which confirms the ceiling.
+
+*** 4) Closed Loop Policy
+- *Linear model:* perturb each state and each harmonic slightly, fly one wingbeat, measure the response.
+  This gives a per-wingbeat linear model of the bird.
+- *LQR:* the optimal linear controller on that model. It picks harmonic corrections for the next wingbeat
+  from the current state; errors shrink by at least 34% per wingbeat.
+- *MLP:* the LQR is distilled into the MLP (12 -> 64 -> 64 -> 24) by training it to copy the LQR's
+  outputs. It corrects the Fourier waveform once per wingbeat, bounded to ±15% depth.
+- *Result:* hovers 14 s+ with < 0.4° tilt and ≈1 cm drift. Recovers from pushes up to 0.8 m/s and 4 rad/s
+  roll/pitch.
+
+*** 5) What diffsim did and didn't do
+- Training through MJX over several wingbeats diverged, both from scratch and starting from the LQR. The
+  bird is unstable and the tendon/contact dynamics are stiff, so gradients over long horizons blow up.
+- Gradients over /one/ wingbeat are accurate and match the finite differences. Diffsim could build the
+  linear model, but the shipped one came from CPU finite differences.
+- *Takeaway:* for this bird, linearize one wingbeat and use classical control. Long-horizon training through
+  diffsim doesn't work here.
+
+*** 6) Where it lives
+- ~designs/hummer/free-hover/control.tg~ holds both policies; ~control_open_loop.tg~ is the CMA-ES open loop.
+- To fly: pick one in the GUI's Viewer tab (P pushes the bird, O toggles the closed loop), or
+  ~mjpython src/view_free_hover.py~.
+  
+  
+* TODO List
+- Add some realistic IMU noise. Give MLP history, see if it can learn even with noise.
+- Try flying some crazy manuevers
+- Try adding Wind
