@@ -49,7 +49,7 @@ from gui.sims import (
 )
 from morphology.tg_parser import load_morphology
 from runtime.control_signal import load_control
-from hover.policy import has_flight_policy
+from hover.policy import has_command_loop, has_flight_policy
 from runtime.crank import CRANK_ACTUATORS
 
 
@@ -516,6 +516,55 @@ class DesignPane:
             justify=tk.LEFT,
         ).pack(side=tk.TOP, anchor=tk.W, padx=12)
 
+        # Command flight (a flight control with command_loop, e.g. designs/hummer/free-hover/command.tg): the
+        # buttons send one line per click to the viewer's stdin (src/view_free_hover.py --stdin).
+        self.viewer_sensors = tk.BooleanVar(value=False)
+        self.command_speed = tk.DoubleVar(value=0.3)
+        self.command_state = tk.StringVar(value="no command viewer running")
+        box = ttk.LabelFrame(self.viewer_tab, text="Command flight (controls with command_loop)", padding=(12, 10))
+        box.pack(side=tk.TOP, fill=tk.X, padx=12, pady=12)
+        row = ttk.Frame(box)
+        row.pack(side=tk.TOP, fill=tk.X)
+        for name, label in (("HOVER", "Hover"), ("FWD", "Forward"), ("REV", "Reverse"), ("UP", "Up"), ("DOWN", "Down")):
+            ttk.Button(row, text=label, width=9, command=lambda n=name: self.send_command(n)).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(row, text="speed (m/s)").pack(side=tk.LEFT, padx=(12, 4))
+        speed_txt = tk.StringVar(value="0.30")
+        ttk.Scale(row, from_=0.05, to=0.4, variable=self.command_speed, length=140,
+                  command=lambda v: speed_txt.set(f"{float(v):.2f}")).pack(side=tk.LEFT)
+        ttk.Label(row, textvariable=speed_txt, width=5).pack(side=tk.LEFT, padx=(4, 0))
+        row2 = ttk.Frame(box)
+        row2.pack(side=tk.TOP, fill=tk.X, pady=(8, 0))
+        ttk.Button(row2, text="Push", command=lambda: self.send_viewer("PUSH")).pack(side=tk.LEFT)
+        ttk.Button(row2, text="Toggle loop", command=lambda: self.send_viewer("LOOP")).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Checkbutton(row2, text="Fly on sensors (mocap position + IMU, datasheet noise; applies at launch)",
+                        variable=self.viewer_sensors).pack(side=tk.LEFT, padx=(16, 0))
+        ttk.Label(row2, textvariable=self.command_state).pack(side=tk.LEFT, padx=(16, 0))
+        ttk.Label(
+            box,
+            text="Launch the viewer on a command control, then steer: each command holds until the next one; "
+            "speeds are clipped to the policy's measured envelope (FWD 0.3, REV 0.4, UP 0.36, DOWN 0.3 m/s for "
+            "command.tg). The viewer window's keys do the same: Up/Down arrow = forward/reverse, Page Up/Down = "
+            "up/down, Home = hover.",
+            wraplength=720,
+            justify=tk.LEFT,
+        ).pack(side=tk.TOP, anchor=tk.W, pady=(8, 0))
+
+    def send_viewer(self, line: str) -> None:
+        proc = self.viewer_proc
+        if not (proc and proc.poll() is None and proc.stdin):
+            self.command_state.set("launch the viewer on a command control first")
+            return
+        try:
+            proc.stdin.write(line + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            self.command_state.set("viewer closed")
+            return
+        self.command_state.set(f"sent: {line}")
+
+    def send_command(self, name: str) -> None:
+        self.send_viewer(name if name == "HOVER" else f"{name} {float(self.command_speed.get()):.2f}")
+
     def launch_viewer(self) -> None:
         if self.viewer_proc and self.viewer_proc.poll() is None:
             self.viewer_proc.terminate()
@@ -544,7 +593,14 @@ class DesignPane:
             cmd += ["--scene", str(self.viewer_scene_path)]
             if self.viewer_color.get():
                 cmd.append("--color")
-        self.viewer_proc = subprocess.Popen(cmd, cwd=str(ROOT), env=env)
+        command = flight and has_command_loop(self.control_var.get())
+        if command:
+            cmd.append("--stdin")
+            if self.viewer_sensors.get():
+                cmd.append("--sensors")
+        self.viewer_proc = subprocess.Popen(cmd, cwd=str(ROOT), env=env, stdin=subprocess.PIPE if command else None,
+                                            text=True)
+        self.command_state.set("command viewer: use the buttons" if command else "not a command control")
         self.status.set(f"Launched viewer for {_short_path(self.tg_var.get())}")
 
     def close_viewer(self) -> None:

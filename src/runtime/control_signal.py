@@ -20,7 +20,7 @@ from morphology.tg_parser import load_morphology
 # names below, in runtime.crank.CRANK_ACTUATORS order. The flight keys belong to the free-flight policy
 # (hover.policy) and are not part of the drive.
 CRANKS = ("L_t1", "L_t4", "R_t1", "R_t4")
-FLIGHT_KEYS = ("hover_attitude", "phase_lock", "closed_loop")
+FLIGHT_KEYS = ("hover_attitude", "phase_lock", "closed_loop", "command_loop", "command_observer")
 
 
 @dataclass(frozen=True)
