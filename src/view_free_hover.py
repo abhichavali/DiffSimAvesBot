@@ -9,8 +9,12 @@ per-wingbeat MLP, if the file names one) corrects the harmonics once per wingbea
 bird after release. In the viewer window: P = push the bird (random 0.3 m/s + 1.5 rad/s kick),
 O = toggle closed / open loop. The GUI's Viewer tab launches this for flight controls.
 
-A command-following control (``command_loop``, hover.command.LiveCommand) is steered live: Up arrow = FWD,
-Down arrow = REV, Page Up = UP, Page Down = DOWN, Home = HOVER, each at the policy's operating speed (0.3 m/s).
+A command-following control (``command_loop``, hover.command.LiveCommand) is driven like a game character,
+seen side-on (screen right = the bird's forward): HOLD Right / Left = fly forward / back, HOLD Up / Down = climb /
+descend (two keys combine, e.g. forward + up), release = hover in place; Home = hover, + / - = faster / slower
+(clipped to the policy's measured envelope). Held keys need key-release events, which MuJoCo's viewer does not
+report: they come from ``pynput`` (a global keyboard listener; on macOS allow Input Monitoring for the terminal
+that runs mjpython). Without it (or without that permission) each tap toggles a direction on / off instead.
 ``--stdin`` also reads one command per line (``FWD``, ``UP 0.2``, ``HOVER``, ``PUSH``, ``LOOP``): the GUI's
 Viewer tab drives the bird through it. ``--sensors`` flies the servo on its observer (``command_observer``:
 mocap position with 5 ms latency + the IMU attitude filter and gyro, datasheet noise x ``--noise-scale``)
@@ -39,8 +43,63 @@ from design_paths import FREE_HOVER_TG
 from hover import launch as L
 from hover.policy import load_flight_policy
 
-# GLFW key codes (mujoco.viewer passes them to key_callback)
-KEY_COMMANDS = {265: "FWD", 264: "REV", 266: "UP", 267: "DOWN", 268: "HOVER"}
+# GLFW key codes (mujoco.viewer passes key PRESSES only to key_callback)
+KEY_ARROWS = {262: "right", 263: "left", 265: "up", 264: "down"}
+KEY_HOME, KEY_PLUS, KEY_MINUS, KEY_KP_ADD, KEY_KP_SUB = 268, 61, 45, 334, 333
+
+
+class Keys:
+    """Arrow-key driving: held keys (pynput press / release, if it delivers events) or, as a fallback, toggles
+    from the viewer's key presses. ``axes()`` -> (forward -1/0/+1, up -1/0/+1); a latched command (GUI / stdin /
+    toggles) applies while no arrow is held."""
+
+    def __init__(self):
+        self.held, self.lock = set(), threading.Lock()
+        self.hold_mode = False               # True once pynput has delivered an arrow event
+        self.latch = [0, 0]
+
+    def start_listener(self) -> str:
+        try:
+            from pynput import keyboard
+        except Exception as e:                       # noqa: BLE001 (not installed / no display backend)
+            return f"hold-to-move unavailable ({type(e).__name__}: {e}); arrows toggle a direction instead"
+        names = {keyboard.Key.right: "right", keyboard.Key.left: "left", keyboard.Key.up: "up", keyboard.Key.down: "down"}
+
+        def press(k):
+            if k in names:
+                with self.lock:
+                    if not self.hold_mode:
+                        self.hold_mode, self.latch = True, [0, 0]
+                    self.held.add(names[k])
+
+        def release(k):
+            if k in names:
+                with self.lock:
+                    self.held.discard(names[k])
+        try:
+            keyboard.Listener(on_press=press, on_release=release, daemon=True).start()
+        except Exception as e:                       # noqa: BLE001
+            return f"hold-to-move unavailable ({type(e).__name__}: {e}); arrows toggle a direction instead"
+        return "hold the arrows to move (release = hover); if nothing moves, arrows toggle instead"
+
+    def viewer_press(self, name: str) -> None:
+        """An arrow press from the viewer: ignored when held keys work, else toggles that direction."""
+        with self.lock:
+            if self.hold_mode:
+                return
+            i, sgn = {"right": (0, 1), "left": (0, -1), "up": (1, 1), "down": (1, -1)}[name]
+            self.latch[i] = 0 if self.latch[i] == sgn else sgn
+
+    def set_latch(self, f: int, z: int) -> None:
+        with self.lock:
+            self.latch = [f, z]
+
+    def axes(self) -> tuple[int, int]:
+        with self.lock:
+            h = self.held
+            f = ("right" in h) - ("left" in h)
+            z = ("up" in h) - ("down" in h)
+            return (f, z) if h else tuple(self.latch)
 
 
 def read_stdin(q: queue.Queue) -> None:
@@ -89,14 +148,24 @@ def main() -> None:
     state = {"closed": has_loop and not args.open_loop, "push": False}
     cmds: queue.Queue = queue.Queue()
     rng = np.random.default_rng()
+    keys = Keys()
+    if live is not None:
+        drive_speed = [live.default_speed("FWD"), live.default_speed("UP")]     # m/s: forward/back, up/down
+        v_top = max(live.envelope.values()) if live.envelope else 1.0
 
     def key(code: int) -> None:
         if code == ord("P"):
             state["push"] = True
         elif code == ord("O") and has_loop:
             cmds.put("LOOP")
-        elif live is not None and code in KEY_COMMANDS:
-            cmds.put(KEY_COMMANDS[code])
+        elif live is not None and code in KEY_ARROWS:
+            keys.viewer_press(KEY_ARROWS[code])
+        elif live is not None and code == KEY_HOME:
+            keys.set_latch(0, 0)
+        elif live is not None and code in (KEY_PLUS, KEY_MINUS, KEY_KP_ADD, KEY_KP_SUB):
+            d = 0.05 if code in (KEY_PLUS, KEY_KP_ADD) else -0.05
+            drive_speed[:] = [float(np.clip(v + d, 0.05, v_top)) for v in drive_speed]
+            print(f"drive speed {drive_speed[0]:.2f} m/s (clipped per axis to the envelope)", flush=True)
 
     def handle(line: str, s) -> None:
         word, *rest = line.split()
@@ -110,19 +179,22 @@ def main() -> None:
                 live.refs.p = s[:3].copy()
             print(f"closed loop {'ON' if state['closed'] else 'OFF'}", flush=True)
         elif live is not None and word in ("HOVER", "FWD", "REV", "UP", "DOWN"):
-            v = live.set_command(word, float(rest[0]) if rest else None)
-            print(f"command {word} {v:.2f} m/s", flush=True)
+            f, z = {"HOVER": (0, 0), "FWD": (1, 0), "REV": (-1, 0), "UP": (0, 1), "DOWN": (0, -1)}[word]
+            if rest:
+                drive_speed[0 if f else 1] = abs(float(rest[0]))
+            keys.set_latch(f, z)
+            print(f"command {word}" + (f" {float(rest[0]):.2f} m/s" if rest else ""), flush=True)
         else:
             print(f"ignored: {line!r}", flush=True)
 
     if args.stdin:
         threading.Thread(target=read_stdin, args=(cmds,), daemon=True).start()
-    keys = "P = push, O = toggle closed/open loop"
+    help_keys = "P = push, O = toggle closed/open loop"
     if live is not None:
-        keys += ", Up/Down arrow = FWD/REV, PgUp/PgDn = UP/DOWN, Home = HOVER"
+        help_keys += ", Right/Left = forward/back, Up/Down = climb/descend, Home = hover, +/- = speed"
         print(f"command control ({'sensors: ' + 'pos,att,w observer' if sensor else 'true state'}); envelope "
-              + ", ".join(f"{k} {v:g}" for k, v in live.envelope.items()) + " m/s", flush=True)
-    print(f"released; {'closed' if state['closed'] else 'open'} loop. Keys: {keys}.", flush=True)
+              + ", ".join(f"{k} {v:g}" for k, v in live.envelope.items()) + " m/s; " + keys.start_listener(), flush=True)
+    print(f"released; {'closed' if state['closed'] else 'open'} loop. Keys: {help_keys}.", flush=True)
     sync_every = max(1, round(args.speed / 60.0 / m.opt.timestep))
     e_f = np.asarray(fp.command["e_f"]) if live is not None else None
     s = np.zeros(12)
@@ -131,6 +203,8 @@ def main() -> None:
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         viewer.cam.trackbodyid = bird.af
         viewer.cam.distance = 0.7
+        if live is not None:                 # side-on: +x (the bird's forward) is screen right, as the arrows
+            viewer.cam.azimuth, viewer.cam.elevation = 90.0, -12.0
         wall0, sim0, step = time.time(), d.time, 0
         while viewer.is_running():
             if step % n_beat == 0:
@@ -146,6 +220,9 @@ def main() -> None:
                 v_mean = (s[:3] - p_prev) / beat_s              # mean motion over the last wingbeat
                 obs = s if sensor is None else sensor.read(d, s)
                 if live is not None:
+                    f, z = keys.axes()
+                    k = math.sqrt(0.5) if f and z else 1.0      # a diagonal keeps the single-axis total speed
+                    live.set_velocity(k * f * drive_speed[0], k * z * drive_speed[1])
                     corr = live(obs) if state["closed"] else 0.0
                 else:
                     corr = fp.correction(s) if state["closed"] else 0.0
@@ -157,6 +234,8 @@ def main() -> None:
                             f"fwd {v_mean @ e_f:+.2f} m/s  up {v_mean[2]:+.2f} m/s  (mean over the last wingbeat)\n"
                             f"pos err {np.linalg.norm(s[:3] - live.x_ref[:3]) * 100 if live.x_ref is not None else 0:.1f} cm"
                             f"  tilt {tilt:.1f} deg  alt {s[2]:+.2f} m")
+                    text += ("\nhold arrows: right/left fwd/back, up/down climb/descend" if keys.hold_mode else
+                             "\narrows toggle: right/left fwd/back, up/down climb/descend, Home hover")
                     viewer.set_texts((None, mujoco.mjtGridPos.mjGRID_TOPLEFT, "Command", text))
                 if step % (10 * n_beat) == 0:
                     print(f"t {d.time - sim0:6.2f} s  tilt {tilt:5.1f} deg  "

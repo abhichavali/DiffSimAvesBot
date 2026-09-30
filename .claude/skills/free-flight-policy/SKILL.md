@@ -185,8 +185,9 @@ uv run pytest -q tests/test_hover_command.py    # incl. live (streaming) == eval
 `mjpython src/view_free_hover.py [--control ...] [--speed 0.25]` (macOS needs the
 `DYLD_LIBRARY_PATH` from AGENTS.md Gotchas), or open the design in the GUI and use the
 Viewer tab. Keys: P = random push, O = toggle the closed loop. A command control
-(`--control designs/hummer/free-hover/command.tg [--sensors]`): Up / Down arrow = FWD / REV, Page Up / Down =
-UP / DOWN, Home = HOVER; the GUI's Viewer tab has buttons + a speed slider (it pipes `--stdin` lines).
+(`--control designs/hummer/free-hover/command.tg [--sensors]`), seen side-on: hold Right / Left = forward / back, hold Up / Down = climb / descend (combine for a diagonal), release = hover, Home = hover, + / - = speed; hold-to-move needs pynput (macOS: allow Input Monitoring), else each tap toggles. A diagonal flies each
+axis at 1/sqrt(2) of the speed (not in the random-command evaluation). The GUI's Viewer tab has buttons + a speed
+slider (it pipes `--stdin` lines).
 
 ## What does not work (don't repeat)
 
