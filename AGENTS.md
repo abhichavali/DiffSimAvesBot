@@ -212,7 +212,7 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
 - **Command flight** (`designs/hummer/free-hover/command.tg`: `command_loop` + `command_observer` keys): a
   one-trim linear servo that follows HOVER / FWD / REV / UP / DOWN (0.3 m/s; envelope FWD 0.3, REV 0.4, UP 0.36,
   DOWN 0.3 m/s), learned on the GPU in ~3.5 min (`opt/hover_cmd.py learn`, then `export` writes the `.tg`).
-  Steer it in `src/view_free_hover.py` (arrows / PgUp / PgDn / Home) or the GUI's Viewer tab buttons; `--sensors`
+  Steer it in `src/view_free_hover.py` (hold the arrow keys, like a game; `pynput` for key releases) or the GUI's Viewer tab buttons; `--sensors`
   flies it on mocap position + IMU (the minimal input set that follows every command). Report: finding
   `2026-09-30-command-following-policy`; workflow: the `free-flight-policy` skill, "Command flight".
 - **Any change to the free bird or its physics invalidates its policy**: re-derive it

@@ -543,8 +543,9 @@ class DesignPane:
             box,
             text="Launch the viewer on a command control, then steer: each command holds until the next one; "
             "speeds are clipped to the policy's measured envelope (FWD 0.3, REV 0.4, UP 0.36, DOWN 0.3 m/s for "
-            "command.tg). The viewer window's keys do the same: Up/Down arrow = forward/reverse, Page Up/Down = "
-            "up/down, Home = hover.",
+            "command.tg). In the viewer window the bird is driven like a game character, seen side-on: hold "
+            "Right/Left = forward/back, hold Up/Down = climb/descend, release = hover, Home = hover, +/- = speed "
+            "(hold-to-move needs pynput; on macOS allow Input Monitoring for the terminal, else each tap toggles).",
             wraplength=720,
             justify=tk.LEFT,
         ).pack(side=tk.TOP, anchor=tk.W, pady=(8, 0))

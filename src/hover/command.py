@@ -596,6 +596,19 @@ class LiveCommand:
         self.v_cmd = self.speed * self.dirs[c]
         return self.speed
 
+    def set_velocity(self, v_fwd, v_up) -> tuple[float, float]:
+        """Command a forward (+) / reverse (-) and a climb (+) / descent (-) speed at once, each clipped to its
+        axis's envelope (the viewer's arrow keys). A combined command superposes the per-axis tables, as the
+        references of a transition do; it was not in the random-command evaluation (single-axis segments)."""
+        env = lambda name, v: min(abs(float(v)), self.envelope.get(name, abs(float(v))))
+        vf = math.copysign(env("FWD" if v_fwd >= 0 else "REV", v_fwd), v_fwd) if v_fwd else 0.0
+        vz = math.copysign(env("UP" if v_up >= 0 else "DOWN", v_up), v_up) if v_up else 0.0
+        names = ([("FWD" if vf > 0 else "REV")] if vf else []) + ([("UP" if vz > 0 else "DOWN")] if vz else [])
+        self.command = "+".join(names) or "HOVER"
+        self.speed = math.hypot(vf, vz)
+        self.v_cmd = vf * self.dirs[1] + vz * self.dirs[3]
+        return vf, vz
+
     def reset(self):
         self.refs.reset()
         self.zeta = np.zeros(3)

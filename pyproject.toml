@@ -9,6 +9,7 @@ dependencies = [
     "mujoco>=3.4.0",
     "mujoco-mjx>=3.10.0",
     "numpy>=2.4.2",
+    "pynput>=1.7 ; sys_platform == 'darwin'",
 ]
 
 [tool.uv]

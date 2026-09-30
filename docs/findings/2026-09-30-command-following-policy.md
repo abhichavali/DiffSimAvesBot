@@ -78,8 +78,8 @@ accelerometer dead-reckoning variant is lost.
 (the P observer).
 
 - Viewer: `src/view_free_hover.py --control designs/hummer/free-hover/command.tg [--sensors] [--noise-scale 1]`.
-  Keys: Up arrow = FWD, Down arrow = REV, Page Up = UP, Page Down = DOWN, Home = HOVER (each at 0.3 m/s,
-  clipped to the envelope), P = push, O = toggle the loop. `--stdin` also takes one command per line
+  Keys (seen side-on): hold Right / Left = forward / back, hold Up / Down = climb / descend (combine for a diagonal), release = hover, Home = hover, + / - = speed; hold-to-move needs pynput (macOS: allow Input Monitoring), else each tap toggles (speeds clipped to the envelope; a diagonal flies each axis at 1/sqrt(2)),
+  P = push, O = toggle the loop. `--stdin` also takes one command per line
   (`FWD`, `UP 0.2`, `HOVER`, `PUSH`, `LOOP`).
 - GUI (`plot_fixed_frequency_gui.py`), Viewer tab, box "Command flight (controls with command_loop)": buttons
   Hover / Forward / Reverse / Up / Down, a speed slider (0.05-0.4 m/s), Push, Toggle loop, and a "Fly on sensors"
