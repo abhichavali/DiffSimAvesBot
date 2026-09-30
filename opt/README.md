@@ -18,6 +18,7 @@ simulation (library: `src/codesign/`), plus the free-flight hover tools (library
 | `distill_hover.py` | LQR gain (`python -m hover.lqr`) -> the closed-loop MLP `.npz`; `--ctrl` distills a `hover.reduced` controller onto its own inputs (`--noise-aug`) |
 | `train_hover.py` | MJX BPTT of the hover MLP. Kept as a negative result: it diverges past one wingbeat |
 | `hover_gpu.py` | The hover tools on a GPU (MJX, vmapped flights): `parity` (vs CPU), `trim`, `linearize`, `verify`, `sweep`, `mc`, `derive` (the whole loop), `bench`; module docstring for commands |
+| `hover_cmd.py` | Command flight of the free bird (HOVER / FWD / REV / UP / DOWN) on the GPU: `learn` (~208 s warm), `dt`, `sensors`, `cpu` (CPU reference), `all`, `export` (-> a flight control `.tg` the viewer / GUI steer); finding `2026-09-30-command-following-policy` |
 
 `src/codesign/`: `rig.py` (compile + settle a `.tg`, integrator/dt variants, tendon
 pairs), `genome.py` (the packed theta), `metrics.py` (theta -> `Metrics` rollout),

@@ -1,11 +1,14 @@
 """The free-flight policy a control .tg carries: the open loop (per-crank Fourier drive + how to launch)
-and, optionally, the closed loop (a per-wingbeat MLP next to it).
+and, optionally, the closed loop (a per-wingbeat MLP next to it) or a command-following loop.
 
 A flight control .tg is an ordinary control file (runtime.control_signal) plus:
     a_<n>.<crank> / b_<n>.<crank> = ...   per-crank harmonics, absolute rad/s (crank in L_t1 L_t4 R_t1 R_t4)
     hover_attitude = w x y z               release attitude of the bird (the hover tilt)
     phase_lock = 20                        crank encoder phase-lock gain [1/s] (hover.launch.Drive)
     closed_loop = mlp_closed_loop.npz      per-wingbeat MLP, path relative to this file (omit = open loop)
+    command_loop = command_policy.npz      command-following servo (hover.command: HOVER / FWD / REV / UP / DOWN,
+                                           flown live by hover.command.LiveCommand; opt/hover_cmd.py export)
+    command_observer = command_observer.npz  its sensor-fed observer (hover.reduced lqg on pos,att,w; optional)
 The crank speed a0 must equal 2 pi fundamental_frequency (the crank-locked clock).
 """
 
@@ -29,6 +32,8 @@ class FlightPolicy:
     phase_lock: float
     mlp: dict | None           # {"layers": [(W, b), ...], "obs_scale": (12,), "u_max": float} or None
     path: Path
+    command: dict | None = None    # hover.command.load_policy of command_loop, or None
+    observer: dict | None = None   # hover.reduced.load_controller of command_observer, or None
 
     @property
     def K(self) -> int:
@@ -60,6 +65,12 @@ def has_flight_policy(path) -> bool:
     return "hover_attitude" in _flight_values(Path(path))
 
 
+def has_command_loop(path) -> bool:
+    """A flight control flown with live commands (command_loop): the viewer / GUI steer it."""
+    fv = _flight_values(Path(path))
+    return "hover_attitude" in fv and "command_loop" in fv
+
+
 def load_mlp(path) -> dict:
     z = np.load(path)
     n = sum(1 for k in z.files if k.startswith("W"))
@@ -87,12 +98,19 @@ def load_flight_policy(path) -> FlightPolicy:
     a = np.array([pa for pa, _ in per]) / control.a0
     b = np.array([pb for _, pb in per]) / control.a0
     mlp = load_mlp(path.parent / fv["closed_loop"]) if "closed_loop" in fv else None
+    command = observer = None
+    if "command_loop" in fv:
+        from hover.command import load_policy          # hover.command -> hover.lqr -> this module
+        command = load_policy(path.parent / fv["command_loop"])
+    if "command_observer" in fv:
+        from hover.reduced import load_controller
+        observer = load_controller(path.parent / fv["command_observer"])
     return FlightPolicy(control, np.concatenate([[0.0], a.ravel(), b.ravel()]), att / np.linalg.norm(att),
-                        float(re.match(r"[-+.\deE]+", fv.get("phase_lock", "20")).group()), mlp, path)
+                        float(re.match(r"[-+.\deE]+", fv.get("phase_lock", "20")).group()), mlp, path, command, observer)
 
 
 def write_flight_control(path, *, a0, depth_a, depth_b, attitude, phase_lock=20.0, closed_loop=None,
-                         bird="hummer", header="") -> None:
+                         bird="hummer", header="", command_loop=None, command_observer=None) -> None:
     """Write a flight control .tg: crank speed a0 [rad/s], per-crank harmonic DEPTHS (4, K) as fractions of a0."""
     depth_a, depth_b = np.asarray(depth_a), np.asarray(depth_b)
     K = depth_a.shape[1]
@@ -109,4 +127,8 @@ def write_flight_control(path, *, a0, depth_a, depth_b, attitude, phase_lock=20.
               f"phase_lock = {phase_lock:g}"]
     if closed_loop:
         lines.append(f"closed_loop = {closed_loop}")
+    if command_loop:
+        lines.append(f"command_loop = {command_loop}")
+    if command_observer:
+        lines.append(f"command_observer = {command_observer}")
     Path(path).write_text("\n".join(lines) + "\n")

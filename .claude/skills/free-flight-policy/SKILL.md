@@ -36,7 +36,8 @@ flown only by its four crank motors: **no force of any kind acts on it after rel
 On top of a plain control file: `a_<n>.<crank>` / `b_<n>.<crank>` (absolute rad/s, cranks
 `L_t1 L_t4 R_t1 R_t4`), `hover_attitude = w x y z` (release attitude, the ~21 deg hover
 tilt), `phase_lock = 20` (1/s), `closed_loop = <file>.npz` (relative to the `.tg`; omit =
-open loop). `a0` must equal `2 pi fundamental_frequency` (checked on load). Read/write
+open loop), or `command_loop = <policy>.npz` (+ optional `command_observer = <lqg>.npz`) for command flight
+(see "Command flight"). `a0` must equal `2 pi fundamental_frequency` (checked on load). Read/write
 with `load_flight_policy` / `write_flight_control`, never by hand-editing numbers.
 
 ## On the GPU (primary): `opt/hover_gpu.py`
@@ -151,11 +152,41 @@ uv run python opt/hover_mc.py --ctrl $D/ctl.npz --noise-scales 1 --pos-latency-m
 - Monte Carlo runs on CPU (`hover_mc.py`, one flight per core, ~25 core-s per 120 wingbeats), not MJX:
   the sensor model and observers are CPU-only and the MJX closed loop has no free-flight parity check.
 
+## Command flight (HOVER / FWD / REV / UP / DOWN): `hover.command`, `opt/hover_cmd.py`
+
+The bird follows velocity commands with a one-trim linear servo on the per-wingbeat hover model: per-command
+steady-state feedforward tables (a tilt-bounded LP on A, B, drift, refined by one batched ILC pass of
+constant-command flights), rate-limited references (x_ref, u_ff; attitude / feedforward one wingbeat ahead),
+and an LQR with a position integral (handed off on deceleration, gated 8 wingbeats after a stop). Full report,
+numbers, caveats and dead ends: finding `2026-09-30-command-following-policy`.
+
+```bash
+P=".venv/bin/python opt/hover_cmd.py"          # on the GPU box, JAX_COMPILATION_CACHE_DIR set
+$P learn --out opt/runs_cmd/R                   # release, x64 linearize, tables, 2 ILC passes, eval: ~208 s warm
+$P dt --run opt/runs_cmd/R --dt-ms 0.10 0.16    # the fixed policy at other timesteps
+$P sensors --run opt/runs_cmd/R                 # P = pos,att,w observer (recommended), N = IMU only
+JAX_PLATFORMS=cpu $P cpu --run opt/runs_cmd/R   # CPU reference on 16 eval flights (contacts off)
+uv run python opt/hover_cmd.py export --run opt/runs_cmd/R --out designs/hummer/free-hover/command.tg
+uv run pytest -q tests/test_hover_command.py    # incl. live (streaming) == evaluated controllers to 1e-12
+```
+
+- `export` writes the flight control: the drive / trim of `--control`, `command_loop` (the policy npz + the
+  sensor-flight servo gain, climb shaping and the measured envelope) and `command_observer` (the pos,att,w LQG,
+  designed from `opt/runs_gpu/ref/lqr_sensor.npz`, the x64 sensor model).
+- `hover.command.LiveCommand` flies it with a command set at any wingbeat (`RefStream` = `build_refs` one
+  wingbeat at a time): what the viewer and the GUI use. Speeds clip to the envelope.
+- Minimal inputs: mocap position + IMU attitude filter + gyro (`pos,att,w`) follows all five commands at
+  datasheet noise; nothing without position does (IMU-only holds attitude but walks metres; every accelerometer
+  dead-reckoning variant was lost).
+- The learn stage is not bit-reproducible (float32 ILC): check a new run's gates, don't assume them.
+
 ## Watch it
 
 `mjpython src/view_free_hover.py [--control ...] [--speed 0.25]` (macOS needs the
 `DYLD_LIBRARY_PATH` from AGENTS.md Gotchas), or open the design in the GUI and use the
-Viewer tab. Keys: P = random push, O = toggle the closed loop.
+Viewer tab. Keys: P = random push, O = toggle the closed loop. A command control
+(`--control designs/hummer/free-hover/command.tg [--sensors]`): Up / Down arrow = FWD / REV, Page Up / Down =
+UP / DOWN, Home = HOVER; the GUI's Viewer tab has buttons + a speed slider (it pipes `--stdin` lines).
 
 ## What does not work (don't repeat)
 

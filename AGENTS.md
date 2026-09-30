@@ -74,9 +74,9 @@ context (any agent that can spawn subagents can use its prompt).
 | `src/runtime/` | CPU runtime (the reference) | `sim.py` (`PlateWingSim`, `rest_state`: the canonical step and force order); `aero.py` (blade-element aero, the one home of aero coefficients and `set_unsteady_aero`); `control_signal.py`, `crank.py`, `wing_pitch.py`, `disk_orientation.py`, `eagle_*.py`, `wing_cables.py`, `realtime.py` |
 | `src/runtime/mjx/` | JAX/MJX port (jit/vmap, differentiable) | `aero.py`, `aero_runtime.py` (`aero_wrench`), `rollout.py` (`physics_step`, `build_drive_config`, `simulate`) |
 | `src/codesign/` | co-design library | `rig`, `genome`, `metrics` (`build_rollout`), `loss`, `train`, `cpu_check`, `artifacts` (design dirs: write + read back) |
-| `src/hover/` | free-flight hover of the standalone bird | `launch` (phase-locked drive, launch cradle, strobed state, `fly`), `policy` (flight control `.tg` + MLP load/write), `trim` / `lqr` (CLIs), `sensors` (IMU + mocap sensor model), `reduced` (SOF / LQG on a channel subset; CLI), `evaluate` (policy/sensor flags shared by the opt tools); device (MJX, GPU) port: `mjx_flight` (released flight, batched; CPU-exact in x64), `mjx_sensors` (sensor model + observers), `mjx_cradle` (cradle + trim); `env` (old MJX loop for BPTT, not CPU-exact); the `free-flight-policy` skill |
-| `opt/` | co-design and free-flight CLIs | `optimize_control.py`, `evolve_codesign.py`, `design_io.py` (CPU replay/certify), `run_gui.py`, `diag_mjx_cpu_parity.py`; hover: `hover_gpu.py` (the GPU path: parity / trim / linearize / verify / sweep / mc / derive / bench), `verify_hover.py`, `push_sweep.py`, `hover_mc.py`, `distill_hover.py`, `train_hover.py`; see `opt/README.md` |
-| `src/*.py` | runners and viewers | `run_fixed_frequency.py`, `run_mjx_fixed_frequency.py`, `view_fixed_frequency.py`, `view_eagle.py`, `view_free_hover.py` (free flight under a flight control); `flying.py` (bench scene -> free-flying airframe) |
+| `src/hover/` | free-flight hover of the standalone bird | `launch` (phase-locked drive, launch cradle, strobed state, `fly`), `policy` (flight control `.tg` + MLP load/write), `trim` / `lqr` (CLIs), `sensors` (IMU + mocap sensor model), `reduced` (SOF / LQG on a channel subset; CLI), `evaluate` (policy/sensor flags shared by the opt tools); device (MJX, GPU) port: `mjx_flight` (released flight, batched; CPU-exact in x64), `mjx_sensors` (sensor model + observers), `mjx_cradle` (cradle + trim); `env` (old MJX loop for BPTT, not CPU-exact); command flight (HOVER / FWD / REV / UP / DOWN): `command` (servo, tables, ILC, metrics; `LiveCommand` flies a live command), `mjx_command` (its batched device flights); the `free-flight-policy` skill |
+| `opt/` | co-design and free-flight CLIs | `optimize_control.py`, `evolve_codesign.py`, `design_io.py` (CPU replay/certify), `run_gui.py`, `diag_mjx_cpu_parity.py`; hover: `hover_gpu.py` (the GPU path: parity / trim / linearize / verify / sweep / mc / derive / bench), `verify_hover.py`, `push_sweep.py`, `hover_mc.py`, `distill_hover.py`, `train_hover.py`; `hover_cmd.py` (command flight: learn / dt / sensors / cpu / export); see `opt/README.md` |
+| `src/*.py` | runners and viewers | `run_fixed_frequency.py`, `run_mjx_fixed_frequency.py`, `view_fixed_frequency.py`, `view_eagle.py`, `view_free_hover.py` (free flight under a flight control; steers a command control live); `flying.py` (bench scene -> free-flying airframe) |
 | `src/demos/` | headless MP4 renders | `render_*.py` (`--self-check` asserts without rendering) |
 | `plot_fixed_frequency_gui.py`, `src/gui/` | Tk design inspector and its simulations | |
 | `tests/`, `tests/golden/` | pytest suite; golden behavior harness | `tests/golden/harness.py` docstring |
@@ -209,9 +209,15 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
   keeps every verify / sweep verdict and stays within a few % of a push (`mjx-free-flight-parity` finding).
   Device knobs that matter: never `iterations=1` (it walks the trim: 5-8x the error), line search 8 is enough,
   contacts off (the free bird has none). Confirm a promoted policy once with the CPU `opt/verify_hover.py`.
+- **Command flight** (`designs/hummer/free-hover/command.tg`: `command_loop` + `command_observer` keys): a
+  one-trim linear servo that follows HOVER / FWD / REV / UP / DOWN (0.3 m/s; envelope FWD 0.3, REV 0.4, UP 0.36,
+  DOWN 0.3 m/s), learned on the GPU in ~3.5 min (`opt/hover_cmd.py learn`, then `export` writes the `.tg`).
+  Steer it in `src/view_free_hover.py` (arrows / PgUp / PgDn / Home) or the GUI's Viewer tab buttons; `--sensors`
+  flies it on mocap position + IMU (the minimal input set that follows every command). Report: finding
+  `2026-09-30-command-following-policy`; workflow: the `free-flight-policy` skill, "Command flight".
 - **Any change to the free bird or its physics invalidates its policy**: re-derive it
   (trim -> LQR -> distill -> verify, ~3 min on a laptop, or `opt/hover_gpu.py derive --trim` on a GPU) with the
-  `free-flight-policy` skill.
+  `free-flight-policy` skill. The command policy too (`opt/hover_cmd.py learn` + `export`).
 
 ## Behavior contract: the golden harness
 
@@ -252,6 +258,11 @@ for CPU/numpy, within `JAX_RTOL` for JAX/MJX. The harness docstring is the contr
   (Python 3.13, mujoco 3.10.0, jax 0.10.2) the quick tier already fails 23 of 32 items at a clean
   checkout (model/rest/cpu/drive/aero). There, compare `check --quick` output before and after a change
   (it must be identical) instead of expecting all-PASS.
+- **Free-flight floor**: the free-flight scene has a floor 0.25 m below the release COM. The device flies
+  contacts off (free air); on CPU a descending flight hits it (struts touch from ~13 wingbeats of DOWN), so CPU
+  checks of command flight disable contacts (`opt/hover_cmd.py cpu`; the viewer moves the floor away).
+  The committed `designs/hummer/free-hover/lqr.npz` is stale against today's code (A 15.6%, B 8.4% off):
+  linearize afresh (in x64 on the device: float32 finite differences are 12-17% off) for new designs.
 - **JIT cost**: every MJX entry point pays an XLA compile first (a few seconds for
   `run_mjx_fixed_frequency`, ~10-20 s per golden full-tier item on a laptop CPU, minutes
   for a tri-integrator / rotating-batch optimizer setup); a new shape, integrator, dt or
