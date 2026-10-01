@@ -529,7 +529,7 @@ class DesignPane:
             ttk.Button(row, text=label, width=9, command=lambda n=name: self.send_command(n)).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Label(row, text="speed (m/s)").pack(side=tk.LEFT, padx=(12, 4))
         speed_txt = tk.StringVar(value="0.30")
-        ttk.Scale(row, from_=0.05, to=0.4, variable=self.command_speed, length=140,
+        ttk.Scale(row, from_=0.05, to=0.8, variable=self.command_speed, length=180,
                   command=lambda v: speed_txt.set(f"{float(v):.2f}")).pack(side=tk.LEFT)
         ttk.Label(row, textvariable=speed_txt, width=5).pack(side=tk.LEFT, padx=(4, 0))
         row2 = ttk.Frame(box)
@@ -542,7 +542,7 @@ class DesignPane:
         ttk.Label(
             box,
             text="Launch the viewer on a command control, then steer: each command holds until the next one; "
-            "speeds are clipped to the policy's measured envelope (FWD 0.3, REV 0.4, UP 0.36, DOWN 0.3 m/s for "
+            "speeds are clipped to the policy's certified envelope (FWD 0.75, REV 0.65, UP 0.5, DOWN 0.45 m/s for "
             "command.tg). In the viewer window the bird is driven like a game character, seen side-on: hold "
             "Right/Left = forward/back, hold Up/Down = climb/descend, release = hover, Home = hover, +/- = speed "
             "(hold-to-move needs pynput; on macOS allow Input Monitoring for the terminal, else each tap toggles).",

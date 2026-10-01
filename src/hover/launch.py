@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import copy
 import math
-from collections import deque
 from dataclasses import dataclass
 
 import mujoco
@@ -39,14 +38,33 @@ def unpack(theta, K):
     return theta[0], np.reshape(theta[1:1 + N_MOTORS * K], (N_MOTORS, K)), np.reshape(theta[1 + N_MOTORS * K:], (N_MOTORS, K))
 
 
-def rotate_bird(model, data, quat) -> None:
-    """Rigidly rotate every free body (airframe + tendon-held struts) about the bird's COM."""
+def com_velocity(model, data):
+    """Mass-weighted COM velocity of the whole bird (world frame) from ``data.cvel`` (fresh after mj_forward)."""
+    r = data.xipos - data.subtree_com[model.body_rootid]
+    v = data.cvel[:, 3:] + np.cross(data.cvel[:, :3], r)
+    return (model.body_mass[:, None] * v).sum(0) / model.body_mass.sum()
+
+
+def rotate_bird(model, data, quat, rotate_vel=False) -> None:
+    """Rigidly rotate every free body (airframe + tendon-held struts) about the bird's COM.
+
+    The free joints' linear velocities (world frame) are left as they are by default, so the rotation also
+    changes the struts' and airframe's velocities relative to the COM (0.6-0.96 m/s at release): a spurious
+    internal perturbation that hover.lqr's attitude columns inherit (the committed lqr.npz and the command
+    policies are built this way). ``rotate_vel=True`` rotates them with the body about the COM velocity,
+    v' = v_com + R (v - v_com), so the COM velocity and every relative velocity move rigidly."""
+    if rotate_vel:
+        mujoco.mj_forward(model, data)
+        vc = com_velocity(model, data)
     com = (model.body_mass[:, None] * data.xipos).sum(0) / model.body_mass.sum()
     R = np.zeros(9); mujoco.mju_quat2Mat(R, quat); R = R.reshape(3, 3)
     for j in np.flatnonzero(model.jnt_type == mujoco.mjtJoint.mjJNT_FREE):
         a = model.jnt_qposadr[j]
         data.qpos[a:a + 3] = com + R @ (data.qpos[a:a + 3] - com)
         q = np.zeros(4); mujoco.mju_mulQuat(q, quat, data.qpos[a + 3:a + 7].copy()); data.qpos[a + 3:a + 7] = q
+        if rotate_vel:
+            v = model.jnt_dofadr[j]
+            data.qvel[v:v + 3] = vc + R @ (data.qvel[v:v + 3] - vc)
     mujoco.mj_forward(model, data)
 
 
@@ -139,12 +157,19 @@ class Released:
 
 
 def release(bird: Bird, theta, attitude, K, *, n_cradle=12, n_avg=6, k_phi=K_PHI,
-            body_inertia=4e-5 + flying.BODY_INERTIA) -> Released:
-    """Settle the bird on ``theta`` at ``attitude`` (wxyz) in the mean-only cradle, then release it."""
+            body_inertia=4e-5 + flying.BODY_INERTIA, v=None) -> Released:
+    """Settle the bird on ``theta`` at ``attitude`` (wxyz) in the mean-only cradle, then release it.
+    ``v`` (3, world): a MOVING cradle (steady flight at v): every free joint starts at linear velocity v and the
+    cradle holds the pose error against the target moving at v (strobe - [v t, 0, v, 0]); released at speed.
+    None = the hover cradle (unchanged)."""
     m, af = bird.model, bird.af
     m.opt.gravity[:] = 0
     sim = PlateWingSim(m, bird.morph); d = sim.data; d.qvel[:] = 0
     rotate_bird(m, d, np.asarray(attitude, float))
+    if v is not None:
+        v = np.asarray(v, float)
+        for j in np.flatnonzero(m.jnt_type == mujoco.mjtJoint.mjJNT_FREE):
+            d.qvel[m.jnt_dofadr[j]:m.jnt_dofadr[j] + 3] = v
     m.opt.gravity[:] = (0, 0, -9.81); mujoco.mj_forward(m, d)
     M, I, ws = m.body_mass.sum(), body_inertia, 2 * math.pi * 1.5
     kp, kd, ki = M * ws**2, 2 * 0.8 * M * ws, M * ws**3 / 4
@@ -152,10 +177,18 @@ def release(bird: Bird, theta, attitude, K, *, n_cradle=12, n_avg=6, k_phi=K_PHI
     com0, q0 = d.subtree_com[0].copy(), d.xquat[af].copy()
     drive = Drive(bird, sim, theta, K, k_phi)
     n = round(2 * math.pi / (bird.omega * math.exp(drive.g)) / m.opt.timestep)
-    buf, iE, acc = deque(maxlen=n), np.zeros(6), []
+    # the last wingbeat's strobes, oldest first: a (k, 12) array whose mean is bit-identical to np.mean over a
+    # deque of the same rows (converting a 901-row deque every step was ~40% of the release: 10.4 -> 6.1 s locally)
+    buf, nb, iE, acc = np.empty((n, 12)), 0, np.zeros(6), []
     for i in range(n_cradle * n):
         s = strobe(bird, d, com0, q0)
-        buf.append(s); avg = np.mean(buf, 0); iE += avg[:6] * m.opt.timestep
+        if v is not None:
+            s[:3] -= v * (i * m.opt.timestep); s[6:9] -= v
+        if nb < n:
+            buf[nb] = s; nb += 1
+        else:
+            buf[:-1] = buf[1:]; buf[-1] = s
+        avg = np.mean(buf[:nb], 0); iE += avg[:6] * m.opt.timestep
         F = -kp * avg[:3] - kd * avg[6:9] - ki * iE[:3]; T = -kr * avg[3:6] - krd * avg[9:12] - kri * iE[3:]
         d.xfrc_applied[af, :3] = F; d.xfrc_applied[af, 3:] = T + np.cross(d.subtree_com[0] - d.xipos[af], F)
         drive.step()

@@ -22,8 +22,8 @@ import numpy as np
 
 from hover import mjx_flight as F
 from hover import mjx_sensors as MS
-from runtime.mjx import rollout
-from hover.command import ALLOC_FREE, U_MAX, ZETA_MAX, fista_betas
+from runtime.mjx import aero_runtime, rollout
+from hover.command import ALLOC_FREE, U_MAX, YAW, ZETA_MAX, aug_layout, fista_betas
 
 
 def allocate(ud, H, u_max, iters):
@@ -41,10 +41,15 @@ def allocate(ud, H, u_max, iters):
 def law(s, zeta, x_ref, u_ff, dither, Ka, u_max=U_MAX, zeta_max=ZETA_MAX, cp=1.0, cv=0.0, T=0.0, H=None, iters=0):
     """hover.command.servo_law on the device: (u, zeta'). ``iters`` (static) > 0: the H-metric allocation. A
     13 / 14-wide ``x_ref`` (static shape) carries the integral handoff factor / gate (hover.command.integral_keep /
-    integral_gate)."""
+    integral_gate); a 30-wide ``Ka`` (static shape) is a scheduled gain blended by x_ref column 15
+    (hover.command.blend_ka). A wider ``zeta`` (static shape) is the augmented servo's carry (hover.command.aug_layout:
+    + yaw integral, + the delivered feedback d_k = u - u_ff - dither)."""
     e = s - x_ref[:12]
     keep = x_ref[12] if x_ref.shape[-1] > 12 else 1.0
     gate = x_ref[13] if x_ref.shape[-1] > 13 else 1.0
+    nz = zeta.shape[-1]
+    if Ka.shape[-1] > 12 + nz:
+        Ka = Ka[:, :12 + nz] + x_ref[14] * Ka[:, 12 + nz:]
     raw = u_ff + dither - Ka[:, :12] @ e - Ka[:, 12:] @ zeta
     if iters:
         u = allocate(raw, H, u_max, iters)
@@ -54,31 +59,83 @@ def law(s, zeta, x_ref, u_ff, dither, Ka, u_max=U_MAX, zeta_max=ZETA_MAX, cp=1.0
         u = jnp.clip(raw, -u_max, u_max)
         free = jnp.where(jnp.any(jnp.abs(raw) >= u_max), 0.0, 1.0).astype(s.dtype)
     dz = cp * e[:3] + cv * T * e[6:9]
-    return u, jnp.clip(keep * zeta + gate * free * dz, -zeta_max, zeta_max)
+    if nz == 3:
+        return u, jnp.clip(keep * zeta + gate * free * dz, -zeta_max, zeta_max)
+    n_i, du = aug_layout(nz, u.shape[-1])
+    dz = jnp.concatenate([dz, e[YAW:YAW + n_i]])
+    zi = jnp.clip(keep * zeta[:3 + n_i] + gate * free * dz, -zeta_max, zeta_max)
+    return u, (jnp.concatenate([zi, u - u_ff - dither]) if du else zi)
 
 
-def release_carry(fl: F.Flight, B: int):
+def release_carry(fl: F.Flight, B: int, nz: int = 3):
     """(carry, alive, zeta) of B flights at release, and the unbatched release carry the lost flights park on.
+    ``nz``: the integral carry's width (hover.command.servo_nz of the gain flown; 3 = the plain servo).
     mjx_flight.fly runs mj_forward on carry0 first; here the first wingbeat's kick does (a zero kick = forward
     only), which saves a compile (tests/test_hover_command.py checks the two agree)."""
     c = F.carry0(fl.arrays)
     cb = jax.tree_util.tree_map(lambda x: jnp.broadcast_to(x, (B,) + jnp.shape(x)), c)
-    return (cb, jnp.ones(B, bool), jnp.zeros((B, 3), F.fdtype())), c
+    return (cb, jnp.ones(B, bool), jnp.zeros((B, nz), F.fdtype())), c
+
+
+def beat_var(S, ar, c: F.Carry, theta, n, n_max: int):
+    """One wingbeat of ``n`` (traced int) physics steps under the harmonic depths of ``theta`` (theta[0] unused): the
+    crank speed is a0 e^g0 n0 / n and the drive phase phi0 + 2 pi j / n, i.e. the quantized g = ln(n0 / n) that
+    hover.launch.Drive flies for theta[0] = g0 + ln(n0 / n) (hover.command.g_of_steps). The scan runs ``n_max``
+    (static) steps and masks the steps j >= n (the carry is kept), so every flight of a batch may have its own
+    wingbeat length. hover.mjx_flight.beat (the fixed wingbeat) is untouched; this is the X8 crank-speed port."""
+    K = S.K
+    a = theta[1:1 + 4 * K].reshape(4, K)
+    b = theta[1 + 4 * K:].reshape(4, K)
+    dtype = c.dx.qpos.dtype
+    ks = jnp.arange(1, K + 1, dtype=dtype)
+    crank = jnp.asarray(S.crank_ids, jnp.int32)
+    cq = jnp.asarray(S.crank_qadr, jnp.int32)
+    gear = jnp.asarray(S.crank_gear, dtype)
+    nf = n.astype(dtype)
+    dphi = (2.0 * jnp.pi) / nf
+    speed = S.speed * (S.n_step / nf)
+
+    def step(c, j):
+        dx = c.dx
+        phi = S.phi0 + dphi * j.astype(dtype)
+        w = speed * (1.0 + jnp.sum(a * jnp.cos(ks * phi) + b * jnp.sin(ks * phi), axis=1))
+        q_c = dx.qpos[cq]
+        ctrl = jnp.zeros_like(dx.ctrl).at[crank].set(w + S.k_phi * (c.e + gear * q_c - dx.actuator_length[crank]))
+
+        def aero(d):
+            def recompute(_):
+                qf, _, ns, _, _ = aero_runtime.aero_wrench(ar.mx, d, S.aero, c.st)
+                return qf, ns
+            qf, ns = jax.lax.cond(c.i % S.substep == 0, recompute, lambda _: (c.qfrc, c.st), None)
+            return qf, (qf, ns)
+
+        dx, (qf, st) = rollout.physics_step(ar.mx, dx, ctrl, ar.pitch, aero)
+        nc = F.Carry(dx, st, qf, (c.i + 1) % S.substep, c.e + w * S.dt - gear * (dx.qpos[cq] - q_c))
+        nc = rollout.match_dtypes(nc, c)
+        return jax.tree_util.tree_map(lambda x, y: jnp.where(j < n, x, y), nc, c), None
+
+    c, _ = jax.lax.scan(step, c, jnp.arange(n_max, dtype=jnp.int32))
+    return c._replace(dx=F.unwind(S, c.dx))
 
 
 def fly_cmd(S, ar, c, alive, zeta, c_rest, kicks, x_ref, u_ff, dither, Ka, lost_tilt, u_max=U_MAX, zeta_max=ZETA_MAX,
-            H=None, iters=0):
+            H=None, iters=0, nbeat=None, n_max=None):
     """N wingbeats of the servo from a GIVEN carry (calls chain). kicks / x_ref / u_ff / dither are per beat
     (N, .); x_ref is 12 wide, or 13 / 14 with the integral handoff factor / gate. Returns (S (N, 12), U (N, nu),
     alive (N,), carry', alive', zeta', s_end (12), alive_end): s_end is the
     strobe after the last beat (the next call's first) with mjx_flight.fly's final loss rule. ``lost_tilt``
     (traced, per flight) is the loss rule's tilt [rad]: mjx_flight.LOST_TILT (60 deg) for evaluation; the ILC
     passes use a lower one, since a tumbling flight slows the whole vmapped batch (the solver's while loop).
-    ``H`` / ``iters``: the allocation metric (shared) and its static iteration count (0 = clip)."""
+    ``H`` / ``iters``: the allocation metric (shared) and its static iteration count (0 = clip). ``nbeat`` (N,) int
+    with ``n_max`` (static): per-beat wingbeat lengths (:func:`beat_var`, the crank-speed feedforward); None = the
+    fixed wingbeat (mjx_flight.beat), the program every policy before X8 flies."""
 
     def one(state, xs):
         c, alive, zeta = state
-        kick_n, xr, uf, dth = xs
+        if n_max is None:
+            kick_n, xr, uf, dth = xs
+        else:
+            kick_n, xr, uf, dth, nk = xs
         dx = F.kick(S, ar, c.dx, kick_n)
         s = F.strobe(S, ar, dx)
         alive = alive & jnp.all(jnp.isfinite(s)) & (jnp.linalg.norm(s[3:5]) <= lost_tilt)
@@ -86,20 +143,28 @@ def fly_cmd(S, ar, c, alive, zeta, c_rest, kicks, x_ref, u_ff, dither, Ka, lost_
         u = jnp.where(alive, u, 0.0)
         zeta = jnp.where(alive, zn, zeta)
         c = F.park(alive, c._replace(dx=dx), c_rest)
-        c, _ = F.beat(S, ar, c, ar.theta + jnp.concatenate([jnp.zeros(1, u.dtype), u]))
+        th = ar.theta + jnp.concatenate([jnp.zeros(1, u.dtype), u])
+        c = F.beat(S, ar, c, th)[0] if n_max is None else beat_var(S, ar, c, th, nk, n_max)
         # x64 promotes a few int32 index fields of the MJX data: keep the carry type (and the chained calls' shape)
         return rollout.match_dtypes((c, alive, zeta), state), (s, u, alive)
 
-    (c, alive, zeta), (Ss, Us, As) = jax.lax.scan(one, (c, alive, zeta), (kicks, x_ref, u_ff, dither))
+    xs = (kicks, x_ref, u_ff, dither) if n_max is None else (kicks, x_ref, u_ff, dither, nbeat)
+    (c, alive, zeta), (Ss, Us, As) = jax.lax.scan(one, (c, alive, zeta), xs)
     s_end = F.strobe(S, ar, F.forward(ar, c.dx))
     return Ss, Us, As, c, alive, zeta, s_end, alive & jnp.all(jnp.isfinite(s_end))
 
 
-def batch_cmd_flyer(fl: F.Flight, N: int, u_max=U_MAX, zeta_max=ZETA_MAX, alloc_iters=0):
+def batch_cmd_flyer(fl: F.Flight, N: int, u_max=U_MAX, zeta_max=ZETA_MAX, alloc_iters=0, n_max=None):
     """jit(vmap(fly_cmd)) over (carry, alive, zeta, kicks, x_ref, u_ff, dither, Ka, lost_tilt, H); ar and the park
     carry are shared. Call as ``f(ar, c, alive, zeta, c_rest, kicks, x_ref, u_ff, dither, Ka, lost_tilt, H)``
-    (H = I allocates exactly as clip: the baseline arm)."""
+    (H = I allocates exactly as clip: the baseline arm). ``n_max`` (static): variable-length wingbeats, with one
+    more batched argument, the per-beat lengths nbeat (B, N) int32 (:func:`beat_var`)."""
     S = fl.static
+    if n_max is not None:
+        def one_v(ar, c, alive, zeta, c_rest, kicks, x_ref, u_ff, dither, Ka, lost_tilt, H, nbeat):
+            return fly_cmd(S, ar, c, alive, zeta, c_rest, kicks, x_ref, u_ff, dither, Ka, lost_tilt, u_max, zeta_max,
+                           H, alloc_iters, nbeat=nbeat, n_max=n_max)
+        return jax.jit(jax.vmap(one_v, in_axes=(None, 0, 0, 0, None, 0, 0, 0, 0, 0, 0, 0, 0)), donate_argnums=(1,))
 
     def one(ar, c, alive, zeta, c_rest, kicks, x_ref, u_ff, dither, Ka, lost_tilt, H):
         return fly_cmd(S, ar, c, alive, zeta, c_rest, kicks, x_ref, u_ff, dither, Ka, lost_tilt, u_max, zeta_max,
@@ -111,10 +176,10 @@ class Chain:
     """Chained N-beat calls of one compiled flight program; ``compile_s`` = the first lower + compile (or
     persistent-cache load) time, measured apart from the flights."""
 
-    def __init__(self, fl: F.Flight, B: int, N: int, u_max=U_MAX, zeta_max=ZETA_MAX, H=None, alloc_iters=0):
-        self.fl, self.B, self.N = fl, B, N
+    def __init__(self, fl: F.Flight, B: int, N: int, u_max=U_MAX, zeta_max=ZETA_MAX, H=None, alloc_iters=0, n_max=None):
+        self.fl, self.B, self.N, self.n_max = fl, B, N, n_max
         self.H = np.eye(8 * fl.static.K) if H is None else np.asarray(H, float)
-        self.f = batch_cmd_flyer(fl, N, u_max, zeta_max, alloc_iters if H is not None else 0)
+        self.f = batch_cmd_flyer(fl, N, u_max, zeta_max, alloc_iters if H is not None else 0, n_max=n_max)
         self.compiled = None
         self.compile_s = None
 
@@ -123,9 +188,11 @@ class Chain:
         self.compiled = self.f.lower(*args).compile()
         self.compile_s = time.time() - t
 
-    def run(self, state, c_rest, kicks, x_ref, u_ff, dither, Ka, n_calls, start=0, log=None, lost_tilt=None, H=None):
+    def run(self, state, c_rest, kicks, x_ref, u_ff, dither, Ka, n_calls, start=0, log=None, lost_tilt=None, H=None,
+            nbeat=None):
         """Fly n_calls x N beats from ``state`` = (carry, alive, zeta), per-beat arrays indexed from beat ``start``.
-        ``H``: per-flight allocation metric (B, nu, nu) (default: the chain's H for every flight).
+        ``H``: per-flight allocation metric (B, nu, nu) (default: the chain's H for every flight). ``nbeat`` (B, >= N):
+        per-beat wingbeat lengths (a chain built with ``n_max``; default: every beat n0).
         Returns (S (B, n_calls N + 1, 12), U, alive (B, n_calls N + 1), state', per-call seconds)."""
         dt = F.fdtype()
         ar = self.fl.arrays
@@ -139,6 +206,11 @@ class Chain:
             sl = slice(start + j * self.N, start + (j + 1) * self.N)
             args = (ar, c, alive, zeta, c_rest, jnp.asarray(kicks[:, sl], dt), jnp.asarray(x_ref[:, sl], dt),
                     jnp.asarray(u_ff[:, sl], dt), jnp.asarray(dither[:, sl], dt), Ka, lt, Hb)
+            if self.n_max is not None:
+                nb = np.full((self.B, self.N), self.fl.static.n_step) if nbeat is None else np.asarray(nbeat)[:, sl]
+                if nb.max() > self.n_max:
+                    raise ValueError(f"wingbeat of {nb.max()} steps > n_max {self.n_max}")
+                args = args + (jnp.asarray(nb, jnp.int32),)
             if self.compiled is None:
                 self._compile(args)
                 if log:

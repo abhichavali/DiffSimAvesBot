@@ -1,6 +1,6 @@
 # Command-following flight control (HOVER / FWD / REV / UP / DOWN; hover.command.LiveCommand).
-# Drive + trim = designs/hummer/free-hover/control.tg; policy = opt/runs_cmd/r18/policy.npz (opt/hover_cmd.py learn), exported by
-# opt/hover_cmd.py export. Envelope (m/s): FWD 0.3, REV 0.4, UP 0.36, DOWN 0.3.
+# Drive + trim = designs/hummer/free-hover/control.tg; policy = opt/runs_fast/x9_fast_a/policy.npz (opt/hover_cmd.py learn), exported by
+# opt/hover_cmd.py export. Envelope (m/s): FWD 0.75, REV 0.65, UP 0.5, DOWN 0.45.
 # Fly it: src/view_free_hover.py --control designs/hummer/free-hover/command.tg [--sensors]; or the GUI's Viewer tab.
 bird = hummer
 harmonics = 3

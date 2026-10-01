@@ -7,6 +7,8 @@ tags: [free-flight, mjx, cpu, tooling]
 
 # Prompt 2: a command-following closed-loop policy (how it was done)
 
+> Status 2026-10-01: still current as the r18 method and its dead ends, but `command.tg` no longer ships r18: it ships `learn --preset fast` (V_op FWD 0.75 / REV 0.65 / UP 0.5 / DOWN 0.45 m/s), finding `2026-10-01-command-flight-faster`.
+
 This report covers Prompt 2 of `prompts/morphology_search.org` ("Find Optimal Closed Loop Policy"): hover,
 forward, reverse, up and down on the free bird (`designs/hummer/free-hover`); learned and evaluated on the GPU
 within 3-4 minutes; judged on random command sequences; with as few sensor inputs as possible under realistic

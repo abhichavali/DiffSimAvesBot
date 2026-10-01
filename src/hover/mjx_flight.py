@@ -224,16 +224,28 @@ def kick(S: Static, ar: Arrays, dx, d12):
     return forward(ar, dx.replace(qvel=qvel))
 
 
-def rotate(S: Static, ar: Arrays, dx, rv):
-    """hover.launch.rotate_bird by the rotation vector ``rv`` about the COM, then forward."""
+def com_velocity(ar: Arrays, dx):
+    """hover.launch.com_velocity: the whole bird's mass-weighted COM velocity from dx's (fresh) cvel."""
+    r = dx.xipos - dx.subtree_com[ar.mx.body_rootid]
+    v = dx.cvel[:, 3:] + jnp.cross(dx.cvel[:, :3], r)
+    return (ar.body_mass[:, None] * v).sum(0) / ar.body_mass.sum()
+
+
+def rotate(S: Static, ar: Arrays, dx, rv, rotate_vel=False):
+    """hover.launch.rotate_bird by the rotation vector ``rv`` about the COM, then forward (``dx`` fresh).
+    ``rotate_vel`` (static) also rotates the free joints' linear velocities about the COM velocity."""
     q = rotvec2quat(rv)
     R = quat2mat(q)
     com = _com(ar, dx)
-    qpos = dx.qpos
+    qpos, qvel = dx.qpos, dx.qvel
+    if rotate_vel:
+        vc = com_velocity(ar, dx)
     for qa, va, b in S.free:
         qpos = qpos.at[qa:qa + 3].set(com + R @ (qpos[qa:qa + 3] - com))
         qpos = qpos.at[qa + 3:qa + 7].set(qmul(q, qpos[qa + 3:qa + 7]))
-    return forward(ar, dx.replace(qpos=qpos))
+        if rotate_vel:
+            qvel = qvel.at[va:va + 3].set(vc + R @ (qvel[va:va + 3] - vc))
+    return forward(ar, dx.replace(qpos=qpos, qvel=qvel))
 
 
 def strobe(S: Static, ar: Arrays, dx):
@@ -374,11 +386,12 @@ def fly(S: Static, ar: Arrays, n_beats: int, kicks, *, policy=None, pert=None, t
     return jnp.concatenate([Ss, s[None]]), Us, jnp.concatenate([As, last_alive[None]])
 
 
-def one_beat(S: Static, ar: Arrays, pert, du):
-    """hover.lqr.one_beat: the strobed state one wingbeat after a rigid perturbation ``pert`` under input ``du``."""
+def one_beat(S: Static, ar: Arrays, pert, du, rotate_vel=False):
+    """hover.lqr.one_beat: the strobed state one wingbeat after a rigid perturbation ``pert`` under input ``du``
+    (``rotate_vel``: hover.lqr --rigid-rotation)."""
     c = carry0(ar)
     dx = forward(ar, c.dx)
-    dx = rotate(S, ar, dx, pert[3:6])
+    dx = rotate(S, ar, dx, pert[3:6], rotate_vel)
     dx = kick(S, ar, dx, pert)
     c, _ = beat(S, ar, c._replace(dx=dx), ar.theta + jnp.concatenate([jnp.zeros(1, du.dtype), du]))
     return strobe(S, ar, forward(ar, c.dx))
@@ -412,10 +425,10 @@ def ab_from_tasks(out, K, sx=SX, su=SU):
     return A, B, out[0]
 
 
-def linearize(fl: Flight, chunk=None):
+def linearize(fl: Flight, chunk=None, rotate_vel=False):
     """Per-wingbeat (A, B, drift) by central differences, all one-beat rollouts in one vmapped batch."""
     perts, dus = lqr_tasks(fl.static.K)
-    f = jax.jit(jax.vmap(lambda ar, p, du: (one_beat(fl.static, ar, p, du),), in_axes=(None, 0, 0)))
+    f = jax.jit(jax.vmap(lambda ar, p, du: (one_beat(fl.static, ar, p, du, rotate_vel),), in_axes=(None, 0, 0)))
     (out,) = run_batched(f, fl.arrays, perts, dus, chunk=chunk)
     return ab_from_tasks(out, fl.static.K)
 

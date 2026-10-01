@@ -18,11 +18,16 @@ linear servo on the per-wingbeat hover model (A, B, drift) of hover.lqr / hover.
         u = clip(u_ff + dither - Ka[:, :12] (s - x_ref) - Ka[:, 12:] zeta, +-u_max)
   :func:`servo_gains_vel` is the no-mocap variant (integral of the velocity error, no position feedback). The ILC
   passes fly the learning gain (q_int 100: its integral settles inside the ILC window); the policy flies a softer
-  one (opt/hover_cmd.py --fly-q-int / --fly-q-vel).
+  one (opt/hover_cmd.py --fly-q-int / --fly-q-vel). Optional speed-scheduled gain (--fwd-gain reg): a 15th x_ref
+  column carries the blend weight :func:`gain_weight` of the reference forward speed, and a 30-wide Ka =
+  [Ka_base, Ka_fwd - Ka_base] flies Ka_base + w (Ka_fwd - Ka_base) (:func:`policy_ka`; off = 15-wide, unchanged).
+  Optional augmented servo (--yaw-int / --du-penalty, :func:`servo_gains_aug`): a yaw-angle integral and / or the
+  previous wingbeat's delivered feedback in the DARE state with an input-rate penalty; the integral carry widens
+  (:func:`aug_layout`, :func:`servo_nz`) and the gain with it (off = 15-wide, unchanged; docs/history/command_flight_faster_notes_2026-10.md X7).
 * IMU-only flight (no velocity measurement): :func:`velocity_ilc` moves each cell's trim by the linear
   :func:`trim_sensitivity` times the TRUE mean-motion velocity error measured in the learning flights.
 * :func:`allocate` (opt-in, --alloc-iters): the box projection in the servo's Q-function metric; it flew worse than
-  clip (opt/runs_cmd/NOTES.md 14: the hover model's null space is not null at speed).
+  clip (docs/history/command_flight_notes_2026-09.md 14: the hover model's null space is not null at speed).
 
 :class:`CommandPolicy` flies the law on CPU (hover.launch.fly, unchanged); hover.mjx_command flies it batched
 on the device; :func:`segment_metrics` scores random command sequences (:func:`random_schedules`) from the TRUE
@@ -191,6 +196,83 @@ def lookup(tab, e_f, v):
     return att, v + dv, w, u
 
 
+# ---------------------------------------------------------------------------------------------- crank speed g (opt-in)
+# A table may carry "g" (4, 16): a FEEDFORWARD crank-speed offset per axis and speed (relative to the trim's g0; only
+# the DOWN axis is set by opt/hover_cmd.py --g-down). It is looked up at the same reference velocity as u_ff and
+# quantized to integer wingbeat lengths: a wingbeat of n steps (n0 at g0) has g = ln(n0 / n), so the strobe stays
+# phase locked (hover.launch.Drive.beat rounds n the same way; hover.mjx_command flies variable-length wingbeats).
+# Tables without "g" (every policy before X8) are untouched by all of this.
+
+def lookup_g(tab, e_f, v) -> np.ndarray:
+    """g offset at reference velocities v (M, 3): the :func:`lookup` superposition of the table's "g" (zeros if none)."""
+    v = np.asarray(v, float)
+    if "g" not in tab:
+        return np.zeros(len(v))
+    vf, vz = v @ e_f, v[:, 2]
+    G = tab["g"]
+    gf = np.where(vf >= 0, _interp(tab["speeds"][0], G[0], np.abs(vf)), _interp(tab["speeds"][1], G[1], np.abs(vf)))
+    gz = np.where(vz >= 0, _interp(tab["speeds"][2], G[2], np.abs(vz)), _interp(tab["speeds"][3], G[3], np.abs(vz)))
+    return gf + gz - G[0, 0]
+
+
+def beat_steps(g, n0) -> np.ndarray:
+    """Wingbeat lengths (steps, int) of the g offsets ``g`` for a wingbeat of ``n0`` steps at g0."""
+    return np.rint(n0 * np.exp(-np.asarray(g, float))).astype(np.int64)
+
+
+def g_of_steps(n, n0) -> np.ndarray:
+    """The quantized g offset of an n-step wingbeat: ln(n0 / n) (the theta[0] correction the CPU drive flies)."""
+    return np.log(n0 / np.asarray(n, float))
+
+
+def g_beats(tab, e_f, v_ref, n0, ff_lead=0) -> np.ndarray:
+    """Per-beat wingbeat lengths (n, N+1) of reference velocities v_ref (n, N+1, 3): the table's g looked up at the
+    velocity ``ff_lead`` beats ahead (as u_ff in :func:`build_refs`)."""
+    n, N1, _ = v_ref.shape
+    v = v_ref[:, np.minimum(np.arange(N1) + ff_lead, N1 - 1)] if ff_lead else v_ref
+    return beat_steps(lookup_g(tab, e_f, v.reshape(-1, 3)).reshape(n, N1), n0)
+
+
+def retime_refs(x_ref, v_ref, T, nbeat, n0) -> np.ndarray:
+    """x_ref with p_ref re-integrated over variable wingbeats: p_{k+1} = p_k + v_k T n_k / n0 (from p_0)."""
+    x = np.array(x_ref, copy=True)
+    dp = v_ref[:, :-1] * (T * nbeat[:, :-1] / n0)[..., None]
+    x[:, 1:, :3] = x[:, :1, :3] + np.cumsum(dp, 1)
+    return x
+
+
+def beat_times(T, nbeat, n0, N=None):
+    """Per-beat durations (n, N) of wingbeats nbeat, or the scalar T when nbeat is None."""
+    if nbeat is None:
+        return T
+    nb = np.asarray(nbeat)
+    return T * nb[:, :N if N is not None else nb.shape[1]] / n0
+
+
+def _elapsed(T, i, lo, hi):
+    """Time from beat lo to hi of flight i: (hi - lo) T, or the sum of per-beat durations T (n, N)."""
+    return (hi - lo) * T if np.ndim(T) == 0 else float(np.sum(T[i, lo:hi]))
+
+
+def g_table(tab, A, B, drift, B_g, e_f, g_down, s_full, u_max=U_MAX):
+    """Copy of a feedforward table with a DOWN crank-speed offset g(s) = g_down * min(1, s / s_full) (quantization is
+    the flight's) and the DOWN entries' LP steady state re-solved with the one-beat effect B_g g(s) included
+    (B_g (12,): the strobed state's change per unit g over one wingbeat, at hover)."""
+    t = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in tab.items()}
+    sp = t["speeds"]
+    G = np.zeros(sp.shape)
+    G[3] = g_down * np.minimum(1.0, sp[3] / s_full)
+    t["g"] = G
+    dirs = command_dirs(e_f)
+    base = drift if t.get("use_drift", True) else np.zeros(12)
+    for j in range(1, sp.shape[1]):
+        r = steady_state(A, B, base + np.asarray(B_g) * G[3, j], sp[3, j] * dirs[4], t["tilt_max_deg"], use_drift=True)
+        if r is not None:
+            t["att"][3, j], t["u"][3, j] = r[0], np.clip(r[1], -0.9 * u_max, 0.9 * u_max)
+            t["t"][3, j] = r[2]
+    return t
+
+
 # ---------------------------------------------------------------------------------------------- gains
 
 def _dlqr(A, B, Q, R):
@@ -198,9 +280,79 @@ def _dlqr(A, B, Q, R):
     return np.linalg.solve(R + B.T @ P @ B, B.T @ P @ A)
 
 
-def servo_gains(A, B, q_int=1 / 0.1 ** 2, weights=None):
+YAW = 5            # the yaw (world z rotation-vector) row of the 12-state: the --yaw-int integral's error
+NZ_AUG = (3, 4)    # integral widths: the position integral (3), + the yaw integral (4)
+
+
+def aug_layout(nz, nu):
+    """(n_i, du) of a servo integral carry of width ``nz`` (hover.command.servo_gains): n_i extra integrals after
+    the position integral (1 = yaw, --yaw-int) and whether the last nu entries are the previous wingbeat's
+    delivered feedback d_{k-1} = u_{k-1} - u_ff_{k-1} - dither_{k-1} (--du-penalty)."""
+    du = nz >= 3 + nu
+    n_i = nz - 3 - (nu if du else 0)
+    if not 0 <= n_i <= 1:
+        raise ValueError(f"servo carry width {nz} (nu {nu}): not a known layout")
+    return n_i, du
+
+
+def servo_nz(Ka):
+    """Width of the integral carry a servo gain (nu, W) flies: W - 12 (plain / augmented), or (W / 2) - 12 for a
+    scheduled gain [Ka, Ka_fwd - Ka] (:func:`policy_ka`; 30 wide = the plain 15-wide pair)."""
+    nu, W = np.shape(Ka)
+    ok = {n_i + 3 + d * nu for n_i in (0, 1) for d in (0, 1)}
+    if W - 12 in ok:
+        return W - 12
+    if W % 2 == 0 and W // 2 - 12 in ok:
+        return W // 2 - 12
+    raise ValueError(f"servo gain width {W}: not a known layout")
+
+
+def servo_aug_model(A, B, n_i=0, du=False):
+    """The servo's design model (Aa, Ba): x (12), the position integral zeta_{k+1} = zeta_k + p_k (3), with
+    ``n_i`` 1 the yaw integral (+= x[YAW]), with ``du`` the previous input d_{k+1} = u_k (nu)."""
+    nu = B.shape[1]
+    n = 15 + n_i + (nu if du else 0)
+    Aa = np.zeros((n, n)); Aa[:12, :12] = A; Aa[12:15, :3] = np.eye(3); Aa[12:15, 12:15] = np.eye(3)
+    if n_i:
+        Aa[15, YAW] = 1.0; Aa[15, 15] = 1.0
+    Ba = np.zeros((n, nu)); Ba[:12] = B
+    if du:
+        Ba[15 + n_i:] = np.eye(nu)
+    return Aa, Ba
+
+
+def servo_gains_aug(A, B, q_int=1 / 0.1 ** 2, weights=None, q_yi=0.0, r_d=0.0):
+    """Ka (nu, 15 + n_i + nu du) of the LQR on the augmented model :func:`servo_aug_model`: ``q_yi`` > 0 adds the
+    yaw integral with weight q_yi; ``r_d`` > 0 adds the previous input d_{k-1} and penalises the input rate
+    (u_k - u_{k-1})' (r_d R) (u_k - u_{k-1}) (R = hover.lqr.cost's input weight): the stage cost
+    u'Ru + du'R_d du is the cross-term DARE with Q_dd = R_d, R + R_d, S_du = -R_d. Returns (Ka, rho)."""
+    nu = B.shape[1]
+    n_i, du = (1 if q_yi else 0), r_d > 0
+    Aa, Ba = servo_aug_model(A, B, n_i, du)
+    n = Aa.shape[0]
+    Q, R = cost(nu, **(weights or {}))
+    Qa = np.zeros((n, n)); Qa[:12, :12] = Q; Qa[12:15, 12:15] = q_int * np.eye(3)
+    if n_i:
+        Qa[15, 15] = q_yi
+    Ra, Sa = R.copy(), np.zeros((n, nu))
+    if du:
+        Rd = r_d * R
+        Qa[15 + n_i:, 15 + n_i:] = Rd
+        Ra = R + Rd
+        Sa[15 + n_i:] = -Rd
+    P = solve_discrete_are(Aa, Ba, Qa, Ra, s=Sa)
+    Ka = np.linalg.solve(Ra + Ba.T @ P @ Ba, Ba.T @ P @ Aa + Sa.T)
+    rho = float(np.abs(np.linalg.eigvals(Aa - Ba @ Ka)).max())
+    assert rho < 1, rho
+    return Ka, rho
+
+
+def servo_gains(A, B, q_int=1 / 0.1 ** 2, weights=None, q_yi=0.0, r_d=0.0):
     """Ka (nu, 15) of the LQR on [x; zeta], zeta_{k+1} = zeta_k + p_k (- p_ref_k); hover.lqr.cost weights plus
-    q_int on zeta. Returns (Ka, rho of the augmented closed loop)."""
+    q_int on zeta. Returns (Ka, rho of the augmented closed loop). ``q_yi`` / ``r_d`` > 0: the augmented servo
+    (:func:`servo_gains_aug`; wider Ka)."""
+    if q_yi or r_d:
+        return servo_gains_aug(A, B, q_int, weights, q_yi, r_d)
     nu = B.shape[1]
     Aa = np.zeros((15, 15)); Aa[:12, :12] = A; Aa[12:, :3] = np.eye(3); Aa[12:, 12:] = np.eye(3)
     Ba = np.vstack([B, np.zeros((3, nu))])
@@ -210,6 +362,17 @@ def servo_gains(A, B, q_int=1 / 0.1 ** 2, weights=None):
     rho = float(np.abs(np.linalg.eigvals(Aa - Ba @ Ka)).max())
     assert rho < 1, rho
     return Ka, rho
+
+
+def servo_closed(A, B, Ka):
+    """The servo's augmented closed-loop matrix [x; zeta] under gain Ka (nu, 15) on the model (A, B); a wider
+    (augmented, :func:`servo_gains_aug`) Ka: on :func:`servo_aug_model`."""
+    nu = B.shape[1]
+    if Ka.shape[1] != 15:
+        Aa, Ba = servo_aug_model(A, B, *aug_layout(Ka.shape[1] - 12, nu))
+        return Aa - Ba @ Ka
+    Aa = np.zeros((15, 15)); Aa[:12, :12] = A; Aa[12:, :3] = np.eye(3); Aa[12:, 12:] = np.eye(3)
+    return Aa - np.vstack([B, np.zeros((3, nu))]) @ Ka
 
 
 def servo_hessian(A, B, q_int=1 / 0.1 ** 2, weights=None):
@@ -273,12 +436,40 @@ def hover_ka(K):
     return np.hstack([K, np.zeros((K.shape[0], 3))])
 
 
+def pad_ka(Ka, width):
+    """A 15-wide servo gain padded with zeros to ``width`` (30: a scheduled gain with no schedule, the baseline arm)."""
+    Ka = np.asarray(Ka, float)
+    return Ka if Ka.shape[1] == width else np.hstack([Ka, np.zeros((Ka.shape[0], width - Ka.shape[1]))])
+
+
+def gain_weight(v, e_f, lo, hi):
+    """Speed-scheduled gain weight of reference velocities v (..., 3): clip((v . e_f_h - lo) / (hi - lo), 0, 1),
+    the reference FORWARD speed (REV / vertical give 0) mapped onto [0, 1] between lo and hi [m/s]."""
+    e = np.asarray(e_f, float).copy(); e[2] = 0.0; e /= np.linalg.norm(e)
+    return np.clip((np.asarray(v, float) @ e - lo) / (hi - lo), 0.0, 1.0)
+
+
+def policy_ka(pol):
+    """The gain a policy flies: Ka (nu, 15), or with a scheduled forward gain (``Ka_fwd``, --fwd-gain reg) the
+    30-wide [Ka, Ka_fwd - Ka] that :func:`servo_law` blends by x_ref column 15 (:func:`gain_weight`)."""
+    Ka = np.asarray(pol["Ka"], float)
+    return np.hstack([Ka, np.asarray(pol["Ka_fwd"], float) - Ka]) if "Ka_fwd" in pol else Ka
+
+
+def blend_ka(Ka, x_ref, nz=3):
+    """The servo gain at one wingbeat: Ka (12 + nz wide) as is; a scheduled gain (twice as wide) blended by
+    x_ref[14]."""
+    w = 12 + nz
+    return Ka if Ka.shape[1] <= w else Ka[:, :w] + x_ref[14] * Ka[:, w:]
+
+
 # ---------------------------------------------------------------------------------------------- schedules, references
 
 def random_schedules(rng, n, n_beats, e_f, seg=(30, 50), speeds=(V_OP_H, V_OP_Z), mag_mode="fixed", vmax=None):
     """Random command sequences: segments of uniform length in [seg[0], seg[1]], commands uniform over CMDS with
     no immediate repeat (the first one random too). ``mag_mode`` 'fixed' = speeds (horizontal, vertical[, DOWN]);
-    'uniform' = per segment U[0.1, vmax[axis]] (vmax: dict AXES -> m/s). Returns dict with v_cmd (n, n_beats, 3),
+    'uniform' = per segment U[0.1, vmax[axis]] (vmax: dict AXES -> m/s); a 4th ``speeds`` entry is REV's (else FWD's).
+    Returns dict with v_cmd (n, n_beats, 3),
     cmd (n, n_beats) and seg (n, S, 4) = [start, end, cmd, speed] rows (-1 padded)."""
     dirs = command_dirs(e_f)
     v_cmd = np.zeros((n, n_beats, 3)); cmd = np.zeros((n, n_beats), int)
@@ -294,7 +485,8 @@ def random_schedules(rng, n, n_beats, e_f, seg=(30, 50), speeds=(V_OP_H, V_OP_Z)
             if c == 0:
                 s = 0.0
             elif mag_mode == "fixed":
-                s = speeds[0] if c in (1, 2) else (speeds[2] if c == 4 and len(speeds) > 2 else speeds[1])
+                s = (speeds[3] if c == 2 and len(speeds) > 3 else speeds[0]) if c in (1, 2) else (
+                    speeds[2] if c == 4 and len(speeds) > 2 else speeds[1])
             else:
                 s = float(rng.uniform(0.1, max(0.1, vmax[CMDS[c]])))
             e = min(k + L, n_beats)
@@ -335,7 +527,7 @@ def integral_gate(v, v_cmd, hold):
 
 
 def build_refs(v_cmd, tab, e_f, T, rate, descend_after_stop=0.0, descend_delay=0, zeta_handoff=False, stop_rate=1.0,
-               zeta_gate=None, ff_lead=0, climb_after_stop=0.0):
+               zeta_gate=None, ff_lead=0, climb_after_stop=0.0, v0=None, p0=None, gain_v=None):
     """References for per-beat commands v_cmd (n, N, 3): v_ref rate-limited per world axis by ``rate`` ((3,) or
     (n, 3) m/s per beat), p_ref_{k+1} = p_ref_k + v_ref_k T. ``descend_after_stop`` > 0: a descent does not start
     (v_ref,z is not lowered) while the horizontal v_ref exceeds this speed, so FWD -> DOWN decelerates first, and for
@@ -346,10 +538,19 @@ def build_refs(v_cmd, tab, e_f, T, rate, descend_after_stop=0.0, descend_delay=0
     ``stop_rate``: the rate x this while the command is HOVER (< 1: slower stops). ``ff_lead``: the att / w / u_ff
     references are looked up at v_ref ``ff_lead`` wingbeats ahead (the attitude lags a velocity change).
     ``climb_after_stop`` > 0: likewise a climb does not start while the horizontal v_ref exceeds this speed (no
-    delay): FWD -> UP is the most stressed transition, and the estimate-fed servo loses it (NOTES 20)."""
+    delay): FWD -> UP is the most stressed transition, and the estimate-fed servo loses it (NOTES 20).
+    ``v0`` / ``p0`` (n, 3): the reference velocity / position at entry 0 (default 0: from rest at the release; a
+    carried ILC lane continues its previous call's reference). ``gain_v`` (lo, hi): a 15th column, the scheduled-gain
+    weight :func:`gain_weight` of v_ref (needs ``zeta_gate``: the column index is fixed at 14)."""
     n, N, _ = v_cmd.shape
+    if gain_v is not None and zeta_gate is None:
+        raise ValueError("gain_v needs the 14-wide x_ref (zeta_gate)")
     rate = np.broadcast_to(np.asarray(rate, float), (n, 3))
     v = np.zeros((n, N + 1, 3)); p = np.zeros((n, N + 1, 3))
+    if v0 is not None:
+        v[:, 0] = v0
+    if p0 is not None:
+        p[:, 0] = p0
     since = np.full(n, 10 ** 6)                              # wingbeats since the horizontal v_ref fell below the limit
     stop = np.abs(v_cmd).max(-1, keepdims=True) == 0                    # (n, N, 1): the command is HOVER
     for k in range(N):
@@ -372,7 +573,8 @@ def build_refs(v_cmd, tab, e_f, T, rate, descend_after_stop=0.0, descend_delay=0
     x_ref = np.concatenate([p, att.reshape(n, N + 1, 3), vel.reshape(n, N + 1, 3), w.reshape(n, N + 1, 3)]
                            + ([integral_keep(v)[..., None] if zeta_handoff else np.ones((n, N + 1, 1))]
                               if (zeta_handoff or zeta_gate is not None) else [])
-                           + ([integral_gate(v, v_cmd, zeta_gate)[..., None]] if zeta_gate is not None else []), -1)
+                           + ([integral_gate(v, v_cmd, zeta_gate)[..., None]] if zeta_gate is not None else [])
+                           + ([gain_weight(v, e_f, *gain_v)[..., None]] if gain_v is not None else []), -1)
     return x_ref, u.reshape(n, N + 1, -1), v
 
 
@@ -393,10 +595,15 @@ def servo_law(s, zeta, x_ref, u_ff, dither, Ka, u_max=U_MAX, zeta_max=ZETA_MAX, 
     ``iters`` 0: u = clip(raw), the integral pauses while any input saturates. ``iters`` > 0: u = allocate(raw)
     in the metric H (:func:`servo_hessian`), the integral pauses while the delivered feedback misses the demanded
     one by more than 10% in that metric. A 13 / 14-wide ``x_ref`` carries the integral handoff factor
-    (:func:`integral_keep`) / gate (:func:`integral_gate`): zeta' = keep zeta + gate free dz."""
+    (:func:`integral_keep`) / gate (:func:`integral_gate`): zeta' = keep zeta + gate free dz. A 30-wide Ka is a
+    scheduled gain blended by x_ref column 15 (:func:`blend_ka`). A wider ``zeta`` (:func:`aug_layout`) is the
+    augmented servo's carry: the yaw integral integrates like the position one, and the last nu entries become
+    this wingbeat's delivered feedback u - u_ff - dither (the input-rate state of --du-penalty)."""
     e = s - x_ref[:12]
     keep = x_ref[12] if len(x_ref) > 12 else 1.0
     gate = x_ref[13] if len(x_ref) > 13 else 1.0
+    nz = len(zeta)
+    Ka = blend_ka(Ka, x_ref, nz)
     raw = u_ff + dither - Ka[:, :12] @ e - Ka[:, 12:] @ zeta
     if iters:
         u = allocate(raw, H, u_max, iters)
@@ -406,14 +613,22 @@ def servo_law(s, zeta, x_ref, u_ff, dither, Ka, u_max=U_MAX, zeta_max=ZETA_MAX, 
         u = np.clip(raw, -u_max, u_max)
         free = 0.0 if np.any(np.abs(raw) >= u_max) else 1.0
     dz = cp * e[:3] + cv * T * e[6:9]
-    return u, np.clip(keep * zeta + gate * free * dz, -zeta_max, zeta_max)
+    if nz == 3:
+        return u, np.clip(keep * zeta + gate * free * dz, -zeta_max, zeta_max)
+    n_i, du = aug_layout(nz, len(u))            # augmented servo: + yaw integral, + delivered feedback d_k
+    ni = 3 + n_i
+    dz = np.concatenate([dz, e[YAW:YAW + n_i]])
+    zi = np.clip(keep * zeta[:ni] + gate * free * dz, -zeta_max, zeta_max)
+    return u, (np.concatenate([zi, u - u_ff - dither]) if du else zi)
 
 
 class CommandPolicy:
-    """The servo on CPU for hover.launch.fly (true state): policy(s) -> np.r_[0, u], one call per wingbeat."""
+    """The servo on CPU for hover.launch.fly (true state): policy(s) -> np.r_[g_k, u], one call per wingbeat
+    (``g`` (N,): per-beat quantized crank-speed offsets, :func:`g_of_steps`; None = 0, the fixed crank speed)."""
 
     def __init__(self, Ka, x_ref, u_ff, dither=None, *, u_max=U_MAX, zeta_max=ZETA_MAX, cp=1.0, cv=0.0, T=0.0, H=None,
-                 iters=0):
+                 iters=0, g=None):
+        self.g = None if g is None else np.asarray(g, float)
         self.Ka, self.x_ref, self.u_ff = np.asarray(Ka, float), np.asarray(x_ref, float), np.asarray(u_ff, float)
         self.dither = np.zeros_like(self.u_ff) if dither is None else np.asarray(dither, float)
         self.u_max, self.zeta_max, self.cp, self.cv, self.T = u_max, zeta_max, cp, cv, T
@@ -422,7 +637,7 @@ class CommandPolicy:
 
     def reset(self):
         self.k = 0
-        self.zeta = np.zeros(3)
+        self.zeta = np.zeros(servo_nz(self.Ka))
         self.U = []
 
     def __call__(self, s):
@@ -431,7 +646,7 @@ class CommandPolicy:
                                  self.u_max, self.zeta_max, self.cp, self.cv, self.T, self.H, self.iters)
         self.k += 1
         self.U.append(u)
-        return np.concatenate([[0.0], u])
+        return np.concatenate([[0.0 if self.g is None else self.g[k]], u])
 
 
 def trim_consistent_cz(ctl, x_ref, u_ff):
@@ -500,7 +715,12 @@ class RefStream:
     command held, since the future commands are unknown)."""
 
     def __init__(self, tab, e_f, T, rate, *, descend_after_stop=0.0, descend_delay=0, zeta_handoff=False,
-                 stop_rate=1.0, zeta_gate=None, ff_lead=0, climb_after_stop=0.0):
+                 stop_rate=1.0, zeta_gate=None, ff_lead=0, climb_after_stop=0.0, gain_v=None, g_n0=None):
+        if gain_v is not None and zeta_gate is None:
+            raise ValueError("gain_v needs the 14-wide x_ref (zeta_gate)")
+        self.g_n0 = int(g_n0) if (g_n0 is not None and "g" in tab) else None      # crank-speed feedforward (opt-in)
+        self.n_beat = self.g_n0
+        self.gain_v = None if gain_v is None else tuple(float(x) for x in gain_v)
         self.tab, self.e_f, self.T = tab, np.asarray(e_f, float), float(T)
         self.rate = np.broadcast_to(np.asarray(rate, float), (3,)).copy()
         self.das, self.dd, self.cas = float(descend_after_stop), int(descend_delay), float(climb_after_stop)
@@ -533,6 +753,8 @@ class RefStream:
             for _ in range(self.lead - 1):
                 v_lead, s_lead = self._step(v_lead, s_lead, v_cmd)
             att, _, w, u = lookup(self.tab, self.e_f, v_lead[None])
+        if self.g_n0 is not None:
+            self.n_beat = int(beat_steps(lookup_g(self.tab, self.e_f, (v_lead if self.lead else v_k)[None]), self.g_n0)[0])
         cols = [self.p, att[0], vel[0], w[0]]
         if self.handoff or self.gate is not None:
             n2 = v_k @ v_k
@@ -541,8 +763,10 @@ class RefStream:
         if self.gate is not None:
             self.since_ramp = 0 if np.abs(v_next - v_k).max() > 1e-12 else self.since_ramp + 1
             cols.append([0.0 if not np.any(v_cmd) and self.since_ramp <= self.gate else 1.0])
+        if self.gain_v is not None:
+            cols.append([float(gain_weight(v_k, self.e_f, *self.gain_v))])
         x_ref = np.concatenate(cols)
-        self.p = self.p + v_k * self.T
+        self.p = self.p + v_k * (self.T if self.g_n0 is None else self.T * self.n_beat / self.g_n0)
         self.v, self.since = v_next, since
         return x_ref, u[0]
 
@@ -561,17 +785,19 @@ class LiveCommand:
             raise ValueError("the command observer must be a plain lqg controller (hover.reduced)")
         self.pol, self.ctl = pol, observer
         sensor = observer is not None
-        self.Ka = np.asarray(pol["sensor_Ka"] if sensor else pol["Ka"], float)
+        self.Ka = np.asarray(pol["sensor_Ka"], float) if sensor else policy_ka(pol)
         self.u_max, self.zeta_max = float(pol["u_max"]), float(pol["zeta_max"])
         self.v_op = np.asarray(pol["v_op"], float)
         g = int(pol.get("zeta_gate", -1))
         self.refs = RefStream(pol["tab"], pol["e_f"], float(pol["T"]),
-                              np.array([self.v_op[0], self.v_op[0], self.v_op[1]]) / float(pol["rate_beats"]),
+                              ref_rate(pol),
                               descend_after_stop=float(pol.get("descend_after_stop", 0.0)),
                               descend_delay=int(pol.get("descend_delay", 0)),
                               zeta_handoff=bool(pol.get("zeta_handoff", False)), stop_rate=float(pol.get("stop_rate", 1.0)),
                               zeta_gate=None if g < 0 else g, ff_lead=int(pol.get("ff_lead", 0)),
-                              climb_after_stop=float(pol.get("sensor_climb_after_stop", 0.0)) if sensor else 0.0)
+                              climb_after_stop=float(pol.get("sensor_climb_after_stop", 0.0)) if sensor else 0.0,
+                              gain_v=pol_gain_v(pol) if not sensor else None,
+                              g_n0=int(pol["g_n0"]) if "g_n0" in pol else None)
         self.dirs = command_dirs(pol["e_f"])
         self.envelope = {a: float(v) for a, v in zip(AXES, pol["envelope"])} if "envelope" in pol else {}
         if sensor:
@@ -580,8 +806,8 @@ class LiveCommand:
         self.reset()
 
     def default_speed(self, name) -> float:
-        """The operating speed the policy was evaluated at (v_op: FWD/REV, UP, DOWN)."""
-        return {"HOVER": 0.0, "FWD": self.v_op[0], "REV": self.v_op[0], "UP": self.v_op[1],
+        """The operating speed the policy was evaluated at (v_op: FWD/REV, UP, DOWN[, REV])."""
+        return {"HOVER": 0.0, "FWD": self.v_op[0], "REV": self.v_op[3] if len(self.v_op) > 3 else self.v_op[0], "UP": self.v_op[1],
                 "DOWN": self.v_op[2] if len(self.v_op) > 2 else self.v_op[1]}[name]
 
     def set_command(self, name, speed=None) -> float:
@@ -611,7 +837,7 @@ class LiveCommand:
 
     def reset(self):
         self.refs.reset()
-        self.zeta = np.zeros(3)
+        self.zeta = np.zeros(3 if self.ctl is not None else servo_nz(self.Ka))
         self.z = None
         self.u_prev = np.zeros(self.Ka.shape[0])
         self.prev_ref = None
@@ -635,7 +861,8 @@ class LiveCommand:
             s = np.zeros(12); s[self.xs] = self.z[:n]
         u, self.zeta = servo_law(s, self.zeta, x_ref, u_ff, 0.0, self.Ka, self.u_max, self.zeta_max)
         self.prev_ref, self.u_prev, self.x_ref = (x_ref, u_ff), u, x_ref
-        return np.concatenate([[0.0], u])
+        g = 0.0 if self.refs.g_n0 is None else float(g_of_steps(self.refs.n_beat, self.refs.g_n0))
+        return np.concatenate([[g], u])
 
 
 def linear_sim(A, B, drift, Ka, x_ref, u_ff, *, dither=None, u_max=U_MAX, zeta_max=ZETA_MAX, cp=1.0, cv=0.0, T=0.0,
@@ -643,14 +870,22 @@ def linear_sim(A, B, drift, Ka, x_ref, u_ff, *, dither=None, u_max=U_MAX, zeta_m
     """The servo on the linear model itself, batched over flights: (S (n, N+1, 12), U (n, N, nu))."""
     n, N1, _ = x_ref.shape
     N = N1 - 1
-    x = np.zeros((n, 12)); zeta = np.zeros((n, 3))
-    S = np.zeros((n, N + 1, 12)); U = np.zeros((n, N, B.shape[1]))
+    nu = B.shape[1]
+    nz = servo_nz(Ka)
+    n_i, du = aug_layout(nz, nu)
+    x = np.zeros((n, 12)); zeta = np.zeros((n, nz))
+    S = np.zeros((n, N + 1, 12)); U = np.zeros((n, N, nu))
     for k in range(N):
         S[:, k] = x
         e = x - x_ref[:, k, :12]
         keep = x_ref[:, k, 12:13] if x_ref.shape[-1] > 12 else 1.0
         gate = x_ref[:, k, 13:14] if x_ref.shape[-1] > 13 else 1.0
-        raw = u_ff[:, k] - e @ Ka[:, :12].T - zeta @ Ka[:, 12:].T
+        if Ka.shape[1] > 12 + nz:
+            w = 12 + nz
+            Kb = Ka[None, :, :w] + x_ref[:, k, 14, None, None] * Ka[None, :, w:]
+            raw = u_ff[:, k] - np.einsum("nij,nj->ni", Kb[:, :, :12], e) - np.einsum("nij,nj->ni", Kb[:, :, 12:], zeta)
+        else:
+            raw = u_ff[:, k] - e @ Ka[:, :12].T - zeta @ Ka[:, 12:].T
         if dither is not None:
             raw = raw + dither[:, k]
         if iters:
@@ -660,7 +895,12 @@ def linear_sim(A, B, drift, Ka, x_ref, u_ff, *, dither=None, u_max=U_MAX, zeta_m
         else:
             u = np.clip(raw, -u_max, u_max)
             free = (np.abs(raw) < u_max).all(1, keepdims=True)
-        zeta = np.clip(keep * zeta + gate * free * (cp * e[:, :3] + cv * T * e[:, 6:9]), -zeta_max, zeta_max)
+        if nz == 3:
+            zeta = np.clip(keep * zeta + gate * free * (cp * e[:, :3] + cv * T * e[:, 6:9]), -zeta_max, zeta_max)
+        else:
+            dz = np.concatenate([cp * e[:, :3] + cv * T * e[:, 6:9], e[:, YAW:YAW + n_i]], 1)
+            zi = np.clip(keep * zeta[:, :3 + n_i] + gate * free * dz, -zeta_max, zeta_max)
+            zeta = np.concatenate([zi, u - u_ff[:, k] - (dither[:, k] if dither is not None else 0.0)], 1) if du else zi
         U[:, k] = u
         x = x @ A.T + u @ B.T + drift
     S[:, N] = x
@@ -712,7 +952,7 @@ def segment_metrics(S, U, alive, sched, x_ref, T, *, e_f, u_max=U_MAX, min_len=3
                 segs.append(row)
                 continue
             d = dirs[c]
-            v_seg = (p[b] - p[mid]) / ((b - mid) * T)
+            v_seg = (p[b] - p[mid]) / _elapsed(T, i, mid, b)
             prev = v_cmd[i, a - 1] if a > 0 else np.zeros(3)
             step = np.linalg.norm(v_cmd[i, a] - prev)
             if step > 0:
@@ -804,7 +1044,7 @@ def cell_window_stats(S, U, alive, u_ff, dither, flights, window, T):
     fl = np.array(fl)
     fb = (U[fl, lo:hi] - u_ff[fl, lo:hi] - dither[fl, lo:hi]).mean((0, 1))
     xs = S[fl, lo:hi].mean((0, 1))
-    vm = ((S[fl, hi, :3] - S[fl, lo, :3]) / ((hi - lo) * T)).mean(0)
+    vm = np.mean([(S[i, hi, :3] - S[i, lo, :3]) / _elapsed(T, i, lo, hi) for i in fl], 0)
     return {"n": len(fl), "du": fb, "att": xs[3:6], "vel": xs[6:9], "w": xs[9:12], "v_mean": vm}
 
 
@@ -872,7 +1112,7 @@ def velocity_ilc(tabs, S, alive, cell_of, cells, e_f, T, G_att, G_u, *, maps=(1,
     return new, info
 
 
-def extrapolate_tables(tabs_new, tabs_lp, good, cells, *, max_factor=2.0):
+def extrapolate_tables(tabs_new, tabs_lp, good, cells, *, max_factor=2.0, u_max=U_MAX):
     """Continuation: cells whose flights did not give a usable ILC measurement (``good[ci]`` False) get the
     measured corrections (table - LP table, for u / att / w / dv) of their axis extrapolated linearly in speed
     from the two largest good speeds (from hover and the largest one when only one is good), with s capped at
@@ -900,8 +1140,26 @@ def extrapolate_tables(tabs_new, tabs_lp, good, cells, *, max_factor=2.0):
                     s = min(float(sp[a, j]), max_factor * s1)
                     base = lp[key][a, j] if key in ("u", "att") else 0.0
                     t[key][a, j] = base + c1 + (s - s1) * g
-            t["u"][a] = np.clip(t["u"][a], -0.9 * U_MAX, 0.9 * U_MAX)
+            t["u"][a] = np.clip(t["u"][a], -0.9 * u_max, 0.9 * u_max)
     return out, info
+
+
+def merge_axis_tables(tabs, env, prefer):
+    """One table whose every command axis takes its rows from the tilt map with the largest envelope ``env``
+    ({map: {axis: V_max}}) on that axis (ties -> ``prefer``, then the lower map). The hover entries (index 0 of
+    every axis: :func:`lookup` superposes the FWD/REV and UP/DOWN rows minus the hover entry) are all ``prefer``'s,
+    so hover is exactly that map's. Returns (table, per-axis map indices); its ``tilt_max_deg`` is the largest
+    tilt it uses."""
+    maps = [max(range(len(tabs)), key=lambda m: (env[m][ax], m == prefer, -m)) for ax in AXES]
+    out = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in tabs[prefer].items()}
+    for a, m in enumerate(maps):
+        for k in ("speeds", "att", "u", "dv", "w", "t", "feasible"):
+            out[k][a] = tabs[m][k][a]
+    for k in ("att", "u", "dv", "w", "t", "feasible"):
+        out[k][:, 0] = tabs[prefer][k][0, 0]
+    out["tilt_max_deg"] = float(max(tabs[m]["tilt_max_deg"] for m in maps))
+    out["note"] = "per-axis maps " + ", ".join(f"{ax} {tabs[m]['tilt_max_deg']:g}" for ax, m in zip(AXES, maps))
+    return out, maps
 
 
 def cell_pass(S, U, alive, flights, cell_v, window, T, u_max=U_MAX):
@@ -910,7 +1168,7 @@ def cell_pass(S, U, alive, flights, cell_v, window, T, u_max=U_MAX):
     lo, hi = window
     if not bool(np.asarray(alive[i][:hi + 1]).all()):
         return {"passed": False, "alive": False}
-    vm = (S[i, hi, :3] - S[i, lo, :3]) / ((hi - lo) * T)
+    vm = (S[i, hi, :3] - S[i, lo, :3]) / _elapsed(T, i, lo, hi)
     s = float(np.linalg.norm(cell_v))
     sat = float((np.abs(U[i, lo:hi]) >= u_max * (1 - 1e-6)).any(-1).mean())
     if s == 0:
@@ -938,13 +1196,17 @@ def envelope(cell_rows, cells, speeds, n_maps=2) -> dict:
     return out
 
 
-def local_models(S, U, alive, flights, window, A, B, Ka):
-    """Regress x_{k+1} - [p_k; 0] on [x_k (att vel w), u_k, 1] over the (dithered) flights' window: (A_v, B_v)
-    vs (A, B) and the servo's augmented closed-loop radius on the regressed model."""
+def regress_ab(S, U, alive, flights, window, B_fixed=None, A_prior=None, ridge=0.0):
+    """Regress x_{k+1} - [p_k; 0] on [x_k (att vel w), u_k, 1] over ``flights``' beats window[0]..window[1] (only
+    flights alive through window[1]): (A_v, B_v, X) or None with fewer than 2 flights. ``B_fixed``: regress only
+    A (and the offset) on x_{k+1} - B_fixed u_k, B_v = B_fixed (closed-loop data identifies A - B Ka well but
+    splits it between A and B poorly: the input dither is small); then ``ridge`` > 0 shrinks A toward ``A_prior``
+    (Tikhonov, each regressor scaled by its RMS: ridge = the penalty relative to the data's own weight)."""
     lo, hi = window
     fl = [i for i in flights if bool(np.asarray(alive[i][:hi + 1]).all())]
     if len(fl) < 2:
         return None
+    nu = U.shape[-1]
     X, Y = [], []
     for i in fl:
         for k in range(lo, hi):
@@ -952,9 +1214,30 @@ def local_models(S, U, alive, flights, window, A, B, Ka):
             y = S[i, k + 1].copy(); y[:3] -= S[i, k, :3]
             Y.append(y)
     X, Y = np.array(X), np.array(Y)
+    if B_fixed is not None:
+        Xa = np.hstack([X[:, :9], X[:, -1:]])
+        Yr = Y - X[:, 9:9 + nu] @ np.asarray(B_fixed).T
+        if ridge > 0:
+            W0 = np.vstack([np.asarray(A_prior)[:, 3:].T, np.zeros((1, 12))])
+            sc = np.linalg.norm(Xa, axis=0) / np.sqrt(len(Xa))
+            R = ridge * len(Xa) * np.diag(np.r_[sc[:-1] ** 2, 0.0])
+            W = np.linalg.solve(Xa.T @ Xa + R, Xa.T @ Yr + R @ W0)
+        else:
+            W, *_ = np.linalg.lstsq(Xa, Yr, rcond=None)
+        A_v = np.zeros((12, 12)); A_v[:3, :3] = np.eye(3); A_v[:, 3:] = W[:9].T
+        return A_v, np.asarray(B_fixed, float), Xa
     W, *_ = np.linalg.lstsq(X, Y, rcond=None)
     A_v = np.zeros((12, 12)); A_v[:3, :3] = np.eye(3); A_v[:, 3:] = W[:9].T
-    B_v = W[9:9 + B.shape[1]].T
+    return A_v, W[9:9 + nu].T, X
+
+
+def local_models(S, U, alive, flights, window, A, B, Ka):
+    """Regress x_{k+1} - [p_k; 0] on [x_k (att vel w), u_k, 1] over the (dithered) flights' window: (A_v, B_v)
+    vs (A, B) and the servo's augmented closed-loop radius on the regressed model."""
+    r = regress_ab(S, U, alive, flights, window)
+    if r is None:
+        return None
+    A_v, B_v, X = r
     nu = B.shape[1]
     Aa = np.zeros((15, 15)); Aa[:12, :12] = A_v; Aa[12:, :3] = np.eye(3); Aa[12:, 12:] = np.eye(3)
     Ba = np.vstack([B_v, np.zeros((3, nu))])
@@ -972,7 +1255,7 @@ def save_policy(path, *, tabs, chosen, Ka, K_hover, e_f, T, v_op, u_max=U_MAX, z
             "zeta_max": zeta_max, "rate_beats": rate_beats, "chosen_map": chosen,
             "tilt_maps": np.array([t["tilt_max_deg"] for t in tabs])}
     for m, t in enumerate(tabs):
-        for k in ("speeds", "att", "u", "dv", "w", "t", "feasible"):
+        for k in ("speeds", "att", "u", "dv", "w", "t", "feasible") + (("g",) if "g" in t else ()):
             arrs[f"tab{m}_{k}"] = t[k]
     for k, v in (("A", A), ("B", B), ("drift", drift)):
         if v is not None:
@@ -981,11 +1264,23 @@ def save_policy(path, *, tabs, chosen, Ka, K_hover, e_f, T, v_op, u_max=U_MAX, z
     np.savez(path, **arrs)
 
 
+def pol_gain_v(pol):
+    """(lo, hi) of a policy's scheduled forward gain (``fwd_gain_v``), or None."""
+    return tuple(float(x) for x in pol["fwd_gain_v"]) if "Ka_fwd" in pol and "fwd_gain_v" in pol else None
+
+
+def ref_rate(pol) -> np.ndarray:
+    """The command reference's rate limit (m/s per wingbeat, world x y z) of a policy: V_op / rate_beats per axis
+    (vertical: / ``rate_beats_z`` when the policy has it)."""
+    v, rb = pol["v_op"], float(pol["rate_beats"])
+    return np.array([v[0] / rb, v[0] / rb, v[1] / float(pol.get("rate_beats_z", rb))])
+
+
 def load_policy(path) -> dict:
     z = np.load(path)
     n = len(z["tilt_maps"])
-    tabs = [{k: z[f"tab{m}_{k}"] for k in ("speeds", "att", "u", "dv", "w", "t", "feasible")} | {"tilt_max_deg": float(z["tilt_maps"][m])}
-            for m in range(n)]
+    tabs = [{k: z[f"tab{m}_{k}"] for k in ("speeds", "att", "u", "dv", "w", "t", "feasible", "g") if f"tab{m}_{k}" in z}
+            | {"tilt_max_deg": float(z["tilt_maps"][m])} for m in range(n)]
     out = {k: z[k] for k in z.files if not k.startswith("tab")}
     out["tabs"] = tabs
     out["tab"] = tabs[int(z["chosen_map"])]

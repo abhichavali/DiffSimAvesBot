@@ -34,10 +34,10 @@ from hover.policy import load_flight_policy
 _W = {}
 
 
-def _init(tg, control):
+def _init(tg, control, rotate_vel=False):
     fp = load_flight_policy(control)
     bird = L.load_bird(tg, control=control)
-    _W.update(bird=bird, theta=fp.theta, rel=L.release(bird, fp.theta, fp.attitude, fp.K, k_phi=fp.phase_lock))
+    _W.update(bird=bird, theta=fp.theta, rotate_vel=rotate_vel, rel=L.release(bird, fp.theta, fp.attitude, fp.K, k_phi=fp.phase_lock))
 
 
 def one_beat(args):
@@ -53,7 +53,8 @@ def one_beat_obs(args):
     sim = copy.deepcopy(rel.sim); drive = copy.copy(rel.drive); drive.sim = sim; drive.L_des = rel.drive.L_des.copy()
     m, d = sim.model, sim.data
     if np.linalg.norm(d12[3:6]) > 0:
-        a = np.linalg.norm(d12[3:6]); q = np.zeros(4); mujoco.mju_axisAngle2Quat(q, d12[3:6] / a, a); L.rotate_bird(m, d, q)
+        a = np.linalg.norm(d12[3:6]); q = np.zeros(4); mujoco.mju_axisAngle2Quat(q, d12[3:6] / a, a)
+        L.rotate_bird(m, d, q, rotate_vel=_W.get("rotate_vel", False))
     L.kick(m, d, d12)
     sen = S.Sensors(S.SensorNoise.zero(), att_mode="truth", reference=(np.zeros(3), np.zeros(3), None))
     sen.start(bird, rel, sim)
@@ -124,9 +125,12 @@ def main():
     ap.add_argument("--tg", type=Path, default=FREE_HOVER_TG)
     ap.add_argument("--control", type=Path, default=FREE_HOVER_TG.parent / "control.tg")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--rigid-rotation", action="store_true",
+                    help="attitude perturbations rotate the free bodies' linear velocities too (launch.rotate_bird "
+                         "rotate_vel; default off: the committed lqr.npz is built without)")
     a = ap.parse_args()
     K = load_flight_policy(a.control).K
-    with Pool(os.cpu_count(), initializer=_init, initargs=(a.tg, a.control)) as pool:
+    with Pool(os.cpu_count(), initializer=_init, initargs=(a.tg, a.control, a.rigid_rotation)) as pool:
         A, B, drift = linearize(pool, K)
     K = lqr(A, B)
     ol = np.sort(np.abs(np.linalg.eigvals(A)))[::-1]; cl = np.sort(np.abs(np.linalg.eigvals(A - B @ K)))[::-1]

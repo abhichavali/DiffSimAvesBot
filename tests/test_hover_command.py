@@ -256,7 +256,7 @@ def _live_setup():
     g = int(pol.get("zeta_gate", -1))
     kw = dict(zeta_handoff=bool(pol.get("zeta_handoff", False)), zeta_gate=None if g < 0 else g,
               stop_rate=float(pol.get("stop_rate", 1.0)), ff_lead=int(pol.get("ff_lead", 0)))
-    rate = np.array([pol["v_op"][0], pol["v_op"][0], pol["v_op"][1]]) / float(pol["rate_beats"])
+    rate = C.ref_rate(pol)            # what LiveCommand flies (rate_beats_z when the policy has it)
     return fp, pol, sch, kw, rate
 
 
@@ -299,3 +299,169 @@ def test_live_command_equals_the_evaluated_controllers():
                 assert np.allclose(live.v_cmd, sch["v_cmd"][i, k])
                 y = rng.normal(0, 0.02, 18 if sensor else 12)
                 assert np.allclose(live(y), ref(y), atol=1e-12), (sensor, i, k)
+
+
+def test_scheduled_forward_gain_live_equals_evaluated():
+    """--fwd-gain reg: a policy with Ka_fwd / fwd_gain_v flies Ka + w (Ka_fwd - Ka), w = gain_weight of the reference
+    forward speed, identically in LiveCommand (RefStream's 15th column), CommandPolicy on build_refs(gain_v=) and
+    the device law; with w = 0 it is the plain gain."""
+    import jax.numpy as jnp
+
+    from hover import mjx_command as MC
+    fp, pol, sch, kw, rate = _live_setup()
+    rng = np.random.default_rng(7)
+    pol = dict(pol)
+    pol["Ka_fwd"] = pol["Ka"] * (1 + 0.3 * rng.standard_normal(pol["Ka"].shape))
+    pol["fwd_gain_v"] = np.array([0.1, 0.25])
+    gv = C.pol_gain_v(pol)
+    Kp = C.policy_ka(pol)
+    assert Kp.shape[1] == 30
+    x_ref, u_ff, v_ref = C.build_refs(sch["v_cmd"][:2], pol["tab"], pol["e_f"], float(pol["T"]), rate,
+                                      float(pol["descend_after_stop"]), int(pol["descend_delay"]), **kw, gain_v=gv)
+    assert x_ref.shape[-1] == 15 and (x_ref[..., 14] > 0.99).any() and (x_ref[..., 14] == 0).any()
+    names = np.array(C.CMDS)
+    for i in range(2):
+        ref = C.CommandPolicy(Kp, x_ref[i], u_ff[i], u_max=float(pol["u_max"]), zeta_max=float(pol["zeta_max"]))
+        live = C.LiveCommand(pol)
+        for k in range(sch["v_cmd"].shape[1]):
+            live.set_command(str(names[sch["cmd"][i, k]]))
+            y = rng.normal(0, 0.02, 12)
+            assert np.allclose(live(y), ref(y), atol=1e-12), (i, k)
+            z = rng.normal(0, 0.01, 3)
+            u_np, z_np = C.servo_law(y, z, x_ref[i, k], u_ff[i, k], 0.0, Kp, float(pol["u_max"]), float(pol["zeta_max"]))
+            u_j, z_j = MC.law(jnp.asarray(y), jnp.asarray(z), jnp.asarray(x_ref[i, k]), jnp.asarray(u_ff[i, k]), 0.0,
+                              jnp.asarray(Kp), float(pol["u_max"]), float(pol["zeta_max"]))
+            assert np.allclose(u_np, np.asarray(u_j), atol=1e-5) and np.allclose(z_np, np.asarray(z_j), atol=1e-5)
+    w0 = x_ref[0].copy(); w0[:, 14] = 0.0
+    u0, _ = C.servo_law(np.full(12, 0.01), np.zeros(3), w0[5], u_ff[0, 5], 0.0, Kp)
+    u1, _ = C.servo_law(np.full(12, 0.01), np.zeros(3), w0[5, :14], u_ff[0, 5], 0.0, np.asarray(pol["Ka"], float))
+    assert np.allclose(u0, u1, atol=1e-12)
+
+
+def test_augmented_servo_live_equals_evaluated():
+    """--du-penalty / --yaw-int: the augmented servo (yaw integral + the previous wingbeat's delivered feedback in the
+    DARE state) flies identically in LiveCommand, CommandPolicy and the device law (the carry chained beat to beat);
+    its DARE reduces to the plain servo as the rate penalty vanishes, and the rate penalty damps the closed loop's
+    period-2 (z near -1) mode of a gain designed on another model."""
+    import jax.numpy as jnp
+
+    from hover import mjx_command as MC
+    fp, pol, sch, kw, rate = _live_setup()
+    A, B, _, _ = _model()
+    Ka0, _ = C.servo_gains(A, B, 50.0)
+    Ke, _ = C.servo_gains(A, B, 50.0, r_d=1e-8)
+    assert Ke.shape == (24, 39) and np.allclose(Ke[:, :15], Ka0, atol=1e-5 * np.abs(Ka0).max())
+    assert np.abs(Ke[:, 15:]).max() < 1e-5 * np.abs(Ka0).max()
+    Ky, rho = C.servo_gains(A, B, 50.0, q_yi=100.0, r_d=1.0)
+    assert Ky.shape == (24, 40) and C.servo_nz(Ky) == 28 and C.aug_layout(28, 24) == (1, True) and rho < 1
+    assert C.servo_nz(Ka0) == 3 and C.servo_nz(np.zeros((24, 30))) == 3 and C.servo_nz(np.zeros((24, 80))) == 28
+    pol = dict(pol)
+    pol["Ka"] = Ky
+    x_ref, u_ff, _ = C.build_refs(sch["v_cmd"][:2], pol["tab"], pol["e_f"], float(pol["T"]), rate,
+                                  float(pol["descend_after_stop"]), int(pol["descend_delay"]), **kw)
+    names = np.array(C.CMDS)
+    rng = np.random.default_rng(3)
+    for i in range(2):
+        ref = C.CommandPolicy(Ky, x_ref[i], u_ff[i], u_max=float(pol["u_max"]), zeta_max=float(pol["zeta_max"]))
+        live = C.LiveCommand(pol)
+        zj = jnp.zeros(28)
+        for k in range(sch["v_cmd"].shape[1]):
+            live.set_command(str(names[sch["cmd"][i, k]]))
+            y = rng.normal(0, 0.05, 12)
+            u_live = live(y)
+            assert np.allclose(u_live, ref(y), atol=1e-12), (i, k)
+            u_j, zj = MC.law(jnp.asarray(y), zj, jnp.asarray(x_ref[i, k]), jnp.asarray(u_ff[i, k]), 0.0, jnp.asarray(Ky),
+                             float(pol["u_max"]), float(pol["zeta_max"]))
+            assert np.allclose(u_live[1:], np.asarray(u_j), atol=1e-5) and np.allclose(live.zeta, np.asarray(zj), atol=1e-5)
+            # the carry's last nu entries are this wingbeat's delivered feedback
+            assert np.allclose(live.zeta[4:], u_live[1:] - u_ff[i, k], atol=1e-12)
+    # the plain carry of a 15-wide gain is unchanged (3 wide), and a zero-padded plain gain flies the same inputs
+    u15, z15 = C.servo_law(np.full(12, 0.01), np.full(3, 0.02), x_ref[0, 5], u_ff[0, 5], 0.0, Ka0)
+    u40, z40 = C.servo_law(np.full(12, 0.01), np.r_[np.full(3, 0.02), np.zeros(25)], x_ref[0, 5], u_ff[0, 5], 0.0, C.pad_ka(Ka0, 40))
+    assert z15.shape == (3,) and np.allclose(u15, u40, atol=1e-12) and np.allclose(z15, z40[:3], atol=1e-12)
+    # linear model: the augmented servo follows random commands as well
+    tab = C.steady_state_tables(A, B, _model()[2], C.forward_axis(Q_REF), 5.0, log=None)
+    e_f = C.forward_axis(Q_REF)
+    sch2 = C.random_schedules(np.random.default_rng(0), 10, 120, e_f)
+    xr, uf, _ = C.build_refs(sch2["v_cmd"], tab, e_f, 0.11707, np.full(3, 0.3 / 4), zeta_handoff=True, zeta_gate=8)
+    S, U = C.linear_sim(A, B, _model()[2], Ky, xr, uf)
+    sm = C.summarize(*C.segment_metrics(S, U, np.ones(S.shape[:2], bool), sch2, xr, 0.11707, e_f=e_f))
+    assert sm["follow_rate"] == 1.0 and sm["along_abs_p95"] < 0.01
+
+
+G_SCRIPT = r"""
+import json
+import numpy as np, jax
+jax.config.update("jax_enable_x64", True)
+import jax.numpy as jnp
+from design_paths import FREE_HOVER_TG
+from hover import launch as L, mjx_flight as F, mjx_command as MC, command as C
+from hover.policy import load_flight_policy
+CT = FREE_HOVER_TG.parent / "control.tg"
+fp = load_flight_policy(CT)
+bird = L.load_bird(FREE_HOVER_TG, control=CT)
+rel = L.release(bird, fp.theta, fp.attitude, fp.K, k_phi=fp.phase_lock, n_cradle=3, n_avg=1)
+K = np.load(FREE_HOVER_TG.parent / "lqr.npz")["K"]
+kick = np.r_[0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0.5, 0]
+kicks = np.stack([np.zeros(12), kick])[None]
+fl = F.Flight(bird, rel, fp.theta, fp.K, k_phi=fp.phase_lock)
+n0 = fl.static.n_step
+nb = np.array([[n0, n0], [n0 + 30, n0 + 30], [n0 - 20, n0 + 30]])
+Ka = np.repeat(C.hover_ka(K)[None], 3, 0)
+uff = np.zeros((3, 2, 24)); uff[:, :, 3] = 0.02
+z = lambda *s: np.zeros((3,) + s)
+st, c_rest = MC.release_carry(fl, 3)
+Sv, Uv, Av, _, _ = MC.Chain(fl, 3, 2, n_max=n0 + 40).run(st, c_rest, np.repeat(kicks, 3, 0), z(2, 12), uff, z(2, 24), Ka, 1, nbeat=nb)
+st, c_rest = MC.release_carry(fl, 3)
+Sf, Uf, Af, _, _ = MC.Chain(fl, 3, 2).run(st, c_rest, np.repeat(kicks, 3, 0), z(2, 12), uff, z(2, 24), Ka, 1)
+out = {"alive": bool(np.asarray(Av).all()), "var_n0_vs_fixed": float(np.abs(Sv[0] - Sf[0]).max()),
+       "g_moves": float(np.abs(Sv[1] - Sf[1]).max())}
+cpu = []
+for i in (1, 2):
+    pol = C.CommandPolicy(Ka[i], np.zeros((3, 12)), np.concatenate([uff[i], uff[i, -1:]]), g=C.g_of_steps(np.r_[nb[i], n0], n0))
+    ref = L.fly(bird, rel, fp.theta, 2, policy=pol, kicks={1: kick})
+    cpu.append(float(np.abs(Sv[i] - ref).max()))
+out["var_vs_cpu"] = max(cpu)
+print(json.dumps(out))
+"""
+
+
+def test_crank_speed_g_device_and_live():
+    """X8 crank-speed feedforward: the variable-length device wingbeat (hover.mjx_command.beat_var) at n0 equals the
+    fixed one, and at other lengths equals hover.launch.Drive flying theta[0] = g0 + ln(n0 / n) (CommandPolicy g;
+    CPU-JAX x64, 2 beats); LiveCommand flies the same g / x_ref (p_ref re-integrated over the longer wingbeats) as
+    CommandPolicy on build_refs + g_beats + retime_refs; a table without "g" leaves LiveCommand's g at 0."""
+    fp, pol, sch, kw, rate = _live_setup()
+    pol = dict(pol)
+    tab = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in pol["tab"].items()}
+    tab["g"] = np.zeros(tab["speeds"].shape)
+    tab["g"][3] = -0.05 * np.minimum(1.0, tab["speeds"][3] / 0.4)
+    n0 = 901
+    pol.update(tab=tab, g_n0=n0)
+    T = float(pol["T"])
+    x_ref, u_ff, v_ref = C.build_refs(sch["v_cmd"][:3], tab, pol["e_f"], T, rate, float(pol["descend_after_stop"]),
+                                      int(pol["descend_delay"]), **kw)
+    nb = C.g_beats(tab, pol["e_f"], v_ref, n0, kw["ff_lead"])
+    assert nb.max() > n0 and nb.min() == n0          # DOWN segments fly longer wingbeats, nothing else changes
+    x_ref = C.retime_refs(x_ref, v_ref, T, nb, n0)
+    names = np.array(C.CMDS)
+    rng = np.random.default_rng(7)
+    for i in range(3):
+        ref = C.CommandPolicy(pol["Ka"], x_ref[i], u_ff[i], u_max=float(pol["u_max"]), zeta_max=float(pol["zeta_max"]),
+                              g=C.g_of_steps(nb[i], n0))
+        live = C.LiveCommand(pol)
+        for k in range(sch["v_cmd"].shape[1]):
+            live.set_command(str(names[sch["cmd"][i, k]]))
+            y = rng.normal(0, 0.02, 12)
+            out = live(y)
+            assert np.allclose(out, ref(y), atol=1e-12) and np.allclose(live.x_ref, x_ref[i, k], atol=1e-12), (i, k)
+    pol.pop("g_n0")
+    assert C.LiveCommand(pol)(np.zeros(12))[0] == 0.0
+    pytest.importorskip("jax")
+    r = subprocess.run([sys.executable, "-c", G_SCRIPT], capture_output=True, text=True, cwd=ROOT,
+                       env={"PYTHONPATH": str(ROOT / "src"), "JAX_PLATFORMS": "cpu", "PATH": ""}, timeout=1800)
+    assert r.returncode == 0, r.stderr[-3000:]
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    print(res)
+    assert res["alive"] and res["g_moves"] > 1e-4, res
+    assert res["var_n0_vs_fixed"] < 1e-9 and res["var_vs_cpu"] < 1e-9, res
