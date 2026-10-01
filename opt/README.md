@@ -18,7 +18,7 @@ simulation (library: `src/codesign/`), plus the free-flight hover tools (library
 | `distill_hover.py` | LQR gain (`python -m hover.lqr`) -> the closed-loop MLP `.npz`; `--ctrl` distills a `hover.reduced` controller onto its own inputs (`--noise-aug`) |
 | `train_hover.py` | MJX BPTT of the hover MLP. Kept as a negative result: it diverges past one wingbeat |
 | `hover_gpu.py` | The hover tools on a GPU (MJX, vmapped flights): `parity` (vs CPU), `trim`, `linearize`, `verify`, `sweep`, `mc`, `derive` (the whole loop), `bench`; module docstring for commands |
-| `hover_cmd.py` | Command flight of the free bird (HOVER / FWD / REV / UP / DOWN) on the GPU: `learn` (~208 s warm), `dt`, `sensors`, `cpu` (CPU reference), `all`, `export` (-> a flight control `.tg` the viewer / GUI steer); finding `2026-09-30-command-following-policy` |
+| `hover_cmd.py` | Command flight of the free bird (HOVER / FWD / REV / UP / DOWN) on the GPU: `learn` (~208 s warm), `dt`, `sensors`, `cpu` (CPU reference), `all`, `export` (-> a flight control `.tg` the viewer / GUI steer), `trims` (re-measures the edge trims `designs/hummer/free-hover/command_trims.npz` that `--preset fast` reads; GPU x64, ~24 min), `torque` (crank actuator cost vs hover on CPU: peak over every step and smooth peak, `--limit` re-flies with limited cranks); `learn --preset fast` = the shipped `command.tg` config (V_op FWD 0.75 / REV 0.65 / UP 0.5 / DOWN 0.45, ~235 s warm), no preset = r18; findings `2026-09-30-command-following-policy`, `2026-10-01-command-flight-faster` |
 
 `src/codesign/`: `rig.py` (compile + settle a `.tg`, integrator/dt variants, tendon
 pairs), `genome.py` (the packed theta), `metrics.py` (theta -> `Metrics` rollout),
@@ -179,3 +179,7 @@ passive pitch settles into a ~190 mN or a ~210 mN mode depending on dt and integ
   and `--init-tendons` were removed with `opt/run_validity_codesign.sh`; `C_valid` is
   still computed and logged but no longer enters the loss. Restore from git history
   (before commit 0b4f12d) if that campaign is rerun.
+- `hover_cmd.py learn` picks the flown tilt map by the smallest per-axis post-ILC envelope (ties -> the 5 deg map),
+  not by V_op: one noisy envelope cell can pick the 5-deg map, which cannot fly above FWD ~0.35 m/s. `--ff-trims`
+  (on in `--preset fast`) forces the trims' map. The per-wingbeat model's attitude columns carry an unlabelled
+  velocity change unless `--lin-rigid-rotation` (on in `--preset fast`; AGENTS.md "Known bugs", free flight).

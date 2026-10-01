@@ -210,11 +210,16 @@ uv run python -m tests.golden check [--quick]      # behavior check (see below)
   Device knobs that matter: never `iterations=1` (it walks the trim: 5-8x the error), line search 8 is enough,
   contacts off (the free bird has none). Confirm a promoted policy once with the CPU `opt/verify_hover.py`.
 - **Command flight** (`designs/hummer/free-hover/command.tg`: `command_loop` + `command_observer` keys): a
-  one-trim linear servo that follows HOVER / FWD / REV / UP / DOWN (0.3 m/s; envelope FWD 0.3, REV 0.4, UP 0.36,
-  DOWN 0.3 m/s), learned on the GPU in ~3.5 min (`opt/hover_cmd.py learn`, then `export` writes the `.tg`).
+  one-trim linear servo that follows HOVER / FWD / REV / UP / DOWN at FWD 0.75 / REV 0.65 / UP 0.5 / DOWN 0.45 m/s,
+  learned on the GPU in ~4 min (`opt/hover_cmd.py learn --preset fast`, then `export` writes the `.tg`; no preset =
+  the old 0.3 m/s r18 config; it reads the measured edge trims `command_trims.npz`, re-measured by `opt/hover_cmd.py trims`).
+  Crank-cost flags (`opt/hover_cmd.py torque`): over every step the crank torque exceeds 1.5x hover at FWD 0.70 / 0.75,
+  REV 0.70 / 0.75, UP 0.5 and DOWN 0.45 / 0.48, and 32-55x in random command flights. These are one-step impulses
+  at wingbeat boundaries; with the cranks limited to 1.5x hover it flies the same. The smooth peak exceeds 1.5x only
+  at DOWN 0.48, beyond the exported envelope (= the certified V_op: the viewer / LiveCommand clip to it).
   Steer it in `src/view_free_hover.py` (hold the arrow keys, like a game; `pynput` for key releases) or the GUI's Viewer tab buttons; `--sensors`
-  flies it on mocap position + IMU (the minimal input set that follows every command). Report: finding
-  `2026-09-30-command-following-policy`; workflow: the `free-flight-policy` skill, "Command flight".
+  flies it on mocap position + IMU (the minimal input set that follows every command; weaker at the new speeds: x1 noise
+  89-99% survival). Reports: findings `2026-09-30-command-following-policy`, `2026-10-01-command-flight-faster`; workflow: the `free-flight-policy` skill, "Command flight".
 - **Any change to the free bird or its physics invalidates its policy**: re-derive it
   (trim -> LQR -> distill -> verify, ~3 min on a laptop, or `opt/hover_gpu.py derive --trim` on a GPU) with the
   `free-flight-policy` skill. The command policy too (`opt/hover_cmd.py learn` + `export`).
@@ -314,3 +319,11 @@ Keep this list and `opt/README.md` "Known issues" in sync.
   `hover.launch.fly` applies a push (`kick`) without telling the sensor, so the simulated accelerometer
   reads the push as a one-sample impulse the identified model (`hover.lqr.one_beat_obs`) lacks; acc-reading
   LQGs designed at noise 0 tumble on it (finding `2026-09-26-hover-acc-reads-push-impulse`).
+  `hover.launch.rotate_bird` / `mjx_flight.rotate` rotate positions but not the free joints' linear velocities by
+  default, so every attitude column of the per-wingbeat model also carries an unlabelled velocity change (strobed
+  vel moves (-0.58, 0, -0.93) m/s per rad of pitch at release): the committed `lqr.npz`, the Prompt-1 sensor
+  models and the r18 command policy are built that way (`command.tg` since 2026-10-01 is not: `--preset fast`). `rotate_vel=True`
+  (`hover.lqr --rigid-rotation`, `opt/hover_cmd.py learn --lin-rigid-rotation`) fixes it; the default keeps it.
+  `opt/hover_cmd.py learn` picks the flown tilt map by the smallest per-axis envelope (ties -> map 0, 5 deg), not by
+  V_op: one noisy envelope cell can pick the 5-deg map, which cannot fly V_op above FWD ~0.35 (x8_cg_b: 1.7% survival
+  at FWD 0.75). `--ff-trims` forces the trims' (largest-tilt) map; the default rule is unchanged (`docs/history/command_flight_faster_notes_2026-10.md` X8).

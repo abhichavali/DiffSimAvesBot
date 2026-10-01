@@ -158,20 +158,26 @@ The bird follows velocity commands with a one-trim linear servo on the per-wingb
 steady-state feedforward tables (a tilt-bounded LP on A, B, drift, refined by one batched ILC pass of
 constant-command flights), rate-limited references (x_ref, u_ff; attitude / feedforward one wingbeat ahead),
 and an LQR with a position integral (handed off on deceleration, gated 8 wingbeats after a stop). Full report,
-numbers, caveats and dead ends: finding `2026-09-30-command-following-policy`.
+numbers, caveats and dead ends: finding `2026-09-30-command-following-policy`; how it got 2.5x faster (rigid-rotation
+linearization, regressed climb gain, carried lanes, measured edge trims `command_trims.npz`): finding
+`2026-10-01-command-flight-faster` and the frozen lab notes `docs/history/command_flight_faster_notes_2026-10.md`.
 
 ```bash
 P=".venv/bin/python opt/hover_cmd.py"          # on the GPU box, JAX_COMPILATION_CACHE_DIR set
-$P learn --out opt/runs_cmd/R                   # release, x64 linearize, tables, 2 ILC passes, eval: ~208 s warm
+$P trims --out opt/runs_fast/T                  # (re)measure the edge trims (~24 min, x64; seeds: --policy, default the
+cp opt/runs_fast/T/trims.npz designs/hummer/free-hover/command_trims.npz    #  shipped command_policy.npz)
+$P learn --preset fast --out opt/runs_fast/R    # the shipped config (V_op FWD 0.75 / REV 0.65 / UP 0.5 / DOWN 0.45): ~235 s warm
+$P learn --out opt/runs_cmd/R                   # no preset = r18 (0.3 m/s): 2 ILC passes, eval: ~208 s warm
 $P dt --run opt/runs_cmd/R --dt-ms 0.10 0.16    # the fixed policy at other timesteps
 $P sensors --run opt/runs_cmd/R                 # P = pos,att,w observer (recommended), N = IMU only
 JAX_PLATFORMS=cpu $P cpu --run opt/runs_cmd/R   # CPU reference on 16 eval flights (contacts off)
+JAX_PLATFORMS=cpu $P torque --run opt/runs_cmd/R --limit 0.325   # crank cost vs hover: peak over EVERY step + smooth
 uv run python opt/hover_cmd.py export --run opt/runs_cmd/R --out designs/hummer/free-hover/command.tg
 uv run pytest -q tests/test_hover_command.py    # incl. live (streaming) == evaluated controllers to 1e-12
 ```
 
 - `export` writes the flight control: the drive / trim of `--control`, `command_loop` (the policy npz + the
-  sensor-flight servo gain, climb shaping and the measured envelope) and `command_observer` (the pos,att,w LQG,
+  sensor-flight servo gain, climb shaping and the envelope = the certified V_op per axis) and `command_observer` (the pos,att,w LQG,
   designed from `opt/runs_gpu/ref/lqr_sensor.npz`, the x64 sensor model).
 - `hover.command.LiveCommand` flies it with a command set at any wingbeat (`RefStream` = `build_refs` one
   wingbeat at a time): what the viewer and the GUI use. Speeds clip to the envelope.
@@ -179,6 +185,13 @@ uv run pytest -q tests/test_hover_command.py    # incl. live (streaming) == eval
   datasheet noise; nothing without position does (IMU-only holds attitude but walks metres; every accelerometer
   dead-reckoning variant was lost).
 - The learn stage is not bit-reproducible (float32 ILC): check a new run's gates, don't assume them.
+- `--preset fast` reads `designs/hummer/free-hover/command_trims.npz`: after any change to the bird re-measure it
+  (`trims`, above) before the learn; `trims --seed-trims <old trims.npz>` replays the old solve's starting points.
+- Crank cost: quote `torque`'s `peak_all` (every step) next to the smooth peak. The policy changes its input once per
+  wingbeat and the cranks are unlimited kv-1 velocity servos, so every input step is a one-step torque impulse (largest
+  at command changes); `--limit` shows whether the flight needs it.
+- The P sensor variant flies the servo gain solved on the policy's regressed climb model (`--p-gain auto`, also what
+  `export` stores): with the hover-model gain it loses ~35% of flights in UP 0.5 climbs.
 
 ## Watch it
 
